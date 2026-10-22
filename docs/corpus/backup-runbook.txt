@@ -1,0 +1,2 @@
+Backup and restore runbook
+Backups are taken with the database online backup API. After restoring, the audit hash chain must be verified before the service reports ready. RPO and RTO are measured, not promised.
