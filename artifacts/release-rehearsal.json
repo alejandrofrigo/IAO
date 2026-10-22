@@ -1,0 +1,41 @@
+{
+  "steps": [
+    {
+      "step": "build 1.0.0",
+      "digest": "4c6a3aeea4756b25"
+    },
+    {
+      "step": "deploy 1.0.0",
+      "version": "1.0.0",
+      "result": "PROMOTED"
+    },
+    {
+      "step": "deploy defective 1.1.0 (authentic but broken)",
+      "version": "1.1.0",
+      "result": "ROLLED_BACK",
+      "to": "1.0.0"
+    },
+    {
+      "step": "current after gate",
+      "current": "1.0.0",
+      "still_serving": true
+    },
+    {
+      "step": "promotion rule w/ UNKNOWN evidence",
+      "decision": "BLOCKED"
+    },
+    {
+      "step": "release log chain",
+      "ok": true
+    },
+    {
+      "step": "evidence bundle verifies",
+      "result": [
+        true,
+        "OK"
+      ]
+    }
+  ],
+  "verdict": "PASS",
+  "scope": "local sandbox staging; no external infrastructure"
+}

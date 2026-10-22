@@ -1,0 +1,123 @@
+{
+  "timestamp": "2026-10-22T19:16:52.277902+00:00",
+  "base_url": "http://127.0.0.1:48767",
+  "checks": [
+    {
+      "check": "T-04 runtime starts and /health/ready is 200",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "liveness",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "readiness checks db + audit chain + tools",
+      "result": "PASS",
+      "detail": "{\"database\": true, \"audit_chain\": true, \"tools\": [\"knowledge.search\"]}"
+    },
+    {
+      "check": "AUTH-01 unauthenticated -> 401",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "identity from token",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "knowledge.search task SUCCEEDED + verifier PASS",
+      "result": "PASS",
+      "detail": "items=1"
+    },
+    {
+      "check": "idempotent replay returns same task",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "POL-01 shell.execute denied (403)",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "AUTH-02 bob cannot read alice's task (404)",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "TOOL-01 unknown field rejected, no execution",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "chat is honest: 404/503, never fakes a model",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "audit events visible to owner only",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "REQ-05 memory without consent -> 422",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "memory stored with consent",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "memory isolated from other user",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "memory export contains it",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "crash recovery: supervisor restarts runtime after SIGKILL",
+      "result": "PASS",
+      "detail": "RTO~0.2s"
+    },
+    {
+      "check": "task + evidence survive crash (durable state)",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "memory survives crash",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "memory deleted (operational erase)",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "audit chain intact after crash",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "backup restored, audit chain verified, event count equal",
+      "result": "PASS",
+      "detail": "events=28 backup=0.0049s restore+verify=0.0008s"
+    },
+    {
+      "check": "T-06 egress blocked => state is BLOCKED_NETWORK (not faked)",
+      "result": "PASS",
+      "detail": "BLOCKED_NETWORK"
+    }
+  ],
+  "passed": 23,
+  "failed": 0
+}

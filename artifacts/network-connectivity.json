@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-10-22T19:16:52.277749+00:00",
+  "origin": "omega.net.probe_https",
+  "state": "BLOCKED_NETWORK",
+  "probes": [
+    {
+      "host": "pypi.org",
+      "port": 443,
+      "timestamp": "2026-10-22T19:16:52.275977+00:00",
+      "dns": "FAIL",
+      "address": null,
+      "scope": null,
+      "tls": null,
+      "http_status": null,
+      "latency_ms": null,
+      "error_class": "DNS_FAILURE",
+      "error": "[Errno -2] Name or service not known",
+      "verdict": "BLOCKED_NETWORK"
+    },
+    {
+      "host": "example.com",
+      "port": 443,
+      "timestamp": "2026-10-22T19:16:52.277336+00:00",
+      "dns": "FAIL",
+      "address": null,
+      "scope": null,
+      "tls": null,
+      "http_status": null,
+      "latency_ms": null,
+      "error_class": "DNS_FAILURE",
+      "error": "[Errno -2] Name or service not known",
+      "verdict": "BLOCKED_NETWORK"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "files": {
+    "backup-restore-report.json": "4a8374a4d0841441122d7c02dc549c4811a54323def08080753257967df7bd40",
+    "network-connectivity.json": "d91a40d67ea30643a9e85516532618c780f30d25c970920bff01fb5a76627601",
+    "runtime-report.json": "4d68cff12c52f362ca9ba1a8506041fa7fac1f0f99c55aadc061aef005e168b7",
+    "runtime.log": "a40281ad4b50c46ca6d2889e19381d9faf7a1dd5772008bfb6644078a54d67d3"
+  },
+  "log_head": "fbdca443464795ff8b5634c7a7ed5197649b968e074b72c1e1651f6c8b5dd200",
+  "release": "1.0.0",
+  "signature": "5c2914346fb17c8bd6748fa1b90f497549870ee5bb2faa2f7302e6e764a2d9b0"
+}

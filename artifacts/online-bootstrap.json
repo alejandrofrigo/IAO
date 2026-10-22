@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-10-22T19:16:54.215207+00:00",
+  "probes": [
+    {
+      "host": "pypi.org",
+      "port": 443,
+      "timestamp": "2026-10-22T19:16:54.215222+00:00",
+      "dns": "FAIL",
+      "address": null,
+      "scope": null,
+      "tls": null,
+      "http_status": null,
+      "latency_ms": null,
+      "error_class": "DNS_FAILURE",
+      "error": "[Errno -2] Name or service not known",
+      "verdict": "BLOCKED_NETWORK"
+    },
+    {
+      "host": "files.pythonhosted.org",
+      "port": 443,
+      "timestamp": "2026-10-22T19:16:54.216823+00:00",
+      "dns": "FAIL",
+      "address": null,
+      "scope": null,
+      "tls": null,
+      "http_status": null,
+      "latency_ms": null,
+      "error_class": "DNS_FAILURE",
+      "error": "[Errno -2] Name or service not known",
+      "verdict": "BLOCKED_NETWORK"
+    }
+  ],
+  "steps": [],
+  "state": "BLOCKED_NETWORK",
+  "action_required": "Enable network access for this sandbox (allow pypi.org, files.pythonhosted.org), then rerun."
+}
