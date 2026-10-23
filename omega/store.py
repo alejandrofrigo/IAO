@@ -110,6 +110,12 @@ class Store:
             r = self.db.execute("SELECT * FROM conversation WHERE id=? AND owner=?", (cid, owner)).fetchone()
         return dict(r) if r else None
 
+    def add_message(self, cid: str, role: str, content: str) -> str:
+        mid = str(uuid.uuid4())
+        with self.lock:
+            self.db.execute("INSERT INTO message VALUES(?,?,?,?,?)", (mid, cid, role, content, now_iso()))
+        return mid
+
     def list_messages(self, cid: str, owner: str) -> list[dict[str, Any]] | None:
         if self.get_conversation(cid, owner) is None:
             return None

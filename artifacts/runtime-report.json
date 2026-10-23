@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-10-22T19:16:52.277902+00:00",
-  "base_url": "http://127.0.0.1:48767",
+  "timestamp": "2026-10-23T00:35:40.697441+00:00",
+  "base_url": "http://127.0.0.1:38309",
   "checks": [
     {
       "check": "T-04 runtime starts and /health/ready is 200",
@@ -110,7 +110,7 @@
     {
       "check": "backup restored, audit chain verified, event count equal",
       "result": "PASS",
-      "detail": "events=28 backup=0.0049s restore+verify=0.0008s"
+      "detail": "events=28 backup=0.0023s restore+verify=0.0008s"
     },
     {
       "check": "T-06 egress blocked => state is BLOCKED_NETWORK (not faked)",

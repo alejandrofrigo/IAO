@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-10-22T19:16:52.277749+00:00",
+  "timestamp": "2026-10-23T00:35:40.697099+00:00",
   "origin": "omega.net.probe_https",
   "state": "BLOCKED_NETWORK",
   "probes": [
     {
       "host": "pypi.org",
       "port": 443,
-      "timestamp": "2026-10-22T19:16:52.275977+00:00",
+      "timestamp": "2026-10-23T00:35:40.695658+00:00",
       "dns": "FAIL",
       "address": null,
       "scope": null,
@@ -20,7 +20,7 @@
     {
       "host": "example.com",
       "port": 443,
-      "timestamp": "2026-10-22T19:16:52.277336+00:00",
+      "timestamp": "2026-10-23T00:35:40.696531+00:00",
       "dns": "FAIL",
       "address": null,
       "scope": null,

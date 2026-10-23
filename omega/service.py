@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from omega.adapters.model import ModelError
 from omega.audit import canonical_json
 from omega.auth import Principal, verify_token
 from omega.control import transition
@@ -125,7 +126,21 @@ class OmegaService:
                 raise ApiError(404, "NOT_FOUND")
             if self.model is None:
                 raise ApiError(503, "MODEL_ADAPTER_NOT_CONFIGURED")
-            raise ApiError(503, "MODEL_ADAPTER_NOT_CONFIGURED")  # real adapter: BLOCKED_EXTERNAL (no provider/credentials)
+            history = [{"role": r["role"].lower(), "content": r["content"]}
+                       for r in (self.store.list_messages(cid, pr.subject) or []) if r["role"] in ("USER", "ASSISTANT")]
+            history.append({"role": "user", "content": msg})
+            digest = hashlib.sha256(msg.encode()).hexdigest()
+            try:
+                reply = self.model.chat(history)
+            except ModelError as e:
+                self.store.audit(pr.subject, "CHAT_MODEL_ERROR", cid, code=e.code, input_digest=digest)
+                raise ApiError(e.http_status, e.code) from None
+            self.store.add_message(cid, "USER", msg)
+            self.store.add_message(cid, "ASSISTANT", reply)
+            self.store.audit(pr.subject, "CHAT_COMPLETED", cid, input_digest=digest,
+                             output_digest=hashlib.sha256(reply.encode()).hexdigest())
+            return 200, {"status": "OK", "conversation_id": cid, "reply": reply,
+                         "authority": "NON_AUTHORITATIVE_MODEL_OUTPUT"}
         if p == "/v1/memory" or p.startswith("/v1/memory/"):
             return self._memory(method, p, pr, body)
         if method == "POST" and p == "/v1/tasks":

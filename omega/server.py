@@ -28,6 +28,8 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         from omega.tools.web_fetch import make_web_fetch
         reg.register(make_web_fetch(EgressPolicy(allow_hosts=frozenset(allow))))
     store.audit("system", "RUNTIME_START", "omega", docs=len(corpus.docs), tools=sorted(reg.names()))
+    from omega.adapters.model import adapter_from_env
+    kw.setdefault("model_adapter", adapter_from_env(dict(os.environ)))
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
 
