@@ -4,7 +4,11 @@ services:
     runtime: docker
     dockerfilePath: ./deploy/Dockerfile
     dockerContext: .
-    healthCheckPath: /health/ready
+    healthCheckPath: /
     envVars:
       - key: HOST
         value: 0.0.0.0
+      - key: OMEGA_DEV_TOKEN_KEY
+        generateValue: true
+      - key: AUDIT_HMAC_KEY
+        generateValue: true
