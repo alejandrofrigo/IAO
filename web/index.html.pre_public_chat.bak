@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>OMEGA — SO-OMEGA PRIME</title>
+<style>
+:root{font-family:system-ui,sans-serif;color-scheme:dark}
+body{margin:0;background:#10141d;color:#edf2fa}
+main{max-width:760px;margin:auto;padding:20px}
+h1{margin-bottom:4px}
+small,.muted{color:#aab6c8}
+.panel{background:#1b2330;border:1px solid #354154;border-radius:14px;padding:14px;margin:14px 0}
+input,textarea,button{box-sizing:border-box;width:100%;padding:12px;margin:5px 0;border-radius:9px;border:1px solid #46546a;background:#111824;color:#fff;font:inherit}
+button{background:#315caa;border:0;font-weight:650}
+button:disabled{opacity:.5}
+#messages{display:flex;flex-direction:column;gap:10px}
+.msg{padding:12px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.user{background:#263d60}
+.omega{background:#202b38}
+.status{min-height:1.5em;color:#b9d0f7}
+</style>
+</head>
+<body>
+<main>
+  <h1>OMEGA</h1>
+  <div class="muted">SO-OMEGA PRIME · Interfaz de chat</div>
+
+  <section class="panel">
+    <label for="token">Token de sesión de desarrollo</label>
+    <input id="token" type="password" autocomplete="off"
+      placeholder="Pega aquí el token generado localmente">
+    <small>Se mantiene solo en esta página; no se guarda en almacenamiento persistente.</small>
+    <button id="connect">Conectar y crear conversación</button>
+    <div id="status" class="status" role="status"></div>
+  </section>
+
+  <section class="panel">
+    <div id="messages" aria-live="polite"></div>
+    <label for="message">Mensaje</label>
+    <textarea id="message" rows="3" maxlength="20000"
+      placeholder="Escribe a OMEGA..."></textarea>
+    <button id="send" disabled>Enviar mensaje</button>
+  </section>
+</main>
+<script>
+(() => {
+  const tokenEl = document.querySelector("#token");
+  const statusEl = document.querySelector("#status");
+  const messagesEl = document.querySelector("#messages");
+  const messageEl = document.querySelector("#message");
+  const connectBtn = document.querySelector("#connect");
+  const sendBtn = document.querySelector("#send");
+  let conversationId = null;
+  let busy = false;
+
+  function status(text) { statusEl.textContent = text; }
+
+  async function api(path, method = "GET", body = undefined) {
+    const token = tokenEl.value.trim();
+    if (!token) throw new Error("Introduce tu token de sesión.");
+    const headers = { "Authorization": "Bearer " + token };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, {
+      method, headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store"
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const e = new Error(data.error || "HTTP_" + response.status);
+      e.status = response.status;
+      throw e;
+    }
+    return data;
+  }
+
+  function addMessage(role, text) {
+    const div = document.createElement("div");
+    div.className = "msg " + (role === "user" ? "user" : "omega");
+    const label = document.createElement("strong");
+    label.textContent = role === "user" ? "Tú" : "OMEGA";
+    const content = document.createElement("div");
+    content.textContent = text;
+    div.append(label, content);
+    messagesEl.append(div);
+  }
+
+  connectBtn.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    connectBtn.disabled = true;
+    try {
+      const me = await api("/v1/me");
+      const result = await api("/v1/conversations", "POST",
+        {title: "Chat OMEGA"});
+      conversationId = result.conversation_id;
+      messagesEl.replaceChildren();
+      sendBtn.disabled = false;
+      status("Sesión autenticada: " + me.subject + ". Conversación lista.");
+    } catch (e) {
+      conversationId = null;
+      sendBtn.disabled = true;
+      status("No se pudo conectar: " + e.message);
+    } finally {
+      busy = false;
+      connectBtn.disabled = false;
+    }
+  });
+
+  async function sendMessage() {
+    const message = messageEl.value.trim();
+    if (!message || !conversationId || busy) return;
+    busy = true;
+    sendBtn.disabled = true;
+    messageEl.value = "";
+    addMessage("user", message);
+    status("OMEGA está procesando el mensaje...");
+    try {
+      const result = await api("/v1/chat", "POST", {
+        conversation_id: conversationId, message
+      });
+      addMessage("omega", result.reply);
+      status("Respuesta recibida. Salida del modelo no autoritativa.");
+    } catch (e) {
+      addMessage("omega", "Error: " + e.message);
+      status(e.status === 401 ? "Sesión inválida o expirada. Reconecta." :
+        "No se pudo completar el mensaje.");
+      if (e.status === 401) {
+        conversationId = null;
+        sendBtn.disabled = true;
+      }
+    } finally {
+      busy = false;
+      if (conversationId) sendBtn.disabled = false;
+      messageEl.focus();
+    }
+  }
+
+  sendBtn.addEventListener("click", sendMessage);
+  messageEl.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+})();
+</script>
+</body>
+</html>
