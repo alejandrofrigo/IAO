@@ -1,4 +1,4 @@
-"""Runs ONLY when egress works. Verifies DNS+TLS from SO-OMEGA's own probe first; if blocked it
+"""Runs ONLY when egress works. Verifies DNS+TLS from IAO's own probe first; if blocked it
 stops with BLOCKED_NETWORK (it never tries to bypass the gateway). Then: venv -> pinned install ->
 ruff -> mypy -> pytest -> offline suite -> runtime evidence. Writes artifacts/online-bootstrap.json."""
 import json

@@ -103,7 +103,8 @@ class PolicyToolTests(Base):
         self.assertEqual(c.verify(out), "PASS")
         out["items"][0]["snippet"] = "fabricated text not in the document"
         self.assertEqual(c.verify(out), "FAIL")
-        out2 = c.run({"query": "audit", "limit": 3}); out2["items"][0]["source_hash"] = "sha256:00"
+        out2 = c.run({"query": "audit", "limit": 3})
+        out2["items"][0]["source_hash"] = "sha256:00"
         self.assertEqual(c.verify(out2), "FAIL")
 
     def test_INJ01_corpus_injection_is_data_not_authority(self) -> None:
@@ -132,7 +133,8 @@ class PolicyToolTests(Base):
 
 class LimitsAndIntegrityTests(Base):
     def test_COST01_quota_and_rate_limit_cut_with_audit_event(self) -> None:
-        self.svc.store.close(); self.mk(daily_task_quota=2, rate_limit_per_min=5)
+        self.svc.store.close()
+        self.mk(daily_task_quota=2, rate_limit_per_min=5)
         self.assertEqual(self.task("q", "knowledge.search")[0], 200)
         self.assertEqual(self.task("q", "knowledge.search")[0], 200)
         s, p = self.task("q", "knowledge.search")
@@ -143,7 +145,8 @@ class LimitsAndIntegrityTests(Base):
         self.assertEqual(reasons, {"QUOTA_EXCEEDED", "RATE_LIMITED"})
 
     def test_lease_expiry(self) -> None:
-        self.svc.store.close(); self.mk(task_ttl_seconds=0)
+        self.svc.store.close()
+        self.mk(task_ttl_seconds=0)
         p = self.task("alice", "knowledge.search")[1]
         self.assertEqual((p["state"], p["error"]), ("EXPIRED", "LEASE_EXPIRED"))
 
@@ -152,7 +155,9 @@ class LimitsAndIntegrityTests(Base):
         self.assertEqual(self.svc.store.verify_audit(), (True, None))
         self.assertEqual(self.call("GET", "/health/ready")[0], 200)
         c = sqlite3.connect(str(self.state / "omega.db"))
-        c.execute("UPDATE audit_event SET details=replace(details,'alice','mallory') WHERE id=3"); c.commit(); c.close()
+        c.execute("UPDATE audit_event SET details=replace(details,'alice','mallory') WHERE id=3")
+        c.commit()
+        c.close()
         ok, bad = self.svc.store.verify_audit()
         self.assertEqual((ok, bad), (False, 2))
         s, p = self.call("GET", "/health/ready")
@@ -161,12 +166,15 @@ class LimitsAndIntegrityTests(Base):
     def test_chat_reports_model_not_configured_after_authz(self) -> None:
         self.assertEqual(self.call("POST", "/v1/chat", {}, {"conversation_id": "x", "message": "hi"})[0], 401)
         cid = self.call("POST", "/v1/conversations", self.tok("a"), {})[1]["conversation_id"]
+        # Aislar el escenario: esta prueba verifica el caso sin adaptador.
+        self.svc.model = None
         s, p = self.call("POST", "/v1/chat", self.tok("a"), {"conversation_id": cid, "message": "hi"})
         self.assertEqual((s, p["error"]), (503, "MODEL_ADAPTER_NOT_CONFIGURED"))
         self.assertEqual(self.call("POST", "/v1/chat", self.tok("b"), {"conversation_id": cid, "message": "hi"})[0], 404)
 
     def test_persistence_survives_restart(self) -> None:
         tid = self.task("alice", "knowledge.search")[1]["task_id"]
-        self.svc.store.close(); self.mk()
+        self.svc.store.close()
+        self.mk()
         self.assertEqual(self.call("GET", f"/v1/tasks/{tid}", self.tok("alice"))[1]["state"], "SUCCEEDED")
         self.assertTrue(self.svc.store.verify_audit()[0])

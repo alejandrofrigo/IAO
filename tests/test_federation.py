@@ -63,7 +63,8 @@ class HappyAndAuthTests(FedBase):
         self.assertTrue(r["result"]["items"])
 
     def test_node_id_bound_to_key_at_enrolment(self) -> None:
-        c = self.b.contract_for_self(["knowledge.search"]); c["peer_id"] = "deadbeefdeadbeef"
+        c = self.b.contract_for_self(["knowledge.search"])
+        c["peer_id"] = "deadbeefdeadbeef"
         with self.assertRaises(ValueError):
             self.a.enroll(c)
 
@@ -85,7 +86,8 @@ class HappyAndAuthTests(FedBase):
         self.assertEqual(self.b.handle(json.dumps(e).encode())[1]["error"], "BAD_SIGNATURE")
 
     def test_impersonation_with_another_enrolled_key(self) -> None:
-        c = mk(self.tmp.name, "c", self.clock); self.b.enroll(c.contract_for_self(["knowledge.search"]))
+        c = mk(self.tmp.name, "c", self.clock)
+        self.b.enroll(c.contract_for_self(["knowledge.search"]))
         s, p = self.raw(self.env(), c.key)  # claims to be A, signed by C
         self.assertEqual(p["error"], "BAD_SIGNATURE")
 
@@ -98,7 +100,8 @@ class ReplayAndTimeTests(FedBase):
         self.assertEqual((s, p["error"]), (409, "REPLAY"))
 
     def test_replayed_to_a_different_node_rejected(self) -> None:
-        c = mk(self.tmp.name, "c", self.clock); c.enroll(self.a.contract_for_self(["knowledge.search"]))
+        c = mk(self.tmp.name, "c", self.clock)
+        c.enroll(self.a.contract_for_self(["knowledge.search"]))
         raw = json.dumps(_sign(self.a.key, self.env())).encode()  # addressed to B
         self.assertEqual(c.handle(raw)[1]["error"], "WRONG_RECIPIENT")
 
@@ -169,7 +172,8 @@ class PartitionAndHostilePeerTests(FedBase):
         self.assertEqual((r["ok"], r["error"]), (False, "PEER_UNREACHABLE"))
         before = len([e for e in self.b.store._all_events() if e["event_type"] == "FED_REQUEST"])
         self.assertEqual(before, 0)  # nothing was applied during the partition
-        self.sb = FedServer(self.b, port=port).start(); self.servers.append(self.sb)
+        self.sb = FedServer(self.b, port=port).start()
+        self.servers.append(self.sb)
         self.assertTrue(self.a.send(self.b.node_id, self.sb.url, "knowledge.search", Q)["ok"])
 
     def _hostile(self, build) -> FedServer:  # type: ignore[no-untyped-def]
@@ -182,15 +186,22 @@ class PartitionAndHostilePeerTests(FedBase):
             def do_POST(self) -> None:
                 req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 data = json.dumps(build(req)).encode()
-                self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
 
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
         class S:
             url = f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/message"
-            def stop(self_inner) -> None: httpd.shutdown(); httpd.server_close()  # noqa: E704
-        s = S(); self.servers.append(s); del peer
+            def stop(self_inner) -> None:
+                httpd.shutdown()
+                httpd.server_close()
+        s = S()
+        self.servers.append(s)
+        del peer
         return s  # type: ignore[return-value]
 
     def test_forged_result_signed_by_attacker_rejected(self) -> None:

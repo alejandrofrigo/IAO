@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 
 from apps.api.schemas import ChatRequest, ChatResponse
 
-app = FastAPI(title="SO-OMEGA PRIME", version="0.1.0")
+app = FastAPI(title="IAO", version="0.1.0")
 
 
 @app.get("/health/live")

@@ -2,6 +2,7 @@
 On SIGTERM/SIGINT it stops the child too (no orphans) and exits 0."""
 import signal
 import subprocess
+import os
 import sys
 import time
 from types import FrameType
@@ -21,7 +22,7 @@ def supervise(cmd: list[str], max_restarts: int = 5, window: float = 60.0) -> in
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     while True:
-        p = subprocess.Popen(cmd)
+        p = subprocess.Popen(cmd, env={**os.environ, "IAO_LLM_ROUTER": "1"})
         child["p"] = p
         if stopping["v"]:
             p.terminate()

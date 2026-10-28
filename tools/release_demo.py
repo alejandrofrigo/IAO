@@ -16,7 +16,8 @@ rc = ReleaseController(work, os.urandom(32))
 out: dict = {"steps": []}  # type: ignore[type-arg]
 step = lambda name, **d: (out["steps"].append({"step": name, **d}), print(name, d))  # noqa: E731
 
-m1 = rc.build(ROOT, "1.0.0"); step("build 1.0.0", digest=m1["digest"][:16])
+m1 = rc.build(ROOT, "1.0.0")
+step("build 1.0.0", digest=m1["digest"][:16])
 step("deploy 1.0.0", **rc.deploy_with_gate("1.0.0", smoke_runtime))
 m2 = rc.build(ROOT, "1.1.0")
 (rc.release_dir("1.1.0") / "omega" / "service.py").write_text("raise RuntimeError('defective release')\n")

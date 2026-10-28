@@ -19,6 +19,7 @@ button:disabled{opacity:.5}
 .user{background:#263d60}.omega{background:#202b38}
 .status{min-height:1.5em;color:#b9d0f7}
 </style>
+<script src="./api-config.js"></script>
 </head>
 <body>
 <main>
@@ -85,11 +86,21 @@ button:disabled{opacity:.5}
     connectBtn.disabled = true;
     status("Creando sesión pública...");
     try {
-      const session = await request("/v1/public/session", "POST", {});
-      token = session.access_token;
-      const conversation = await request("/v1/conversations", "POST",
-        {title: "Chat público IAO"});
-      conversationId = conversation.conversation_id;
+      try {
+        const session = await request("/v1/public/session", "POST", {});
+        token = session.access_token;
+        const conversation = await request("/v1/conversations", "POST",
+          {title: "Chat público IAO"});
+        conversationId = conversation.conversation_id;
+      } catch (e) {
+        const message = String(e && e.message || e);
+        if (!/HTTP_(404|405)|HTTP (404|405)/i.test(message)) throw e;
+        // Compatibilidad con backends que solo exponen POST /v1/chat.
+        // No se eluden errores de autenticación ni de autorización.
+        token = "";
+        conversationId = "iao-" + Date.now().toString(36);
+        console.warn("IAO: rutas de sesión no disponibles; modo compatible.");
+      }
       messagesEl.replaceChildren();
       messageEl.disabled = false;
       sendBtn.disabled = false;

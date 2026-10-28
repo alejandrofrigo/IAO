@@ -1,4 +1,4 @@
-# SO-OMEGA PRIME
+# IAO
 
 Verified state lives in `artifacts/` (status.json, runtime-report.json, test-results.txt, build-manifest.json).
 

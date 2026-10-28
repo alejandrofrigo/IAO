@@ -1,4 +1,4 @@
-"""Stdlib HTTP runtime for SO-OMEGA. Refuses to start in production with dev auth."""
+"""Stdlib HTTP runtime for IAO. Refuses to start in production with dev auth."""
 import json
 import os
 import signal
@@ -16,7 +16,16 @@ from omega.tools.registry import ToolRegistry, ToolSpec
 
 def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: object) -> OmegaService:
     state_dir.mkdir(parents=True, exist_ok=True)
-    audit_key = os.environ.get("AUDIT_HMAC_KEY", "").encode() or ("audit|" + token_key).encode()
+    audit_key_env = os.environ.get("AUDIT_HMAC_KEY", "")
+    if audit_key_env:
+        audit_key = audit_key_env.encode()
+    else:
+        key_path = Path.home() / ".config" / "iao" / "audit-hmac-key"
+        if not key_path.is_file():
+            raise RuntimeError("Persistent audit key is missing")
+        audit_key = key_path.read_text().strip().encode()
+        if len(audit_key) < 32:
+            raise RuntimeError("Persistent audit key is invalid")
     store = Store(state_dir / "omega.db", audit_key=audit_key)
     corpus = KnowledgeCorpus(corpus_dir)
     reg = ToolRegistry()
@@ -29,7 +38,14 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         reg.register(make_web_fetch(EgressPolicy(allow_hosts=frozenset(allow))))
     store.audit("system", "RUNTIME_START", "omega", docs=len(corpus.docs), tools=sorted(reg.names()))
     from omega.adapters.model import adapter_from_env
-    kw.setdefault("model_adapter", adapter_from_env(dict(os.environ)))
+    router_enabled = os.environ.get("IAO_LLM_ROUTER", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if router_enabled:
+        from omega.llm_router import RouterModelAdapter
+        kw["model_adapter"] = RouterModelAdapter()
+    else:
+        kw.setdefault("model_adapter", adapter_from_env(dict(os.environ)))
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
 
@@ -39,13 +55,82 @@ def make_handler(svc: OmegaService) -> type[BaseHTTPRequestHandler]:
         server_version = "omega"
         sys_version = ""
 
+        def _cors_headers(self) -> None:
+            origin = self.headers.get("Origin", "")
+            allowed = {
+                x.strip().rstrip("/")
+                for x in os.environ.get(
+                    "IAO_CORS_ORIGINS",
+                    "https://alejandrofrigo.github.io"
+                ).split(",") if x.strip()
+            }
+            if origin and origin.rstrip("/") in allowed:
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+
         def _do(self) -> None:
+            if self.command == "OPTIONS":
+                origin = self.headers.get("Origin", "")
+                requested_method = self.headers.get(
+                    "Access-Control-Request-Method", ""
+                ).upper()
+                requested_headers = {
+                    x.strip().lower()
+                    for x in self.headers.get(
+                        "Access-Control-Request-Headers", ""
+                    ).split(",") if x.strip()
+                }
+                allowed = {
+                    x.strip().rstrip("/")
+                    for x in os.environ.get(
+                        "IAO_CORS_ORIGINS",
+                        "https://alejandrofrigo.github.io"
+                    ).split(",") if x.strip()
+                }
+                if (
+                    origin.rstrip("/") not in allowed
+                    or requested_method not in {"POST", "GET"}
+                    or not requested_headers.issubset(
+                        {"authorization", "content-type"}
+                    )
+                ):
+                    self.send_response(403)
+                    self.end_headers()
+                    return
+                self.send_response(204)
+                self._cors_headers()
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                self.send_header("Access-Control-Max-Age", "600")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            # Serve only the fixed local chat page; API requests remain in OmegaService.
+            if self.command == "GET" and self.path.split("?", 1)[0] in ("/", "/index.html"):
+                page = Path(__file__).resolve().parent.parent / "web" / "index.html"
+                try:
+                    data = page.read_bytes()
+                except OSError:
+                    self.send_error(503, "WEB_INTERFACE_UNAVAILABLE")
+                    return
+                self.send_response(200)
+                self._cors_headers()
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+                self.end_headers()
+                self.wfile.write(data)
+                return
             n = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(min(n, MAX_BODY + 1)) if n else b""
             hdrs = {k.lower(): v for k, v in self.headers.items()}
+            hdrs["x-omega-client-ip"] = self.client_address[0]
             status, payload = svc.handle(self.command, self.path, hdrs, body)
             data = json.dumps(payload).encode()
             self.send_response(status)
+            self._cors_headers()
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -53,7 +138,7 @@ def make_handler(svc: OmegaService) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(data)
             sys.stderr.write(json.dumps({"m": self.command, "p": self.path.split("?")[0], "s": status, "cid": payload.get("correlation_id")}) + "\n")
 
-        do_GET = do_POST = do_PUT = do_DELETE = _do
+        do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = _do
 
         def log_message(self, *a: object) -> None:
             pass

@@ -9,14 +9,14 @@ import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from omega.adapters.model import ModelError
 from omega.audit import canonical_json
-from omega.auth import Principal, verify_token
+from omega.auth import Principal, issue_token, verify_token
 from omega.control import transition
 from omega.policy import authorize
 from omega.store import Store
@@ -42,8 +42,22 @@ class OmegaService:
                  clock: Any = time.time) -> None:
         self.store, self.registry, self.token_key = store, registry, token_key
         self.rate, self.quota, self.ttl, self.model, self.clock = rate_limit_per_min, daily_task_quota, task_ttl_seconds, model_adapter, clock
+
+        # IAO_ROUTER_FALLBACK_V1
+        if self.model is None:
+            try:
+                from omega.llm_router import RouterModelAdapter, providers
+                if providers():
+                    self.model = RouterModelAdapter()
+            except (ImportError, OSError, ValueError):
+                pass
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._public_hits: dict[str, deque[float]] = defaultdict(deque)
         self._rl = threading.Lock()
+
+        # IAO_PATCH: la dependencia inyectada tiene prioridad sobre el router por defecto.
+        if model_adapter is not None:
+            self.model = model_adapter
 
     # ---------- entry ----------
     def handle(self, method: str, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
@@ -70,7 +84,8 @@ class OmegaService:
             q = self._hits[p.subject]
             while q and q[0] < now - 60:
                 q.popleft()
-            if len(q) >= self.rate:
+            limit = min(self.rate, 20) if p.subject.startswith('guest:') else self.rate
+            if len(q) >= limit:
                 limited = True
             else:
                 q.append(now)
@@ -101,6 +116,27 @@ class OmegaService:
             ready = ok_db and chain_ok and bool(self.registry.names())
             return (200 if ready else 503), {"status": "ready" if ready else "not_ready",
                                              "checks": {"database": ok_db, "audit_chain": chain_ok, "tools": sorted(self.registry.names())}}
+        if method == "POST" and p == "/v1/public/session":
+            # The HTTP handler overwrites this header using the socket peer address.
+            client = headers.get("x-omega-client-ip", "unknown")[:64]
+            now = self.clock()
+            with self._rl:
+                q = self._public_hits[client]
+                while q and q[0] < now - 60:
+                    q.popleft()
+                limited = len(q) >= 10
+                if not limited:
+                    q.append(now)
+            if limited:
+                self.store.audit("anonymous", "PUBLIC_SESSION_DENIED", "public_chat",
+                                 decision="DENY", reason="RATE_LIMITED")
+                raise ApiError(429, "RATE_LIMITED")
+            subject = "guest:" + uuid.uuid4().hex
+            ttl = 7200
+            token = issue_token(self.token_key, subject, [], ttl=ttl, now=now)
+            self.store.audit(subject, "PUBLIC_SESSION_CREATED", "public_chat", expires_in=ttl)
+            return 201, {"access_token": token, "token_type": "Bearer", "expires_in": ttl}
+
         pr = self._auth(headers)
         if method == "GET" and p == "/v1/me":
             return 200, {"subject": pr.subject, "scopes": sorted(pr.scopes)}

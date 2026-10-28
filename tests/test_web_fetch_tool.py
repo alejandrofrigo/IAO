@@ -1,6 +1,5 @@
 import json
 import threading
-import unittest
 from http.server import ThreadingHTTPServer
 
 from omega.egress import EgressPolicy
@@ -18,7 +17,8 @@ class WebFetchToolTests(Base):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.srv.shutdown(); cls.srv.server_close()
+        cls.srv.shutdown()
+        cls.srv.server_close()
 
     def setUp(self) -> None:
         super().setUp()

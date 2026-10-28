@@ -1,4 +1,4 @@
-"""Offline-capable verifier: runs tests, probes network from SO-OMEGA's own process,
+"""Offline-capable verifier: runs tests, probes network from IAO's own process,
 writes hashed evidence to artifacts/. Never reports success it did not observe."""
 import hashlib
 import json
@@ -31,7 +31,7 @@ def main() -> int:
 
     probes = [probe_https(h, timeout=5) for h in PROBE_TARGETS]
     net_state = "DIRECT_INTERNET_CONNECTED" if any(p["verdict"] == "DIRECT_INTERNET_CONNECTED" for p in probes) else "BLOCKED_NETWORK"
-    (ART / "network-connectivity.json").write_text(json.dumps({"timestamp": now, "origin": "omega.net.probe_https (SO-OMEGA process)", "state": net_state, "probes": probes}, indent=2))
+    (ART / "network-connectivity.json").write_text(json.dumps({"timestamp": now, "origin": "omega.net.probe_https (IAO process)", "state": net_state, "probes": probes}, indent=2))
 
     files = sorted(p for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts and "artifacts" not in p.parts and ".state" not in p.parts)
     manifest = {"timestamp": now, "commit": commit, "python": platform.python_version(), "files": {str(p.relative_to(ROOT)): sha(p) for p in files}}

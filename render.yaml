@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: iao-backend
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/ready
+    envVars:
+      - key: HOST
+        value: 0.0.0.0

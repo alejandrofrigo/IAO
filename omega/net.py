@@ -1,4 +1,4 @@
-"""SO-OMEGA's own network plane (diagnostic client). Runs from the SO-OMEGA process.
+"""IAO's own network plane (diagnostic client). Runs from the IAO process.
 
 Verdict DIRECT_INTERNET_CONNECTED is only issued for a fully verified TLS+HTTP exchange
 with a non-loopback address. Errors are classified separately and never reported as success.

@@ -1,5 +1,4 @@
 import json
-import unittest
 
 from tests.test_service import Base
 
@@ -15,7 +14,8 @@ class MemoryTests(Base):
 
     def test_no_consent_nothing_stored(self) -> None:
         for c in (None, False, "true", 1):
-            b = self.good(); b["consent"] = c
+            b = self.good()
+            b["consent"] = c
             self.assertEqual(self.mem("alice", b)[0], 422)
         self.assertEqual(self.call("GET", "/v1/memory", self.tok("alice", ["memory.read"]))[1]["memories"], [])
 
@@ -37,7 +37,8 @@ class MemoryTests(Base):
 
     def test_DATA01_delete_leaves_no_residue_and_audit_has_no_content(self) -> None:
         a = self.mem("alice", self.good())[1]["memory_id"]
-        self.mem("alice", self.good(value="second")); self.mem("bob", self.good(value="bobs"))
+        self.mem("alice", self.good(value="second"))
+        self.mem("bob", self.good(value="bobs"))
         rd = self.tok("alice", ["memory.read", "memory.write"])
         self.assertEqual(self.call("DELETE", "/v1/memory", rd)[1]["deleted"], 2)
         self.assertEqual(self.call("GET", "/v1/memory/export", rd)[1]["memories"], [])

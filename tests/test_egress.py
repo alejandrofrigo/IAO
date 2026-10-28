@@ -148,5 +148,8 @@ class EgressTests(unittest.TestCase):
         self.denied(self.u("/slow"), "TIMEOUT", total_timeout=0.5)
 
     def test_connection_refused_classified(self) -> None:
-        s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close()
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        p = s.getsockname()[1]
+        s.close()
         self.denied(f"http://localhost:{p}/", "CONNECT_FAILED", allowed_ports=frozenset({p}))

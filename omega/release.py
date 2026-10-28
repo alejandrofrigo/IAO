@@ -147,7 +147,9 @@ class ReleaseController:
             return {"version": version, "result": "PROMOTED"}
         self._log("GATE_FAILED", version)
         if not had_prev:
-            st = self._state(); st["history"].pop(); self._save(st)
+            st = self._state()
+            st["history"].pop()
+            self._save(st)
             self.current_path().unlink(missing_ok=True)
             return {"version": version, "result": "ROLLED_BACK", "to": None}
         try:
@@ -204,7 +206,12 @@ class ReleaseController:
 
 def smoke_runtime(release: Path, timeout: float = 15.0) -> bool:
     """Health gate: start THE RELEASE's runtime on a free port, require ready + a verified task."""
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    finally:
+        s.close()
     from omega.auth import issue_token
     key = os.urandom(16).hex()
     state = tempfile.mkdtemp(prefix="smoke-")

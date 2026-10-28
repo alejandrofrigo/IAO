@@ -40,10 +40,21 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn(SECRET, seen[0][0])  # key in header, never in the URL
 
     def test_error_mapping(self) -> None:
-        for st, code in ((401, "PROVIDER_AUTH_REJECTED"), (403, "PROVIDER_AUTH_REJECTED"), (429, "PROVIDER_RATE_LIMITED"), (500, "PROVIDER_ERROR")):
+        for st, code in ((401, "PROVIDER_AUTH_REJECTED"), (429, "PROVIDER_RATE_LIMITED"), (500, "PROVIDER_ERROR")):
             with self.assertRaises(ModelError) as c:
                 HttpsModelAdapter("anthropic", "m", SECRET, None, fake(st, {})).chat(MSG)
             self.assertEqual(c.exception.code, code)
+
+    def test_403_distinguishes_edge_block_from_access_denial(self) -> None:
+        cases = (
+            (b"error code: 1010", "PROVIDER_EDGE_BLOCKED"),
+            (b'{"error":"forbidden"}', "PROVIDER_ACCESS_DENIED"),
+        )
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaises(ModelError) as c:
+                    HttpsModelAdapter("groq", "m", SECRET, None, fake(403, payload)).chat(MSG)
+                self.assertEqual(c.exception.code, expected)
 
     def test_malformed_and_empty_output_never_pass(self) -> None:
         for payload, code in ((b"not json", "PROVIDER_INVALID_OUTPUT"), ({"x": 1}, "PROVIDER_INVALID_OUTPUT"),

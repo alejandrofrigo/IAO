@@ -1,5 +1,5 @@
-"""Start SO-OMEGA under the supervisor, exercise it over real HTTP, crash it, verify recovery,
-measure backup/restore, probe network from the SO-OMEGA process, write evidence."""
+"""Start IAO under the supervisor, exercise it over real HTTP, crash it, verify recovery,
+measure backup/restore, probe network from the IAO process, write evidence."""
 import json
 import os
 import signal
@@ -29,7 +29,13 @@ def rec(name: str, ok: bool, detail: str = "") -> None:
 
 
 def free_port() -> int:
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        p = s.getsockname()[1]
+    finally:
+        s.close()
+    return p
 
 
 def http(base: str, method: str, path: str, tok: str | None = None, body: object = None, headers: dict | None = None):  # type: ignore[no-untyped-def]
@@ -66,12 +72,15 @@ def main() -> int:
     sup = subprocess.Popen([sys.executable, "-m", "omega.supervisor"], cwd=ROOT, env=env, stderr=log, stdout=log)
     try:
         rec("T-04 runtime starts and /health/ready is 200", wait_ready(base))
-        s, p = http(base, "GET", "/health/live"); rec("liveness", s == 200 and p["status"] == "live")
+        s, p = http(base, "GET", "/health/live")
+        rec("liveness", s == 200 and p["status"] == "live")
         s, p = http(base, "GET", "/health/ready")
         rec("readiness checks db + audit chain + tools", s == 200 and p["checks"]["audit_chain"] and p["checks"]["tools"] == ["knowledge.search"], json.dumps(p["checks"]))
         rec("AUTH-01 unauthenticated -> 401", http(base, "GET", "/v1/me")[0] == 401)
-        A = issue_token(KEY, "alice", ["knowledge.search", "memory.read", "memory.write"]); B = issue_token(KEY, "bob", ["knowledge.search", "memory.read"])
-        s, p = http(base, "GET", "/v1/me", A); rec("identity from token", s == 200 and p["subject"] == "alice")
+        A = issue_token(KEY, "alice", ["knowledge.search", "memory.read", "memory.write"])
+        B = issue_token(KEY, "bob", ["knowledge.search", "memory.read"])
+        s, p = http(base, "GET", "/v1/me", A)
+        rec("identity from token", s == 200 and p["subject"] == "alice")
         s, t = http(base, "POST", "/v1/tasks", A, {"goal": "find backup guidance", "capability": "knowledge.search", "input": {"query": "restore audit chain", "limit": 3}}, {"Idempotency-Key": "run-1"})
         rec("knowledge.search task SUCCEEDED + verifier PASS", s == 200 and t["state"] == "SUCCEEDED" and t["verification"] == "PASS" and len(t["result"]["items"]) >= 1, f"items={len(t.get('result', {}).get('items', []))}")
         tid = t["task_id"]
@@ -117,15 +126,44 @@ def main() -> int:
     # backup / restore with timing and integrity verification (REC / RPO-RTO measured)
     st = Store(state / "omega.db", audit_key=("audit|" + KEY).encode())
     n_events = len(st._all_events())
-    t0 = time.time(); bk = state / "backup.db"; st.backup(bk); t_backup = round(time.time() - t0, 4); st.close()
-    t0 = time.time(); rs = Store(bk, audit_key=("audit|" + KEY).encode()); chain_ok, _ = rs.verify_audit(); n_after = len(rs._all_events()); t_restore = round(time.time() - t0, 4); rs.close()
+    t0 = time.time()
+    bk = state / "backup.db"
+    st.backup(bk)
+    t_backup = round(time.time() - t0, 4)
+    st.close()
+    t0 = time.time()
+    rs = Store(bk, audit_key=("audit|" + KEY).encode())
+    chain_ok, _ = rs.verify_audit()
+    n_after = len(rs._all_events())
+    t_restore = round(time.time() - t0, 4)
+    rs.close()
     rec("backup restored, audit chain verified, event count equal", chain_ok and n_after == n_events, f"events={n_events} backup={t_backup}s restore+verify={t_restore}s")
     (ROOT / "artifacts" / "backup-restore-report.json").write_text(json.dumps({"events": n_events, "backup_seconds": t_backup, "restore_and_verify_seconds": t_restore, "audit_chain_ok": chain_ok, "note": "SQLite dev backend; PostgreSQL backup/restore NOT tested"}, indent=2))
 
-    # network plane from the SO-OMEGA process
+    # network plane from the IAO process
     probes = [probe_https(h, timeout=5) for h in ("pypi.org", "example.com")]
-    net = "DIRECT_INTERNET_CONNECTED" if any(x["verdict"] == "DIRECT_INTERNET_CONNECTED" for x in probes) else "BLOCKED_NETWORK"
-    rec("T-06 egress blocked => state is BLOCKED_NETWORK (not faked)", net == "BLOCKED_NETWORK" or net == "DIRECT_INTERNET_CONNECTED", net)
+    net = (
+        "DIRECT_INTERNET_CONNECTED"
+        if any(x.get("verdict") == "DIRECT_INTERNET_CONNECTED" for x in probes)
+        else "NO_VERIFIED_CONNECTIVITY"
+    )
+    valid_probe_verdicts = {
+        "BLOCKED_NETWORK",
+        "DIRECT_INTERNET_CONNECTED",
+        "LOCAL_TLS_OK",
+    }
+    probe_ok = bool(probes) and all(
+        isinstance(x, dict) and x.get("verdict") in valid_probe_verdicts
+        for x in probes
+    )
+    rec(
+        "T-06 reports verified connectivity without claiming a firewall block",
+        probe_ok and net in {
+            "DIRECT_INTERNET_CONNECTED",
+            "NO_VERIFIED_CONNECTIVITY",
+        },
+        net,
+    )
     (ROOT / "artifacts" / "network-connectivity.json").write_text(json.dumps({"timestamp": datetime.now(timezone.utc).isoformat(), "origin": "omega.net.probe_https", "state": net, "probes": probes}, indent=2))
 
     report = {"timestamp": datetime.now(timezone.utc).isoformat(), "base_url": base, "checks": results,

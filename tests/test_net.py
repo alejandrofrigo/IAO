@@ -1,5 +1,4 @@
 import datetime
-import ipaddress
 import socket
 import ssl
 import tempfile
@@ -87,6 +86,9 @@ class NetProbeTests(unittest.TestCase):
         self.assertEqual(r["verdict"], "BLOCKED_NETWORK")
 
     def test_connection_refused_classified(self) -> None:
-        s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close()
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        p = s.getsockname()[1]
+        s.close()
         r = probe_https("localhost", p, timeout=2, cafile=str(self.cert))
         self.assertEqual(r["error_class"], "CONNECT_FAILED")

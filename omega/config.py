@@ -25,10 +25,19 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
     port = int(e.get("PORT", "8080"))
     if not 1 <= port <= 65535:
         raise ValueError("PORT out of range")
+    model_adapter = e.get(
+        "MODEL_ADAPTER", e.get("MODEL_PROVIDER", "disabled")
+    ).strip().lower()
+    allowed_adapters = {"disabled", "anthropic", "gemini", "groq"}
+    if model_adapter not in allowed_adapters:
+        raise ValueError("MODEL_ADAPTER must be disabled, anthropic, gemini, or groq")
+    provider = e.get("MODEL_PROVIDER", "").strip().lower()
+    if model_adapter != "disabled" and provider and provider != model_adapter:
+        raise ValueError("MODEL_ADAPTER and MODEL_PROVIDER must match")
     return Settings(
         app_env=app_env,
         host=e.get("HOST", "127.0.0.1"),
         port=port,
-        model_adapter=e.get("MODEL_ADAPTER", "disabled"),
+        model_adapter=model_adapter,
         public_base_url=e.get("PUBLIC_BASE_URL", "http://localhost:8080"),
     )
