@@ -1,0 +1,124 @@
+name: IAO Backend - Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "omega/**"
+      - "apps/**"
+      - "deploy/Dockerfile"
+      - "pyproject.toml"
+      - ".github/workflows/deploy-cloud-run.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: iao-cloud-run-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          DEPLOYER: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -eu
+          test -n "$PROJECT_ID" || { echo "Missing repository variable GCP_PROJECT_ID"; exit 1; }
+          test -n "$REGION" || { echo "Missing repository variable GCP_REGION"; exit 1; }
+          test -n "$WIF_PROVIDER" || { echo "Missing secret GCP_WORKLOAD_IDENTITY_PROVIDER"; exit 1; }
+          test -n "$DEPLOYER" || { echo "Missing secret GCP_SERVICE_ACCOUNT"; exit 1; }
+          test -f deploy/Dockerfile
+          test -f pyproject.toml
+          python -m compileall -q omega apps
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Configure Google Cloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Enable required APIs and prepare image repository
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set -eu
+          gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com --project="$PROJECT_ID"
+          if ! gcloud artifacts repositories describe iao --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud artifacts repositories create iao \
+              --repository-format=docker \
+              --location="$REGION" \
+              --project="$PROJECT_ID" \
+              --description="IAO backend images"
+          fi
+
+      - name: Build backend image
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set -eu
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/iao/backend:$GITHUB_SHA"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          gcloud builds submit . \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --tag="$IMAGE" \
+            --file=deploy/Dockerfile
+
+      - name: Deploy backend
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set -eu
+          gcloud run deploy iao-backend \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --image="$IMAGE" \
+            --port=8080 \
+            --memory=512Mi \
+            --cpu=1 \
+            --min=0 \
+            --max=3 \
+            --timeout=120 \
+            --allow-unauthenticated \
+            --set-env-vars="HOST=0.0.0.0,PORT=8080,IAO_LLM_ROUTER=1" \
+            --quiet
+          URL="$(gcloud run services describe iao-backend \
+            --project="$PROJECT_ID" --region="$REGION" \
+            --format='value(status.url)')"
+          test -n "$URL"
+          echo "Backend URL: $URL"
+          echo "BACKEND_URL=$URL" >> "$GITHUB_ENV"
+
+      - name: Verify deployed HTTP endpoints
+        env:
+          URL: ${{ env.BACKEND_URL }}
+        run: |
+          set -eu
+          echo "Backend deployed at: $URL"
+          CODE="$(curl -sS -o /tmp/iao-health.txt -w '%{http_code}' --max-time 20 "$URL/health/live" || true)"
+          echo "GET /health/live -> HTTP $CODE"
+          cat /tmp/iao-health.txt || true
+          test "$CODE" = "200" || {
+            echo "Health verification failed; inspect service logs before declaring success."
+            exit 1
+          }
