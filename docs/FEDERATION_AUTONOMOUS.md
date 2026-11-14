@@ -86,3 +86,65 @@ Todos los cambios mantienen compatibilidad con el diseno estricto de produccion:
 - `tests/test_federation_open_policy.py`
 - `tests/test_federation_public_node.py`
 - suite completa: 252 passed, 4 skipped
+
+## Produccion externa publica (bore.pub)
+
+Fase verificada el 20261114T040320Z. Dos nodos IAO independientes,
+federados por internet real, con identidades Ed25519 distintas y CAs distintas.
+
+### Endpoints publicos
+
+- Nodo A: c7e87d4700354d9f - https://bore.pub:40039/fed/v1/message
+- Nodo C: 47c8b56559be5b2c - https://bore.pub:42015/fed/v1/message
+
+Los puertos de bore.pub cambian en cada arranque. El daemon
+auto-sincroniza el endpoint del peer cada 30s para sobrevivir a esto.
+
+### Propiedades verificadas
+
+- Enrolamiento mutuo autonomo entre dos nodos con CAs distintas.
+- Intercambio bidireccional knowledge.search firmado:
+  - A->C: verification=PASS, untrusted=True, items=1
+  - C->A: verification=PASS, untrusted=True, items=1
+- TLS 1.3 con CA propia en ambos lados.
+- Endpoint publico accesible por internet real (no loopback).
+- Publicacion firmada en /.well-known/iao-federation.json.
+- Daemons persistentes (setsid) con auto-sincronizacion de endpoints.
+
+### Como arrancar los daemons
+
+    bash tools/launch_public_node.sh a
+    bash tools/launch_public_node.sh c
+
+### Como parar los daemons
+
+    kill -TERM $(cat .state/iao-node-network/daemon-a.pid)
+    kill -TERM $(cat .state/iao-node-network/daemon-c.pid)
+
+### Como verificarlos
+
+    cat .state/iao-node-network/publication-a.json
+    cat .state/iao-node-network/publication-c.json
+    cat .state/iao-node-network/federation-final.json
+
+### Como federar con un tercero real
+
+Un tercero con IAO necesita:
+
+1. El endpoint publico del nodo (ej. https://bore.pub:40039/fed/v1/message).
+2. El ca_pem del nodo (en publication-a.json, campo ca_pem).
+3. El node_id del nodo (en publication-a.json).
+
+Con eso, su instancia puede verificar la identidad, hacer el handshake
+firmado, enrolar el nodo y empezar a intercambiar knowledge.search.
+
+### Limitaciones conocidas
+
+- bore.pub es un servidor publico gratuito. Puede saturarse o fallar
+  transitoriamente. Los daemons reintentan hasta 8 veces con backoff.
+- El puerto publico es efimero. El polling cada 30s resuelve esto entre
+  los daemons propios. Para un tercero, si el puerto cambia, hay que
+  comunicarle el nuevo endpoint.
+- Produccion real requiere dominio propio con Let's Encrypt o VPS con
+  mTLS. Esta fase usa bore.pub como transporte real pero efimero.
+

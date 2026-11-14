@@ -196,10 +196,22 @@ class Node:
                 # Validación estricta (producción): HTTPS, puerto 443 o vacío,
                 # path exacto /fed/v1/message, sin credenciales ni query.
                 tls_test_mode = bool(os.environ.get("IAO_TLS_CA_FILE"))
+                # Permitir puerto no-443 en hosts de túnel reconocidos.
+                # En producción con dominio propio se mantiene la regla 443.
+                _TUNNEL_HOSTS = {"bore.pub", "loca.lt"}
+                _TUNNEL_SUFFIXES = (
+                    ".ngrok-free.app", ".ngrok.io",
+                    ".trycloudflare.com", ".loca.lt",
+                )
+                _host = (u.hostname or "").lower()
+                is_tunnel_host = (
+                    _host in _TUNNEL_HOSTS
+                    or any(_host.endswith(_sfx) for _sfx in _TUNNEL_SUFFIXES)
+                )
                 strict_valid = (
                     u.scheme == "https" and bool(u.hostname)
                     and not u.username and not u.password
-                    and (u.port is None or u.port == 443 or tls_test_mode)
+                    and (u.port is None or u.port == 443 or tls_test_mode or is_tunnel_host)
                     and u.path == "/fed/v1/message"
                     and not u.query and not u.fragment
                 )
@@ -305,6 +317,55 @@ class Node:
             "node_id": self.node_id,
             "public_key": self.pub.hex(),
         }
+
+    def identity_publication(self, endpoint: str, *,
+                              capabilities: list[str] | None = None,
+                              lease_seconds: int = 3600) -> dict[str, Any]:
+        """Firmado, publicable en /.well-known/iao-federation.json.
+
+        Incluye identidad, endpoint público, capabilities, y una firma
+        Ed25519 del cuerpo canónico. El peer que lo descubre puede
+        verificar la firma, y luego completar el handshake challenge
+        para confirmar posesión de la clave privada.
+        """
+        import time as _time
+        body = {
+            "protocol": "iao-federation-publication",
+            "version": 1,
+            "node_id": self.node_id,
+            "public_key": self.pub.hex(),
+            "endpoint": endpoint,
+            "capabilities": sorted(capabilities or sorted(self.served)),
+            "lease_expires_at": float(self.clock() + lease_seconds),
+            "issued_at": float(self.clock()),
+        }
+        return {
+            **body,
+            "sig": _b64(self.key.sign(canonical_json(body))),
+        }
+
+    @staticmethod
+    def verify_publication(publication: dict[str, Any]) -> bool:
+        """Verifica la firma Ed25519 de una publicación.
+
+        No verifica vigencia temporal aquí; el llamador decide.
+        """
+        try:
+            if publication.get("protocol") != "iao-federation-publication":
+                return False
+            if publication.get("version") != 1:
+                return False
+            pub = bytes.fromhex(publication["public_key"])
+            if len(pub) != 32:
+                return False
+            sig = base64.b64decode(publication["sig"], validate=True)
+            body = {k: v for k, v in publication.items() if k != "sig"}
+            Ed25519PublicKey.from_public_bytes(pub).verify(
+                sig, canonical_json(body)
+            )
+            return True
+        except Exception:
+            return False
 
     def answer_challenge(self, raw: bytes) -> tuple[int, dict[str, Any]]:
         """Sign a fresh caller challenge without enrolling or trusting its sender."""
@@ -613,6 +674,12 @@ class FedServer:
             def do_GET(self) -> None:
                 if self.path == "/fed/v1/identity":
                     self._reply(200, outer.identity_document())
+                elif self.path == "/.well-known/iao-federation.json":
+                    pub = getattr(outer, "_publication", None)
+                    if isinstance(pub, dict):
+                        self._reply(200, pub)
+                    else:
+                        self._reply(503, {"error": "PUBLICATION_NOT_READY"})
                 else:
                     self._reply(404, {"error": "NOT_FOUND"})
 
@@ -644,8 +711,17 @@ class FedServer:
                 self.httpd.socket, server_side=True
             )
         self.port = self.httpd.server_address[1]
+        self._node_for_publication = node
         self.url = f"http://{host}:{self.port}/fed/v1/message"
         self._t = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def set_publication(self, publication: dict[str, Any]) -> None:
+        """Adjunta la publicación firmada al nodo que sirve el endpoint."""
+        self.httpd.RequestHandlerClass  # touch; no-op
+        outer = getattr(self, "_outer_node", None)
+        if outer is None:
+            outer = self._node_for_publication
+        outer._publication = publication
 
     def start(self) -> "FedServer":
         self._t.start()
