@@ -1,12 +1,17 @@
 """F5 controlled federation. Known peers only (ParticipationContract), Ed25519 signed envelopes,
 replay/skew protection, leases, revocation, per-peer rate limits, READ_ONLY capabilities only.
 Peers are untrusted for results: responses are signature-checked and treated as data."""
+import ssl
 import base64
 import hashlib
 import json
 import os
 import threading
 import time
+import math
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit
 import urllib.error
 import urllib.request
 from collections import defaultdict, deque
@@ -50,6 +55,75 @@ def _verify(pub_raw: bytes, env: dict[str, Any]) -> bool:
         return False
 
 
+def verify_identity_challenge(
+    identity: dict[str, Any],
+    response: dict[str, Any],
+    *,
+    requester_id: str,
+    nonce: str,
+    request_ts: float,
+    now: float,
+    skew: float = 60.0,
+) -> dict[str, Any]:
+    """Verify a public identity and its signed, nonce-bound challenge response."""
+    def fail(code: str) -> dict[str, Any]:
+        return {"ok": False, "error": code}
+
+    if not isinstance(identity, dict) or not isinstance(response, dict):
+        return fail("INVALID_DOCUMENT")
+    if identity.get("protocol") != "iao-federation" or identity.get("version") != 1:
+        return fail("UNSUPPORTED_IDENTITY_PROTOCOL")
+
+    peer_id = identity.get("node_id")
+    public_hex = identity.get("public_key")
+    if (not isinstance(peer_id, str) or len(peer_id) != 16
+            or any(ch not in "0123456789abcdef" for ch in peer_id)
+            or not isinstance(public_hex, str) or len(public_hex) != 64
+            or any(ch not in "0123456789abcdef" for ch in public_hex)):
+        return fail("INVALID_PUBLIC_IDENTITY")
+
+    try:
+        public_raw = bytes.fromhex(public_hex)
+    except ValueError:
+        return fail("INVALID_PUBLIC_IDENTITY")
+    if len(public_raw) != 32 or node_id_of(public_raw) != peer_id:
+        return fail("NODE_ID_KEY_MISMATCH")
+
+    if (not isinstance(requester_id, str) or len(requester_id) != 16
+            or any(ch not in "0123456789abcdef" for ch in requester_id)
+            or not isinstance(nonce, str) or len(nonce) != 64
+            or any(ch not in "0123456789abcdef" for ch in nonce)):
+        return fail("INVALID_EXPECTED_CHALLENGE")
+
+    numeric = (request_ts, now, skew)
+    if any(isinstance(x, bool) or not isinstance(x, (int, float))
+           or not math.isfinite(float(x)) for x in numeric) or skew < 0:
+        return fail("INVALID_TIME_PARAMETERS")
+
+    if not _verify(public_raw, response):
+        return fail("BAD_CHALLENGE_SIGNATURE")
+
+    if (response.get("v") != 1
+            or response.get("protocol") != "iao-federation"
+            or response.get("from") != peer_id
+            or response.get("to") != requester_id
+            or response.get("nonce") != nonce
+            or response.get("request_ts") != float(request_ts)):
+        return fail("CHALLENGE_BINDING_MISMATCH")
+
+    response_ts = response.get("ts")
+    if (isinstance(response_ts, bool)
+            or not isinstance(response_ts, (int, float))
+            or not math.isfinite(float(response_ts))):
+        return fail("INVALID_RESPONSE_TIMESTAMP")
+    if abs(float(now) - float(response_ts)) > float(skew):
+        return fail("RESPONSE_CLOCK_SKEW")
+    if abs(float(now) - float(request_ts)) > float(skew):
+        return fail("REQUEST_CLOCK_SKEW")
+
+    return {"ok": True, "peer_id": peer_id, "verified": True}
+
+
 class FedDenied(Exception):
     def __init__(self, status: int, code: str) -> None:
         super().__init__(code)
@@ -59,34 +133,280 @@ class FedDenied(Exception):
 class Node:
     def __init__(self, store: Store, registry: ToolRegistry, key: Ed25519PrivateKey | None = None, *,
                  clock: Callable[[], float] = time.time, skew: float = 60.0, rate_limit_per_min: int = 30,
-                 served: frozenset[str] = frozenset({"knowledge.search"})) -> None:
+                 served: frozenset[str] = frozenset({"knowledge.search"}),
+                 peer_store_path: Path | None = None,
+                 audit_fn: Callable[..., Any] | None = None) -> None:
         self.store, self.registry, self.clock, self.skew, self.rate, self.served = store, registry, clock, skew, rate_limit_per_min, served
+        self.audit_fn = audit_fn or store.audit
         self.key = key or Ed25519PrivateKey.generate()
         self.pub = self.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         self.node_id = node_id_of(self.pub)
+        self.peer_store_path = Path(peer_store_path) if peer_store_path is not None else None
         self.peers: dict[str, dict[str, Any]] = {}
         self._seen: dict[tuple[str, str], float] = {}
         self._hits: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        if self.peer_store_path is not None:
+            self._load_persistent_peers()
+
+    def _validate_peer_contract(
+        self, c: dict[str, Any], *, allow_expired: bool = False
+    ) -> tuple[bytes, dict[str, Any]]:
+        if not isinstance(c, dict):
+            raise ValueError("INVALID_PEER_CONTRACT")
+        peer_id = c.get("peer_id")
+        encoded = c.get("pubkey")
+        caps = c.get("capabilities")
+        lease = c.get("lease_expires_at")
+        rate = c.get("rate_limit_per_min")
+        if not isinstance(peer_id, str) or len(peer_id) != 16:
+            raise ValueError("INVALID_PEER_ID")
+        if not isinstance(encoded, str):
+            raise ValueError("INVALID_PUBLIC_KEY")
+        try:
+            pub = base64.b64decode(encoded, validate=True)
+        except Exception:
+            raise ValueError("INVALID_PUBLIC_KEY") from None
+        if len(pub) != 32 or node_id_of(pub) != peer_id:
+            raise ValueError("PEER_ID_DOES_NOT_MATCH_KEY")
+        if (not isinstance(caps, list) or not caps or
+                any(not isinstance(x, str) or not x for x in caps) or
+                len(caps) != len(set(caps)) or not set(caps) <= self.served):
+            raise ValueError("CAPABILITY_NOT_FEDERABLE")
+        if (isinstance(lease, bool) or not isinstance(lease, (int, float))
+                or not math.isfinite(float(lease))
+                or (not allow_expired and float(lease) <= self.clock())):
+            raise ValueError("INVALID_PEER_LEASE")
+        if isinstance(rate, bool) or not isinstance(rate, int) or not 1 <= rate <= 300:
+            raise ValueError("INVALID_PEER_RATE_LIMIT")
+
+        clean = {
+            "peer_id": peer_id,
+            "pubkey": encoded,
+            "capabilities": list(caps),
+            "lease_expires_at": float(lease),
+            "rate_limit_per_min": rate,
+        }
+        endpoint = c.get("endpoint")
+        if endpoint is not None:
+            if not isinstance(endpoint, str) or len(endpoint) > 2048:
+                raise ValueError("INVALID_PEER_ENDPOINT")
+            try:
+                u = urlsplit(endpoint)
+                # Validación estricta (producción): HTTPS, puerto 443 o vacío,
+                # path exacto /fed/v1/message, sin credenciales ni query.
+                tls_test_mode = bool(os.environ.get("IAO_TLS_CA_FILE"))
+                strict_valid = (
+                    u.scheme == "https" and bool(u.hostname)
+                    and not u.username and not u.password
+                    and (u.port is None or u.port == 443 or tls_test_mode)
+                    and u.path == "/fed/v1/message"
+                    and not u.query and not u.fragment
+                )
+                # Salvaguarda de integración local (solo si el operador
+                # habilita explícitamente IAO_ALLOW_LOOPBACK_HTTP=1):
+                # permite HTTP en loopback y cualquier puerto, siempre que
+                # el path sea el esperado y no haya credenciales. Esta ruta
+                # NUNCA afecta peers externos: el host debe ser loopback.
+                loopback_valid = False
+                if (not strict_valid
+                        and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") == "1"
+                        and u.scheme in ("http", "https")
+                        and bool(u.hostname)
+                        and not u.username and not u.password
+                        and u.hostname.lower() in {"127.0.0.1", "::1", "localhost"}
+                        and u.path == "/fed/v1/message"
+                        and not u.query and not u.fragment):
+                    loopback_valid = True
+                valid = strict_valid or loopback_valid
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ValueError("INVALID_PEER_ENDPOINT")
+            clean["endpoint"] = endpoint
+        return pub, clean
+
+    def _save_persistent_peers(self) -> None:
+        path = self.peer_store_path
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink():
+            raise RuntimeError("PEER_STORE_SYMLINK_REFUSED")
+        payload = {
+            "version": 2,
+            "node_id": self.node_id,
+            "peers": [
+                {
+                    **{k: v for k, v in peer.items() if k != "pub"},
+                    "pubkey": peer["pubkey"],
+                }
+                for _, peer in sorted(self.peers.items())
+            ],
+        }
+        fd, temp_name = tempfile.mkstemp(prefix=".federation-peers-", dir=str(path.parent))
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, sort_keys=True, separators=(",", ":"))
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_name, path)
+            os.chmod(path, 0o600)
+            try:
+                dfd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            except OSError:
+                pass
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
+
+    def _load_persistent_peers(self) -> None:
+        path = self.peer_store_path
+        if path is None or not path.exists():
+            return
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("PEER_STORE_PATH_REFUSED")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(data, dict) or data.get("version") not in (1, 2)
+                    or data.get("node_id") != self.node_id
+                    or not isinstance(data.get("peers"), list)):
+                raise ValueError("INVALID_PEER_STORE_FORMAT")
+            loaded: dict[str, dict[str, Any]] = {}
+            for item in data["peers"]:
+                # Conservar peers expirados; send() bloquea su utilización.
+                pub, clean = self._validate_peer_contract(item, allow_expired=True)
+                peer_id = clean["peer_id"]
+                if peer_id in loaded or not isinstance(item.get("revoked"), bool):
+                    raise ValueError("INVALID_OR_DUPLICATE_PEER")
+                # V1 no tenía concesiones explícitas: migrar sin permisos entrantes.
+                grants = item.get("granted_capabilities", []) if data["version"] == 2 else []
+                clean["granted_capabilities"] = self._clean_grants(grants)
+                loaded[peer_id] = {**clean, "pub": pub, "revoked": item["revoked"]}
+            self.peers = loaded
+        except Exception as exc:
+            raise RuntimeError("PEER_STORE_INVALID_FAIL_CLOSED") from exc
+
+    # ---- public identity and signed pre-enrolment challenge ----
+    def identity_document(self) -> dict[str, Any]:
+        """Public metadata only; never exposes private key material."""
+        return {
+            "protocol": "iao-federation",
+            "version": 1,
+            "node_id": self.node_id,
+            "public_key": self.pub.hex(),
+        }
+
+    def answer_challenge(self, raw: bytes) -> tuple[int, dict[str, Any]]:
+        """Sign a fresh caller challenge without enrolling or trusting its sender."""
+        if not isinstance(raw, bytes) or len(raw) > MAX_MSG:
+            return 413, {"error": "PAYLOAD_TOO_LARGE"}
+        try:
+            request = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return 400, {"error": "INVALID_CHALLENGE"}
+        if not isinstance(request, dict):
+            return 400, {"error": "INVALID_CHALLENGE"}
+
+        requester = request.get("from")
+        recipient = request.get("to")
+        nonce = request.get("nonce")
+        ts = request.get("ts")
+        if (request.get("v") != 1
+                or not isinstance(requester, str)
+                or len(requester) != 16
+                or any(ch not in "0123456789abcdef" for ch in requester)
+                or recipient != self.node_id
+                or not isinstance(nonce, str)
+                or len(nonce) != 64
+                or any(ch not in "0123456789abcdef" for ch in nonce)
+                or isinstance(ts, bool)
+                or not isinstance(ts, (int, float))
+                or not math.isfinite(float(ts))):
+            return 400, {"error": "INVALID_CHALLENGE"}
+        if abs(self.clock() - float(ts)) > self.skew:
+            return 400, {"error": "CHALLENGE_CLOCK_SKEW"}
+
+        proof = {
+            "v": 1,
+            "protocol": "iao-federation",
+            "from": self.node_id,
+            "to": requester,
+            "nonce": nonce,
+            "request_ts": float(ts),
+            "ts": self.clock(),
+        }
+        return 200, _sign(self.key, proof)
 
     # ---- enrolment (explicit operator action) ----
+    def _clean_grants(self, grants: Any) -> list[str]:
+        """Valida permisos de entrada concedidos localmente al peer."""
+        if not isinstance(grants, list):
+            raise ValueError("INVALID_GRANTED_CAPABILITIES")
+        if any(not isinstance(cap, str) for cap in grants):
+            raise ValueError("INVALID_GRANTED_CAPABILITIES")
+        if len(grants) != len(set(grants)):
+            raise ValueError("INVALID_GRANTED_CAPABILITIES")
+        for cap in grants:
+            spec = self.registry.get(cap)
+            if cap not in self.served or spec is None or spec.effect_class != "READ_ONLY":
+                raise ValueError("INVALID_GRANTED_CAPABILITIES")
+        return sorted(grants)
+
     def contract_for_self(self, capabilities: list[str], lease_seconds: int = 3600, rate: int = 30) -> dict[str, Any]:
         return {"peer_id": self.node_id, "pubkey": _b64(self.pub), "capabilities": capabilities,
                 "lease_expires_at": self.clock() + lease_seconds, "rate_limit_per_min": rate}
 
-    def enroll(self, c: dict[str, Any]) -> None:
-        pub = base64.b64decode(c["pubkey"], validate=True)
-        if node_id_of(pub) != c["peer_id"]:
-            raise ValueError("PEER_ID_DOES_NOT_MATCH_KEY")  # id is bound to the key
-        if not isinstance(c["capabilities"], list) or not set(c["capabilities"]) <= self.served:
-            raise ValueError("CAPABILITY_NOT_FEDERABLE")
-        self.peers[c["peer_id"]] = {**c, "pub": pub, "revoked": False}
-        self.store.audit("operator", "PEER_ENROLLED", c["peer_id"], capabilities=sorted(c["capabilities"]))
+    def enroll(self, c: dict[str, Any], *, granted_capabilities: list[str] | None = None) -> None:
+        pub, clean = self._validate_peer_contract(c)
+        # El contrato remoto declara lo que el peer ofrece.
+        # Los permisos que IAO le concede se configuran por separado.
+        grants = self._clean_grants(granted_capabilities if granted_capabilities is not None else [])
+        clean["granted_capabilities"] = grants
+        peer_id = clean["peer_id"]
+        with self._lock:
+            previous = self.peers.get(peer_id)
+            self.peers[peer_id] = {**clean, "pub": pub, "revoked": False}
+            try:
+                self._save_persistent_peers()
+                self.audit_fn("operator", "PEER_ENROLLED", peer_id,
+                                 capabilities=sorted(clean["capabilities"]), granted_capabilities=grants)
+            except Exception:
+                if previous is None:
+                    self.peers.pop(peer_id, None)
+                else:
+                    self.peers[peer_id] = previous
+                try:
+                    self._save_persistent_peers()
+                except Exception:
+                    pass
+                raise
 
     def revoke(self, peer_id: str) -> None:
-        if peer_id in self.peers:
-            self.peers[peer_id]["revoked"] = True
-        self.store.audit("operator", "PEER_REVOKED", peer_id)
+        with self._lock:
+            previous = self.peers.get(peer_id)
+            if previous is not None:
+                self.peers[peer_id] = {**previous, "revoked": True}
+            try:
+                self._save_persistent_peers()
+                self.audit_fn("operator", "PEER_REVOKED", peer_id)
+            except Exception:
+                if previous is not None:
+                    self.peers[peer_id] = previous
+                try:
+                    self._save_persistent_peers()
+                except Exception:
+                    pass
+                raise
 
     # ---- inbound ----
     def handle(self, raw: bytes) -> tuple[int, dict[str, Any]]:
@@ -131,8 +451,9 @@ class Node:
                 raise FedDenied(403, "LEASE_EXPIRED")
             cap = env.get("capability")
             spec = self.registry.get(cap) if isinstance(cap, str) else None
-            if (not isinstance(cap, str) or cap not in c["capabilities"] or cap not in self.served
-                    or spec is None or spec.effect_class != "READ_ONLY"):
+            if (not isinstance(cap, str) or cap not in c.get("granted_capabilities", [])
+                    or cap not in self.served or spec is None
+                    or spec.effect_class != "READ_ONLY"):
                 raise FedDenied(403, "CAPABILITY_NOT_GRANTED")
             try:
                 inp = spec.validate_input(env.get("body"))
@@ -146,29 +467,54 @@ class Node:
             except Exception:
                 raise FedDenied(500, "TOOL_ERROR") from None
             verdict = spec.verify(out)
-            self.store.audit(peer, "FED_REQUEST", cap, decision="ALLOW", verification=verdict, nonce=nonce[:8])
+            self.audit_fn(peer, "FED_REQUEST", cap, decision="ALLOW", verification=verdict, nonce=nonce[:8])
             reply = {"v": 1, "from": self.node_id, "to": peer, "ts": self.clock(), "in_reply_to": nonce,
                      "capability": cap, "result": out, "verification": verdict}
             return 200, _sign(self.key, reply)
         except FedDenied as e:
-            self.store.audit(peer, "FED_REQUEST", "denied", decision="DENY", reason=e.code)
+            self.audit_fn(peer, "FED_REQUEST", "denied", decision="DENY", reason=e.code)
             return e.status, {"error": e.code}
 
     # ---- outbound ----
     def send(self, peer_id: str, url: str, capability: str, body: dict[str, Any], timeout: float = 5.0) -> dict[str, Any]:
         c = self.peers.get(peer_id)
+        # Compatibilidad: desconocidos y revocados conservan el error público.
         if c is None or c["revoked"]:
             return {"ok": False, "error": "UNKNOWN_PEER"}
+        if self.clock() > float(c["lease_expires_at"]):
+            return {"ok": False, "error": "LEASE_EXPIRED"}
+        if not isinstance(capability, str):
+            return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
+        if capability not in c["capabilities"] or capability not in self.served:
+            return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
+        saved_endpoint = c.get("endpoint")
+        if saved_endpoint is not None and url != saved_endpoint:
+            return {"ok": False, "error": "ENDPOINT_MISMATCH"}
         nonce = os.urandom(16).hex()
         env = _sign(self.key, {"v": 1, "from": self.node_id, "to": peer_id, "ts": self.clock(), "nonce": nonce,
                                "capability": capability, "body": body})
         return self._post(c, url, env, nonce, timeout)
 
+    def _ssl_context(self) -> "ssl.SSLContext | None":
+        """Contexto TLS desde IAO_TLS_CA_FILE si está definido."""
+        ca_file = os.environ.get("IAO_TLS_CA_FILE")
+        if not ca_file:
+            return None
+        ctx = ssl.create_default_context(cafile=ca_file)
+        ctx.check_hostname = True
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        return ctx
+
     def _post(self, c: dict[str, Any], url: str, env: dict[str, Any], nonce: str, timeout: float) -> dict[str, Any]:
         req = urllib.request.Request(url, method="POST", data=json.dumps(env).encode(), headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                data = r.read(MAX_MSG * 8)
+            ctx = self._ssl_context()
+            if ctx is not None and url.startswith("https://"):
+                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+                    data = r.read(MAX_MSG * 8)
+            else:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    data = r.read(MAX_MSG * 8)
         except urllib.error.HTTPError as e:
             try:
                 err = json.loads(e.read(4096)).get("error", "HTTP_ERROR")
@@ -188,30 +534,115 @@ class Node:
         if abs(self.clock() - float(resp.get("ts", 0))) > self.skew:
             return {"ok": False, "error": "CLOCK_SKEW"}
         return {"ok": True, "verification": resp.get("verification"), "result": resp["result"], "untrusted": True}
+    @classmethod
+    def from_persistent_identity(cls, store, registry, *, identity_dir=None, **kwargs):
+        """Crea un nodo federado con la identidad Ed25519 persistente de esta instalación."""
+        import hashlib
+        import json
+        from pathlib import Path
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        base = Path(identity_dir) if identity_dir else (
+            Path(__file__).resolve().parent.parent / ".state" / "federation" / "identity"
+        )
+        private_path = base / "private.pem"
+        public_path = base / "public.pem"
+        manifest_path = base / "manifest.json"
+
+        if not private_path.is_file():
+            raise FileNotFoundError(f"No existe la clave privada: {private_path}")
+
+        key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
+        if not isinstance(key, Ed25519PrivateKey):
+            raise ValueError("La clave persistente no es Ed25519")
+
+        public_raw = key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+        fingerprint = hashlib.sha256(public_raw).hexdigest()
+
+        if public_path.is_file():
+            stored = serialization.load_pem_public_key(public_path.read_bytes())
+            stored_raw = stored.public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            )
+            if stored_raw != public_raw:
+                raise ValueError("La clave pública no corresponde a la privada")
+
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text())
+            if manifest.get("public_key_algorithm") != "Ed25519":
+                raise ValueError("Algoritmo incompatible en el manifiesto")
+            if manifest.get("node_id") != fingerprint:
+                raise ValueError("La huella del manifiesto no corresponde a la clave")
+
+        if "key" in kwargs:
+            raise TypeError("No se permite sustituir la identidad persistente")
+
+        kwargs.setdefault("peer_store_path", str(base.parent / "peers.json"))
+        instance = cls(store, registry, key=key, **kwargs)
+        instance.identity_fingerprint = fingerprint
+        instance.identity_source = str(private_path)
+        return instance
+
 
 
 class FedServer:
-    def __init__(self, node: Node, host: str = "127.0.0.1", port: int = 0) -> None:
+    """Local federation HTTP origin; place behind a trusted HTTPS terminator."""
+
+    def __init__(self, node: Node, host: str = "127.0.0.1", port: int = 0,
+                 ssl_context: "ssl.SSLContext | None" = None) -> None:
         outer = node
 
         class H(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
-            def log_message(self, *a: object) -> None:
+            def log_message(self, *args: object) -> None:
                 pass
 
-            def do_POST(self) -> None:
-                n = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(min(n, MAX_MSG + 1)) if self.path == "/fed/v1/message" else b""
-                status, payload = outer.handle(raw) if self.path == "/fed/v1/message" else (404, {"error": "NOT_FOUND"})
-                data = json.dumps(payload).encode()
+            def _reply(self, status: int, payload: dict[str, Any]) -> None:
+                data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(data)
 
+            def do_GET(self) -> None:
+                if self.path == "/fed/v1/identity":
+                    self._reply(200, outer.identity_document())
+                else:
+                    self._reply(404, {"error": "NOT_FOUND"})
+
+            def do_POST(self) -> None:
+                if self.path not in ("/fed/v1/handshake", "/fed/v1/message"):
+                    self._reply(404, {"error": "NOT_FOUND"})
+                    return
+                try:
+                    n = int(self.headers.get("Content-Length") or "0")
+                except ValueError:
+                    self._reply(400, {"error": "INVALID_CONTENT_LENGTH"})
+                    return
+                if n < 0 or n > MAX_MSG:
+                    self._reply(413, {"error": "PAYLOAD_TOO_LARGE"})
+                    return
+                raw = self.rfile.read(n)
+                if len(raw) != n:
+                    self._reply(400, {"error": "INCOMPLETE_BODY"})
+                    return
+                if self.path == "/fed/v1/handshake":
+                    status, payload = outer.answer_challenge(raw)
+                else:
+                    status, payload = outer.handle(raw)
+                self._reply(status, payload)
+
         self.httpd = ThreadingHTTPServer((host, port), H)
+        if ssl_context is not None:
+            self.httpd.socket = ssl_context.wrap_socket(
+                self.httpd.socket, server_side=True
+            )
         self.port = self.httpd.server_address[1]
         self.url = f"http://{host}:{self.port}/fed/v1/message"
         self._t = threading.Thread(target=self.httpd.serve_forever, daemon=True)
