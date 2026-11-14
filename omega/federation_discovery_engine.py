@@ -11,7 +11,6 @@ GITHUB_BRANCH = "iao-repair-http405-20261028T113227Z"
 class DiscoveryEngine:
     def __init__(self):
         self.memory = self._load_memory_remote()
-        # Forzar que Tavily y Pollinations estén siempre en la memoria base
         if "Tavily" not in self.memory:
             self.memory["Tavily"] = {"url": "https://api.tavily.com/search", "status": "active"}
         if "Pollinations" not in self.memory:
