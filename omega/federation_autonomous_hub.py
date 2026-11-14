@@ -2,49 +2,63 @@ import os
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 
 class AutonomousHub:
-    """
-    IAO Hub Autónomo: Descubre, registra y orquesta IAs libres en Internet.
-    """
     def __init__(self):
         self.registry = {
-            "deepseek": {"status": "active", "type": "reasoning"},
+            "deepseek": {"status": "fallback", "type": "reasoning"},
             "tavily": {"status": "active", "type": "search"},
             "pollinations": {"status": "active", "type": "generation"},
-            "duckduckgo": {"status": "standby", "type": "search"}
         }
 
-    def scan_and_register(self):
-        """Escanea la red y registra nodos disponibles."""
-        print("[IAO HUB] Escaneando la red en busca de IAs libres...")
-        # Aquí IAO podría hacer peticiones a endpoints conocidos para ver si están vivos
-        # Por ahora, registra los que ya conocemos
-        self.registry["ollama_local"] = {"status": "standby", "type": "local_llm"}
-        return self.registry
+    def _buscar_web(self, pregunta: str) -> str:
+        """IAO usa el nodo de búsqueda (Tavily)."""
+        print("[IAO HUB] Solicitando datos al nodo de búsqueda (Tavily)...")
+        try:
+            payload = json.dumps({"query": pregunta, "max_results": 3}).encode('utf-8')
+            req = urllib.request.Request(
+                "https://api.tavily.com/search",
+                data=payload,
+                headers={"Content-Type": "application/json", "X-Tavily-Access-Mode": "keyless"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            resultados = data.get("results", [])
+            if not resultados: return ""
+            
+            contexto = "Resultados de búsqueda:\n"
+            for i, r in enumerate(resultados, 1):
+                contexto += f"{i}. {r.get('title', '')}\n   {r.get('content', '')[:300]}\n\n"
+            return contexto
+        except Exception as e:
+            print(f"[IAO HUB] Error en Tavily: {e}")
+            return ""
 
-    def delegate(self, task_type: str, prompt: str):
-        """IAO decide qué IA debe resolver la tarea."""
-        print(f"[IAO HUB] Delegando tarea '{task_type}'...")
-        
-        if task_type == "reasoning" and self.registry["deepseek"]["status"] == "active":
-            try:
-                # Intentar usar DeepSeek
-                api_key = os.getenv("DEEPSEEK_API_KEY")
-                if api_key:
-                    # ... lógica de llamada a DeepSeek ...
-                    pass
-            except Exception:
-                self.registry["deepseek"]["status"] = "fallback"
-        
-        if task_type == "search":
-            # IAO usa Tavily o DuckDuckGo
-            from omega.deepseek_web import _buscar_tavily, _redactar_gratis
-            contexto = _buscar_tavily(prompt)
-            if contexto:
-                return _redactar_gratis(prompt, contexto)
-        
-        return "El Hub Central de IAO está orquestando la respuesta con los nodos disponibles."
+    def _redactar(self, pregunta: str, contexto: str) -> str:
+        """IAO usa el nodo de redacción (Pollinations)."""
+        print("[IAO HUB] Solicitando redacción al nodo Pollinations...")
+        try:
+            prompt = f"Responde a la pregunta de forma concisa usando esta información:\n{contexto}\n\nPregunta: {pregunta}"
+            url = f"https://text.pollinations.ai/{urllib.parse.quote(prompt)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.read().decode('utf-8')
+        except Exception as e:
+            print(f"[IAO HUB] Error en Pollinations: {e}")
+            return f"[Respuesta de respaldo]: {contexto}"
 
-# Instancia global
+    def delegate(self, prompt: str) -> str:
+        """IAO orquesta la tarea."""
+        print(f"[IAO HUB] Procesando: {prompt}")
+        
+        # 1. Buscar en la web
+        contexto = self._buscar_web(prompt)
+        
+        # 2. Redactar la respuesta (incluso si no hay contexto, Pollinations responde con su conocimiento)
+        respuesta = self._redactar(prompt, contexto if contexto else "No hay contexto web disponible.")
+        
+        return respuesta
+
 hub = AutonomousHub()
