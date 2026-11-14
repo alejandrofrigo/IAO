@@ -10,14 +10,3 @@ services:
         value: 3.11.0
       - key: DEEPSEEK_API_KEY
         sync: false
-
-  - type: cron
-    name: iao-node-crawler
-    env: python
-    plan: free
-    schedule: "0 * * * *" # Ejecutar cada hora
-    buildCommand: pip install -r requirements.txt
-    startCommand: python tools/iao_autonomous_crawler.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
