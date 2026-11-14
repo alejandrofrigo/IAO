@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from apps.api.schemas import ChatRequest, ChatResponse
 from omega.federation_autonomous_hub import hub
 
-app = FastAPI(title="IAO - Hub Central Autónomo", version="3.0.0")
+app = FastAPI(title="IAO - Hub Central Autónomo", version="3.1.0")
 
 @app.get("/health/live")
 def live() -> dict[str, str]:
@@ -15,12 +15,8 @@ def chat(request: ChatRequest) -> ChatResponse:
         if not user_message:
             raise HTTPException(status_code=400, detail="Falta el mensaje.")
 
-        # IAO escanea y delega
-        hub.scan_and_register()
-        
-        # Decide la tarea basándose en el mensaje
-        task_type = "reasoning" if "?" in user_message else "search"
-        respuesta_final = hub.delegate(task_type, user_message)
+        # IAO delega la tarea a su red de nodos
+        respuesta_final = hub.delegate(user_message)
 
         conv_id = getattr(request, "conversation_id", "default-conv-iao")
         return ChatResponse(
