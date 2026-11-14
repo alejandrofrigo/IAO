@@ -59,7 +59,7 @@ class DiscoveryEngine:
             print(f"[IAO DISCOVERY] Error guardando en GitHub: {e}")
 
     def _discover_from_public_apis(self):
-        """Extrae URLs del repositorio public-apis en GitHub."""
+        """Extrae URLs de la sección de IA del repositorio public-apis."""
         try:
             url_readme = "https://raw.githubusercontent.com/public-apis/public-apis/master/README.md"
             req = urllib.request.Request(url_readme, headers={"User-Agent": "Mozilla/5.0"})
@@ -67,42 +67,25 @@ class DiscoveryEngine:
                 readme = resp.read().decode('utf-8')
                 ai_section = re.search(r"### Artificial Intelligence(.*?)###", readme, re.DOTALL)
                 if ai_section:
-                    return re.findall(r"\[.*?\]\((https?://.*?)\)", ai_section.group(1))[:5]
-        except Exception:
-            pass
+                    urls = re.findall(r"\[.*?\]\((https?://.*?)\)", ai_section.group(1))
+                    print(f"[IAO DISCOVERY] Encontradas {len(urls)} APIs de IA en public-apis.")
+                    return urls[:5] # Probar las primeras 5
+        except Exception as e:
+            print(f"[IAO DISCOVERY] Error leyendo public-apis: {e}")
         return []
-
-    def _discover_from_tavily(self):
-        """Usa Tavily para buscar nuevos directorios de APIs."""
-        try:
-            payload = json.dumps({"query": "free public AI API endpoints json list github", "max_results": 3}).encode('utf-8')
-            req = urllib.request.Request(
-                "https://api.tavily.com/search",
-                data=payload,
-                headers={"Content-Type": "application/json", "X-Tavily-Access-Mode": "keyless"},
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            urls = []
-            for r in data.get("results", []):
-                urls.extend(re.findall(r'(https?://[^\s\)\"\']+api[^\s\)\"\']+)', r.get('content', '')))
-            return urls[:3]
-        except Exception:
-            return []
 
     def hunt_new_nodes(self):
         print("[IAO EXPANSION] Iniciando escaneo multi-fuente...")
         cambios = False
         
-        # Recolectar candidatos de todas las fuentes
-        candidatos = self._discover_from_public_apis() + self._discover_from_tavily()
+        # Forzamos la búsqueda en el directorio de GitHub
+        candidatos = self._discover_from_public_apis()
         
         for url in candidatos:
             if url in [v["url"] for v in self.memory.values()]:
-                continue # Ya lo tenemos
+                continue
             
-            # Probar el nodo con el Conector Universal
+            # Probar el nodo
             resultado = connector.fetch(url, method="GET")
             if resultado["status"] == "success":
                 node_name = f"Node_{len(self.memory)}_{hash(url) % 1000}"
@@ -112,10 +95,10 @@ class DiscoveryEngine:
                     "status": "active",
                     "format": resultado["format"],
                     "auth": "none",
-                    "lang": "en", # Por defecto, se podría detectar
+                    "lang": "en",
                     "last_check": str(datetime.datetime.now())
                 }
-                print(f"[IAO EXPANSION] ¡Nodo asimilado! {node_name} -> {url} (Formato: {resultado['format']})")
+                print(f"[IAO EXPANSION] ¡Nodo asimilado! {node_name} -> {url}")
                 cambios = True
         
         if cambios:
