@@ -147,6 +147,14 @@ class OmegaService:
             self.store.audit(subject, "PUBLIC_SESSION_CREATED", "public_chat", expires_in=ttl)
             return 201, {"access_token": token, "token_type": "Bearer", "expires_in": ttl}
 
+        if method == "GET" and p == "/v1/federation/status":
+            return 200, {
+                "orchestrator": "DeepSeek",
+                "network_nodes": ["Tavily", "DuckDuckGo", "Pollinations"],
+                "mode": "hierarchical_federated_network",
+                "status": "active"
+            }
+
         if method == "POST" and p == "/v1/federation/internet":
             pr = self._auth(headers)
             data = self._json(body)
