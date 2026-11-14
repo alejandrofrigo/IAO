@@ -1,20 +1,10 @@
-import os
 import json
 import urllib.request
-import urllib.error
 import urllib.parse
-from omega.federation_assimilation_engine import engine
+from omega.federation_discovery_engine import discovery
 
 class AutonomousHub:
-    def __init__(self):
-        self.registry = {
-            "deepseek": {"status": "fallback", "type": "reasoning"},
-            "tavily": {"status": "active", "type": "search"},
-            "pollinations": {"status": "active", "type": "generation"},
-        }
-
     def _buscar_web(self, pregunta: str) -> str:
-        print("[IAO HUB] Solicitando datos al nodo de búsqueda (Tavily)...")
         try:
             payload = json.dumps({"query": pregunta, "max_results": 3}).encode('utf-8')
             req = urllib.request.Request(
@@ -36,7 +26,6 @@ class AutonomousHub:
             return ""
 
     def _redactar(self, pregunta: str, contexto: str) -> str:
-        print("[IAO HUB] Solicitando redacción al nodo Pollinations...")
         try:
             prompt = f"Responde a la pregunta de forma concisa usando esta información:\n{contexto}\n\nPregunta: {pregunta}"
             url = f"https://text.pollinations.ai/{urllib.parse.quote(prompt)}"
@@ -50,17 +39,13 @@ class AutonomousHub:
     def delegate(self, prompt: str) -> str:
         print(f"[IAO HUB] Procesando: {prompt}")
         
-        # IAO asimila constantemente nuevos nodos antes de responder
-        nodos_nuevos = engine.assimilate()
+        # 1. IAO caza nuevos nodos antes de responder
+        total_nodos = discovery.hunt_new_nodes()
         
-        # 1. Buscar en la web
+        # 2. Buscar y redactar
         contexto = self._buscar_web(prompt)
-        
-        # 2. Redactar la respuesta
         respuesta = self._redactar(prompt, contexto if contexto else "No hay contexto web disponible.")
         
-        # Añadir metadatos de la federación (cuántos nodos tiene asimilados)
-        capacidad = engine.get_capacity()
-        return f"[Red IAO: {capacidad} nodos asimilados]\n{respuesta}"
+        return f"[Red IAO: {total_nodos} nodos en el cuerpo]\n{respuesta}"
 
 hub = AutonomousHub()

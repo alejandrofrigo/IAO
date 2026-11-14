@@ -32,3 +32,4 @@ e
 # Estados locales
 .state/
 .federation_state/
+nodes_memory.json
