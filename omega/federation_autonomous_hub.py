@@ -3,6 +3,7 @@ import json
 import urllib.request
 import urllib.error
 import urllib.parse
+from omega.federation_assimilation_engine import engine
 
 class AutonomousHub:
     def __init__(self):
@@ -13,7 +14,6 @@ class AutonomousHub:
         }
 
     def _buscar_web(self, pregunta: str) -> str:
-        """IAO usa el nodo de búsqueda (Tavily)."""
         print("[IAO HUB] Solicitando datos al nodo de búsqueda (Tavily)...")
         try:
             payload = json.dumps({"query": pregunta, "max_results": 3}).encode('utf-8')
@@ -27,7 +27,6 @@ class AutonomousHub:
                 data = json.loads(resp.read().decode('utf-8'))
             resultados = data.get("results", [])
             if not resultados: return ""
-            
             contexto = "Resultados de búsqueda:\n"
             for i, r in enumerate(resultados, 1):
                 contexto += f"{i}. {r.get('title', '')}\n   {r.get('content', '')[:300]}\n\n"
@@ -37,7 +36,6 @@ class AutonomousHub:
             return ""
 
     def _redactar(self, pregunta: str, contexto: str) -> str:
-        """IAO usa el nodo de redacción (Pollinations)."""
         print("[IAO HUB] Solicitando redacción al nodo Pollinations...")
         try:
             prompt = f"Responde a la pregunta de forma concisa usando esta información:\n{contexto}\n\nPregunta: {pregunta}"
@@ -50,15 +48,19 @@ class AutonomousHub:
             return f"[Respuesta de respaldo]: {contexto}"
 
     def delegate(self, prompt: str) -> str:
-        """IAO orquesta la tarea."""
         print(f"[IAO HUB] Procesando: {prompt}")
+        
+        # IAO asimila constantemente nuevos nodos antes de responder
+        nodos_nuevos = engine.assimilate()
         
         # 1. Buscar en la web
         contexto = self._buscar_web(prompt)
         
-        # 2. Redactar la respuesta (incluso si no hay contexto, Pollinations responde con su conocimiento)
+        # 2. Redactar la respuesta
         respuesta = self._redactar(prompt, contexto if contexto else "No hay contexto web disponible.")
         
-        return respuesta
+        # Añadir metadatos de la federación (cuántos nodos tiene asimilados)
+        capacidad = engine.get_capacity()
+        return f"[Red IAO: {capacidad} nodos asimilados]\n{respuesta}"
 
 hub = AutonomousHub()
