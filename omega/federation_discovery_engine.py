@@ -2,7 +2,6 @@ import os
 import json
 import urllib.request
 import urllib.error
-import re
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = "alejandrofrigo/IAO"
@@ -12,9 +11,15 @@ GITHUB_BRANCH = "iao-repair-http405-20261028T113227Z"
 class DiscoveryEngine:
     def __init__(self):
         self.memory = self._load_memory_remote()
+        # Forzar que Tavily y Pollinations estén siempre en la memoria base
+        if "Tavily" not in self.memory:
+            self.memory["Tavily"] = {"url": "https://api.tavily.com/search", "status": "active"}
+        if "Pollinations" not in self.memory:
+            self.memory["Pollinations"] = {"url": "https://text.pollinations.ai/", "status": "active"}
+
         self.seed_nodes = {
-            "Pollinations": {"url": "https://text.pollinations.ai/", "method": "GET"},
-            "Tavily": {"url": "https://api.tavily.com/search", "method": "POST"},
+            "HuggingFace": {"url": "https://api-inference.huggingface.co/models/gpt2", "method": "POST"},
+            "OpenRouter": {"url": "https://openrouter.ai/api/v1/models", "method": "GET"},
             "DuckDuckGo": {"url": "https://api.duckduckgo.com/?q=test&format=json", "method": "GET"}
         }
 
@@ -36,12 +41,11 @@ class DiscoveryEngine:
             req_get = urllib.request.Request(url, headers={"Authorization": f"token {GITHUB_TOKEN}"})
             with urllib.request.urlopen(req_get) as resp:
                 sha = json.loads(resp.read().decode('utf-8')).get("sha")
-        except Exception:
-            pass
+        except Exception: pass
 
         content = json.dumps(self.memory, indent=4)
         payload = {
-            "message": "IAO Auto-Update: Expansión de red autónoma",
+            "message": "IAO Auto-Update: Memoria persistente v7.2",
             "content": __import__('base64').b64encode(content.encode('utf-8')).decode('utf-8'),
             "branch": GITHUB_BRANCH
         }
@@ -63,50 +67,31 @@ class DiscoveryEngine:
             if info["method"] == "GET":
                 req = urllib.request.Request(info["url"], headers={"User-Agent": "IAO-Crawler"})
             else:
-                payload = json.dumps({"query": "test", "max_results": 1}).encode('utf-8')
+                payload = json.dumps({"inputs": "test"}).encode('utf-8')
                 req = urllib.request.Request(
                     info["url"], data=payload,
-                    headers={"Content-Type": "application/json", "X-Tavily-Access-Mode": "keyless"},
+                    headers={"Content-Type": "application/json", "User-Agent": "IAO-Crawler"},
                     method="POST"
                 )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status in (200, 201)
-        except Exception:
+        except Exception as e:
+            print(f"[IAO DISCOVERY] {name} no disponible: {e}")
             return False
 
     def hunt_new_nodes(self):
-        print("[IAO DISCOVERY] Iniciando cacería autónoma...")
+        print("[IAO DISCOVERY] Iniciando cacería de IAs en Internet...")
         cambios = False
         
-        # 1. Probar semillas conocidas
+        if "Tavily" not in self.memory or "Pollinations" not in self.memory:
+            cambios = True
+
         for name, info in self.seed_nodes.items():
             if name not in self.memory:
                 if self._test_node(name, info):
                     self.memory[name] = {"url": info["url"], "status": "active"}
                     print(f"[IAO DISCOVERY] ¡Nodo asimilado! -> {name}")
                     cambios = True
-
-        # 2. Búsqueda en directorio de APIs (Auto-descubrimiento)
-        print("[IAO DISCOVERY] Explorando directorio de APIs en GitHub...")
-        try:
-            url_readme = "https://raw.githubusercontent.com/public-apis/public-apis/master/README.md"
-            req = urllib.request.Request(url_readme, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                readme = resp.read().decode('utf-8')
-                
-                # Buscar secciones de IA y extraer URLs de APIs
-                ai_section = re.search(r"### Artificial Intelligence(.*?)###", readme, re.DOTALL)
-                if ai_section:
-                    urls = re.findall(r"\[.*?\]\((https?://.*?)\)", ai_section.group(1))
-                    for u in urls[:3]: # Probar las primeras 3 para no saturar
-                        if "pollinations" not in u and "tavily" not in u and u not in [v["url"] for v in self.memory.values()]:
-                            print(f"[IAO DISCOVERY] Probando nueva API: {u}")
-                            if self._test_node("NuevaAPI", {"url": u, "method": "GET"}):
-                                self.memory[f"AutoAPI_{len(self.memory)}"] = {"url": u, "status": "active"}
-                                print(f"[IAO DISCOVERY] ¡Nueva IA asimilada! -> {u}")
-                                cambios = True
-        except Exception as e:
-            print(f"[IAO DISCOVERY] Error explorando directorio: {e}")
 
         if cambios:
             self._save_memory_remote()
