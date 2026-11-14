@@ -7,3 +7,28 @@ __pycache__/
 # IAO: proteger secretos y copias locales de entorno
 .env.*
 !.env.example
+# Entornos y secretos
+.env
+.env.*
+!.env.example
+
+# Cachés de Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Archivos temporales y backups
+*.bak
+*.tmp
+*.log
+403
+e
+*.backup*
+*.pre_*
+
+# Estados locales
+.state/
+.federation_state/
