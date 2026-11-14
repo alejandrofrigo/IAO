@@ -8,11 +8,11 @@ MEMORY_FILE = "nodes_memory.json"
 class DiscoveryEngine:
     def __init__(self):
         self.memory = self._load_memory()
-        # Semillas conocidas para empezar
+        # Semillas conocidas con su método de prueba correcto
         self.seed_nodes = {
-            "Pollinations": "https://text.pollinations.ai/",
-            "DuckDuckGo": "https://api.duckduckgo.com/?q=test&format=json",
-            "Tavily": "https://api.tavily.com/search"
+            "Pollinations": {"url": "https://text.pollinations.ai/", "method": "GET"},
+            "Tavily": {"url": "https://api.tavily.com/search", "method": "POST"},
+            "DuckDuckGo": {"url": "https://api.duckduckgo.com/?q=test&format=json", "method": "GET"}
         }
 
     def _load_memory(self):
@@ -31,28 +31,39 @@ class DiscoveryEngine:
         except Exception as e:
             print(f"[IAO DISCOVERY] Error guardando memoria: {e}")
 
-    def _test_node(self, url: str) -> bool:
+    def _test_node(self, name: str, info: dict) -> bool:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "IAO-Crawler"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                return resp.status == 200
-        except:
-            return False
+            if info["method"] == "GET":
+                req = urllib.request.Request(info["url"], headers={"User-Agent": "IAO-Crawler"})
+            else:
+                # Prueba POST para Tavily
+                payload = json.dumps({"query": "test", "max_results": 1}).encode('utf-8')
+                req = urllib.request.Request(
+                    info["url"],
+                    data=payload,
+                    headers={"Content-Type": "application/json", "X-Tavily-Access-Mode": "keyless"},
+                    method="POST"
+                )
+            
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status in (200, 201):
+                    return True
+        except Exception as e:
+            print(f"[IAO DISCOVERY] Fallo al probar {name}: {e}")
+        return False
 
     def hunt_new_nodes(self):
         """IAO busca y prueba nuevas IAs en la red."""
         print("[IAO DISCOVERY] Iniciando cacería de nuevos nodos...")
         
-        # 1. Probar semillas conocidas
-        for name, url in self.seed_nodes.items():
+        for name, info in self.seed_nodes.items():
             if name not in self.memory:
-                if self._test_node(url):
-                    self.memory[name] = {"url": url, "status": "active"}
-                    print(f"[IAO DISCOVERY] Nuevo nodo asimilado: {name}")
+                if self._test_node(name, info):
+                    self.memory[name] = {"url": info["url"], "status": "active"}
+                    print(f"[IAO DISCOVERY] ¡Nuevo nodo asimilado! -> {name}")
+                else:
+                    print(f"[IAO DISCOVERY] {name} no respondió a la prueba.")
         
-        # 2. Fase futura: Aquí IAO podría hacer peticiones a directorios de APIs
-        # o leer respuestas de Tavily buscando "free AI API endpoints"
-
         self._save_memory()
         return len(self.memory)
 
