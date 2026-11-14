@@ -1,7 +1,7 @@
 {
   "events": 28,
-  "backup_seconds": 0.0023,
-  "restore_and_verify_seconds": 0.0008,
+  "backup_seconds": 0.0181,
+  "restore_and_verify_seconds": 0.0068,
   "audit_chain_ok": true,
   "note": "SQLite dev backend; PostgreSQL backup/restore NOT tested"
 }

@@ -20,6 +20,13 @@ class ToolRegistry:
         self._tools: dict[str, ToolSpec] = {}
 
     def register(self, spec: ToolSpec) -> None:
+        """Register a new tool specification.
+
+        Raises:
+            ValueError: If a tool with the same name is already registered.
+        """
+        if spec.name in self._tools:
+            raise ValueError(f"Tool '{spec.name}' is already registered; duplicate registration is not allowed.")
         self._tools[spec.name] = spec
 
     def get(self, name: str) -> ToolSpec | None:

@@ -7,9 +7,13 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from omega.env_loader import load_env_files
 from omega.config import load_settings
 from omega.service import MAX_BODY, OmegaService
 from omega.store import Store
+from omega.federation import MAX_MSG, Node
+from omega.federation_identity import load_or_create_key
+from omega.federation_ledger import FederationLedger
 from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolRegistry, ToolSpec
 
@@ -41,7 +45,10 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     router_enabled = os.environ.get("IAO_LLM_ROUTER", "").strip().lower() in {
         "1", "true", "yes", "on"
     }
-    if router_enabled:
+    # Explicit dependency injection takes precedence over environment defaults.
+    if kw.get("model_adapter") is not None:
+        pass
+    elif router_enabled:
         from omega.llm_router import RouterModelAdapter
         kw["model_adapter"] = RouterModelAdapter()
     else:
@@ -49,7 +56,7 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
 
-def make_handler(svc: OmegaService) -> type[BaseHTTPRequestHandler]:
+def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHTTPRequestHandler]:
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "omega"
@@ -68,7 +75,106 @@ def make_handler(svc: OmegaService) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
 
+        def _send_fed_json(self, status: int, payload: dict[str, object]) -> None:
+            data = json.dumps(payload, separators=(",", ":")).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _do(self) -> None:
+            # Identidad publica y reto firmado; estas rutas no enrolan peers.
+            route = self.path.split("?", 1)[0]
+            if route == "/fed/v1/contract":
+                if self.command != "GET":
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    return
+                if fed_node is None:
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                self._send_fed_json(200, fed_node.contract_for_self(sorted(fed_node.served)))
+                return
+
+            if route == "/fed/v1/identity":
+                if self.command != "GET":
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    return
+                if fed_node is None:
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                self._send_fed_json(200, fed_node.identity_document())
+                return
+
+            if route == "/fed/v1/handshake":
+                if self.command != "POST":
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    return
+                if fed_node is None:
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                if self.headers.get("Transfer-Encoding"):
+                    self.close_connection = True
+                    self._send_fed_json(400, {"error": "INVALID_TRANSFER_ENCODING"})
+                    return
+                raw_length = self.headers.get("Content-Length")
+                try:
+                    length = int(raw_length) if raw_length is not None else -1
+                except ValueError:
+                    length = -1
+                if length < 0:
+                    self.close_connection = True
+                    self._send_fed_json(411, {"error": "CONTENT_LENGTH_REQUIRED"})
+                    return
+                if length > MAX_MSG:
+                    self.close_connection = True
+                    self._send_fed_json(413, {"error": "PAYLOAD_TOO_LARGE"})
+                    return
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    self.close_connection = True
+                    self._send_fed_json(400, {"error": "INCOMPLETE_BODY"})
+                    return
+                status, payload = fed_node.answer_challenge(body)
+                self._send_fed_json(status, payload)
+                return
+
+            # Endpoint interno de federacion: no usa CORS ni la API publica.
+            if self.path.split("?", 1)[0] == "/fed/v1/message":
+                if self.command != "POST":
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    return
+                if fed_node is None:
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                if self.headers.get("Transfer-Encoding"):
+                    self.close_connection = True
+                    self._send_fed_json(400, {"error": "INVALID_TRANSFER_ENCODING"})
+                    return
+                raw_length = self.headers.get("Content-Length")
+                try:
+                    length = int(raw_length) if raw_length is not None else -1
+                except ValueError:
+                    length = -1
+                if length < 0:
+                    self.close_connection = True
+                    self._send_fed_json(411, {"error": "CONTENT_LENGTH_REQUIRED"})
+                    return
+                if length > MAX_MSG:
+                    self.close_connection = True
+                    self._send_fed_json(413, {"error": "PAYLOAD_TOO_LARGE"})
+                    return
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    self.close_connection = True
+                    self._send_fed_json(400, {"error": "INCOMPLETE_BODY"})
+                    return
+                status, payload = fed_node.handle(body)
+                self._send_fed_json(status, payload)
+                return
+
             if self.command == "OPTIONS":
                 origin = self.headers.get("Origin", "")
                 requested_method = self.headers.get(
@@ -95,7 +201,10 @@ def make_handler(svc: OmegaService) -> type[BaseHTTPRequestHandler]:
                     )
                 ):
                     self.send_response(403)
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Connection", "close")
                     self.end_headers()
+                    self.close_connection = True
                     return
                 self.send_response(204)
                 self._cors_headers()
@@ -147,6 +256,9 @@ def make_handler(svc: OmegaService) -> type[BaseHTTPRequestHandler]:
 
 
 def main() -> None:
+    project_env = Path(__file__).resolve().parent.parent / '.env'
+    runtime_env = Path.home() / '.iao-runtime.env'
+    load_env_files((project_env, runtime_env))
     s = load_settings()
     if s.app_env == "production":
         sys.exit("BLOCKED_EXTERNAL: dev token auth is not allowed in production; configure OIDC")
@@ -156,7 +268,25 @@ def main() -> None:
     state = Path(os.environ.get("OMEGA_STATE_DIR", ".state"))
     svc = build_service(state, key, Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
                         rate_limit_per_min=int(os.environ.get("OMEGA_RATE_LIMIT", "120")))
-    httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc))
+    fed_key = load_or_create_key(state / "federation-node-ed25519.key")
+    fed_ledger = FederationLedger(
+        state / "federation-audit.jsonl",
+        state / "federation-audit.key",
+    )
+    fed_node = Node(
+        svc.store, svc.registry, key=fed_key,
+        peer_store_path=state / "federation-peers.json",
+        audit_fn=fed_ledger.append,
+    )
+    fed_ledger.append(
+        "system", "FEDERATION_NODE_READY", fed_node.node_id,
+        capabilities=["knowledge.search"]
+    )
+    from omega.federation_autojoin import start_federation_autojoin
+    start_federation_autojoin(fed_node, state)
+    from omega.federation_discovery import start_federation_discovery
+    start_federation_discovery(state)
+    httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
     (state / "server.pid").write_text(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
     sys.stderr.write(json.dumps({"event": "listening", "host": s.host, "port": s.port}) + "\n")

@@ -1,0 +1,9 @@
+import sys
+from pathlib import Path as _IAOPath
+_IAO_ROOT = str(_IAOPath(__file__).resolve().parent.parent)
+if _IAO_ROOT not in sys.path:
+    sys.path.insert(0, _IAO_ROOT)
+import omega.padge
+
+sys.argv = ["omega.padge", "loop"]
+omega.padge.main()

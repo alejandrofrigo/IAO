@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-import os, sys, json, time, hashlib, shutil, subprocess, urllib.request
+import os
+import fcntl
+import sys
+import json
+import time
+import hashlib
+import shutil
+import subprocess
+import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / ".state"
-AUDIT = STATE / "autonomy-audit.jsonl"
+LEGACY_AUDIT = STATE / "autonomy-audit.jsonl"
+AUDIT = STATE / "autonomy-audit-v2.jsonl"
 LOG = STATE / "autonomy.log"
 PIDFILE = Path.home() / ".iao-autonomy.pid"
 BASE = os.environ.get("IAO_URL", "http://127.0.0.1:8080").rstrip("/")
@@ -42,20 +51,41 @@ def verify_audit():
         return False, f"Auditoría ilegible: {e}"
 
 def record(event):
+    """Añade eventos con bloqueo; nunca escribe si la cadena está dañada."""
     STATE.mkdir(parents=True, exist_ok=True)
-    ok, detail = verify_audit()
-    if not ok:
-        raise RuntimeError("Auditoría dañada; no se añadieron registros: " + detail)
-    previous = "GENESIS"
-    if AUDIT.exists() and AUDIT.stat().st_size:
-        last = json.loads(AUDIT.read_text().splitlines()[-1])
-        previous = last["hash"]
-    event["time"] = now()
-    event["previous_hash"] = previous
-    raw = json.dumps(event, sort_keys=True, separators=(",", ":"))
-    event["hash"] = hashlib.sha256(raw.encode()).hexdigest()
-    with AUDIT.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, sort_keys=True) + "\n")
+    lock_path = STATE / "autonomy-audit.lock"
+
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            ok, detail = verify_audit()
+            if not ok:
+                raise RuntimeError(
+                    "Auditoría dañada; no se añadieron registros: " + detail
+                )
+
+            previous = "GENESIS"
+            if AUDIT.exists() and AUDIT.stat().st_size:
+                lines = AUDIT.read_text(encoding="utf-8").splitlines()
+                if not lines:
+                    raise RuntimeError("Auditoría vacía inesperadamente")
+                previous = json.loads(lines[-1])["hash"]
+
+            entry = dict(event)
+            entry["time"] = now()
+            entry["previous_hash"] = previous
+
+            raw = json.dumps(
+                entry, sort_keys=True, separators=(",", ":")
+            )
+            entry["hash"] = hashlib.sha256(raw.encode()).hexdigest()
+
+            with AUDIT.open("a", encoding="utf-8") as output:
+                output.write(json.dumps(entry, sort_keys=True) + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 def http(path):
     try:
@@ -131,7 +161,7 @@ def recover_supervisor(data):
     logfile = STATE / "autonomy-supervisor.log"
     with logfile.open("ab") as out:
         p = subprocess.Popen(
-            [sys.executable, "-m", "omega.supervisor"],
+            ["bash", str(Path.home() / "start-iao.sh")],
             cwd=str(ROOT), stdin=subprocess.DEVNULL,
             stdout=out, stderr=subprocess.STDOUT,
             start_new_session=True
@@ -142,6 +172,29 @@ def recover_supervisor(data):
     log("AUTORREPARACIÓN: " + json.dumps(result))
     return "RECOVERED" if result["alive"] else "FAILED"
 
+
+
+def run_core2_cycle(data):
+    """Consulta el núcleo; la ejecución pertenece exclusivamente al Worker dedicado."""
+    try:
+        from omega.autonomous_coordinator import AutonomousCoordinator
+
+        coordinator = AutonomousCoordinator()
+        return {
+            "status": "PASS",
+            "submitted": 0,
+            "processed": [],
+            "execution_owner": "DEDICATED_WORKER_ONLY",
+            "core_status": coordinator.status(),
+        }
+    except Exception as exc:
+        return {
+            "status": "ERROR",
+            "error": type(exc).__name__,
+            "detail": str(exc)[:250],
+        }
+
+
 def cycle():
     data = snapshot()
     root_ok = data["http_monitor"]["status"] == 200
@@ -150,6 +203,19 @@ def cycle():
     if not data["audit_ok"]:
         log("ALERTA: auditoría local inválida; se bloquean nuevas acciones.")
         return
+    core2_result = run_core2_cycle(data)
+    try:
+        universal = subprocess.run(
+            [sys.executable, str(ROOT / "tools/iao_universal_cycle.py"), "--once"],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=240,
+        )
+        log("DESCUBRIMIENTO_UNIVERSAL: " +
+            ((universal.stdout or "") + (universal.stderr or ""))[-3500:])
+    except subprocess.TimeoutExpired:
+        log("DESCUBRIMIENTO_UNIVERSAL: TIMEOUT")
+    except Exception as exc:
+        log("DESCUBRIMIENTO_UNIVERSAL: ERROR " + type(exc).__name__)
+    log("NUCLEO_2: " + json.dumps(core2_result, ensure_ascii=False))
     repair = "NOT_NEEDED"
     if not data["supervisor_pids"]:
         repair = recover_supervisor(data)
@@ -165,6 +231,7 @@ def cycle():
     if not data["syntax_ok"]:
         proposals.append("Revisar errores de sintaxis antes de cualquier reparación")
     record({
+        "core2": core2_result,
         "type": "maintenance_cycle",
         "http_ok": root_ok,
         "readiness_ok": ready_ok,

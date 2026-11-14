@@ -2,7 +2,12 @@
 """IAO Guardian: snapshots verificados y restauracion con rollback."""
 from pathlib import Path
 from datetime import datetime, timezone
-import hashlib, json, os, shutil, subprocess, sys
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / ".state"

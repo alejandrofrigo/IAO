@@ -1,0 +1,557 @@
+{
+  "generated_at": "2026-11-04T05:56:17.533110+00:00",
+  "project": "so-omega-prime",
+  "python": "3.13.13 (main, Apr 10 2026, 13:09:22) [Clang 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f0",
+  "files": [
+    {
+      "path": "omega/service.py",
+      "bytes": 22177,
+      "sha256": "2ce154b8e605daa9b6163c71da299fcaa7d0fc9dfe0f787fb7c6481bdc1cb080"
+    },
+    {
+      "path": "omega/auth.py",
+      "bytes": 1594,
+      "sha256": "07bfdc80c8d18541e11aa8416661ca310011aa940d9758298881ab592919cecb"
+    },
+    {
+      "path": "omega/release.py",
+      "bytes": 10567,
+      "sha256": "8bf7e5f222f73929a6148448f0d121422a80334c8257514ccff2554cdf9e5ccc"
+    },
+    {
+      "path": "omega/jobs.py",
+      "bytes": 2585,
+      "sha256": "1594b934bd61abef4a010dbfbfbdff5c6e73b40c3f360add6b29bed875452279"
+    },
+    {
+      "path": "omega/config.py",
+      "bytes": 1581,
+      "sha256": "10653b487d776b49ed3ebd379f4309173fe1efa2f6a81f59f5524887d09e80ca"
+    },
+    {
+      "path": "omega/__init__.py",
+      "bytes": 597,
+      "sha256": "83b1c31270542bdb0fd08ce53ea52accc11aac26944e46343fd56849d585045a"
+    },
+    {
+      "path": "omega/federation.py",
+      "bytes": 25015,
+      "sha256": "927f4197597ed1419418fbadbd9bd527f323ccb6e94985f6065d6466ea56d3e5"
+    },
+    {
+      "path": "omega/contracts.py",
+      "bytes": 735,
+      "sha256": "794b354037fe096774b4588b9e9c8a7a6b664aa672beed65c27f8a8dfac6aa02"
+    },
+    {
+      "path": "omega/supervisor.py",
+      "bytes": 1485,
+      "sha256": "b9eb519504659c94c2faf59c5579f26292eb82508239af1e09fd5a8b6c1a07cd"
+    },
+    {
+      "path": "omega/policy.py",
+      "bytes": 545,
+      "sha256": "72e275a7017c98c5a22f650002bf40a03c55040a2e9545f3151251d77d02ce26"
+    },
+    {
+      "path": "omega/control.py",
+      "bytes": 970,
+      "sha256": "3b3f3b7c67d08934f069d739bee6883a140946a412149ec54dc9f84c3212de0a"
+    },
+    {
+      "path": "omega/audit.py",
+      "bytes": 1576,
+      "sha256": "640bdaa470623ba32db7eaadba4cc89a3df5bfbb333378f00b50615c39217597"
+    },
+    {
+      "path": "omega/net.py",
+      "bytes": 2517,
+      "sha256": "6e4b84e512bfe26d3b5da9c2d141e09a8e75d8802f89b1204b209338a73b8807"
+    },
+    {
+      "path": "omega/store.py",
+      "bytes": 17186,
+      "sha256": "952f0a73fdfd42f1667cca5955ca158b57f615b0417a6314fd3ff14d2f04701f"
+    },
+    {
+      "path": "omega/server.py",
+      "bytes": 13128,
+      "sha256": "320a77610f88a4222779f448a3966f86161a245f5ce326e32912ed4af6ce7c30"
+    },
+    {
+      "path": "omega/egress.py",
+      "bytes": 7089,
+      "sha256": "6f7c323fb0f494595640e4313e761e85257db7d9a0714489b86ce7e0c6ee5db4"
+    },
+    {
+      "path": "omega/llm_router.py",
+      "bytes": 7832,
+      "sha256": "d4ca2790daa4f79d8cc90565b41ac59135deafbcf2eb72ef86cbdef61c51c9a8"
+    },
+    {
+      "path": "omega/evolution.py",
+      "bytes": 8417,
+      "sha256": "598730710d4687cbda1342cc836462060035de8b83a50b3ac8e74573ed0771ca"
+    },
+    {
+      "path": "omega/cognition_bridge.py",
+      "bytes": 3880,
+      "sha256": "0fd946d6d837455263a7fa5524498caca0ce71b1e632b329a10aadfaa50e41a8"
+    },
+    {
+      "path": "omega/information_policy.py",
+      "bytes": 1193,
+      "sha256": "e58a88baf2213b976e367b8ae19bc04da57e9533ece8489cee2d49ae748de45d"
+    },
+    {
+      "path": "omega/iao_router.py",
+      "bytes": 7232,
+      "sha256": "67aec0f1754ba32c3f8db773c273a53935207fadddb2d04e2a304540f7f118a2"
+    },
+    {
+      "path": "omega/federation_identity.py",
+      "bytes": 2297,
+      "sha256": "20df53cde8cf60acc512c79da3bb20f73042eac0afb9e780ecd36f8ccd3df388"
+    },
+    {
+      "path": "omega/federation_assimilation.py",
+      "bytes": 18599,
+      "sha256": "4b6e3c08f5c6ec4f6b336bc52f218a455364789fc9a96818b57254a580f154dd"
+    },
+    {
+      "path": "omega/federation_ledger.py",
+      "bytes": 6073,
+      "sha256": "a4a4186d906113216f075459121d5e3ce1039a8ae9b8e056128e5bee1e16b68e"
+    },
+    {
+      "path": "omega/autonomous_core.py",
+      "bytes": 10876,
+      "sha256": "f5afcdcb24a89bcebf0ad67ce24ea051f3d8aeabefc5aad693667e116473645b"
+    },
+    {
+      "path": "omega/autonomous_coordinator.py",
+      "bytes": 516,
+      "sha256": "c42cb5973a7bde532500f342d5d271756f307dd6d5661cd36d4d114679af9faf"
+    },
+    {
+      "path": "omega/federation_proposals.py",
+      "bytes": 14790,
+      "sha256": "7e2da936b688184315996ad76130d316f5a724bea940f5f0b2ca3a0bbc8840ba"
+    },
+    {
+      "path": "omega/knowledge_store.py",
+      "bytes": 7033,
+      "sha256": "b9a2907b7f703771fa4a27f8c52b904aab3ba8bb2c5bd3002f4d37478ef99a81"
+    },
+    {
+      "path": "omega/policy_gate.py",
+      "bytes": 4280,
+      "sha256": "cb245b71c223fab71c1f7df3c5c8fdcedd594e1546d09e0ab4064d2c341d9569"
+    },
+    {
+      "path": "omega/padge.py",
+      "bytes": 11373,
+      "sha256": "85ec8041583ad6b2ede1c3f51440188f6e5232c92e561b36b5ff8506ad5b71e1"
+    },
+    {
+      "path": "omega/autobuilder.py",
+      "bytes": 6578,
+      "sha256": "b5bf235c12f61794f37cc4341b6dd81ee2015b9ed70facfbc82185e8a7c0e689"
+    },
+    {
+      "path": "omega/autoconstruction.py",
+      "bytes": 7199,
+      "sha256": "4c0a0ffc7b85e15dfbabd34187e7750f7884f4baf52866d36dab7bb371d55a41"
+    },
+    {
+      "path": "omega/central_coordinator.py",
+      "bytes": 6747,
+      "sha256": "748c5b9dbcc32a01395081df9da754f0f84d85c902ff7fa3d8def6c8412f5baf"
+    },
+    {
+      "path": "omega/autonomous_authority.py",
+      "bytes": 9181,
+      "sha256": "2a8a826e7a8679423c329644b28375675e9bd7b35a80800f017ea7b005458701"
+    },
+    {
+      "path": "omega/tools/knowledge_search.py",
+      "bytes": 3088,
+      "sha256": "4291fcc5be2de5fa1e7952159fb4b7d54a3c267bef47dfb5869215b52713c2e2"
+    },
+    {
+      "path": "omega/tools/__init__.py",
+      "bytes": 512,
+      "sha256": "628d07b541c4ec71b379e010a0f2d1af5a7ac255981a0a0f010ec5aef5fafd3c"
+    },
+    {
+      "path": "omega/tools/web_fetch.py",
+      "bytes": 1568,
+      "sha256": "2446fdf6f5196baacdd0bbb55a1e84c5155ca53739cf44aad209e136b8eca4f3"
+    },
+    {
+      "path": "omega/tools/registry.py",
+      "bytes": 1010,
+      "sha256": "fd9ebfdcac95828acf9677a9ea5cdcbd79a40717a8b5edc39b9475ac5dedcb56"
+    },
+    {
+      "path": "omega/adapters/model.py",
+      "bytes": 9652,
+      "sha256": "42d51eed2f0f12276ec4b1de5e6ff6c418cb7fac14cc1c99628868c33f995a0d"
+    },
+    {
+      "path": "omega/adapters/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/test_supervisor.py",
+      "bytes": 1087,
+      "sha256": "b8a28c64d60257da3e2e889101fcfa0274e1b55724a4ae6b34ca5bb3b34c4bc3"
+    },
+    {
+      "path": "tests/test_memory.py",
+      "bytes": 4873,
+      "sha256": "46c60fc95e32626e6dc0330275f5e7ac67583c2fc58a159b4eeeb2f746f0eeda"
+    },
+    {
+      "path": "tests/test_service.py",
+      "bytes": 10053,
+      "sha256": "db0ebee7c9e19769091abac249ba13ae2d2da0433aef86ec29c75a5963710780"
+    },
+    {
+      "path": "tests/test_net.py",
+      "bytes": 3616,
+      "sha256": "c8469fa674f023fc69f5cbdba6f551e02a0ebe283863c03180164806444d9dd9"
+    },
+    {
+      "path": "tests/test_audit.py",
+      "bytes": 1383,
+      "sha256": "fc3ea299496dd0e37998243be083d22a21b1d0b3e699c45498c3ab4263205bc9"
+    },
+    {
+      "path": "tests/test_control.py",
+      "bytes": 1077,
+      "sha256": "0c1af82474650a8485fa00f5ccf0a2695a4713d70dcc04cab4a7601619dd7969"
+    },
+    {
+      "path": "tests/test_health.py",
+      "bytes": 737,
+      "sha256": "7865a45bf1d33a40523318098e58cd0dbd61fadc02caf55b8d227c937de8fad8"
+    },
+    {
+      "path": "tests/test_release.py",
+      "bytes": 6274,
+      "sha256": "97b71bda04a097ecf5d370c60c8e5debc3a03922398d1875cb9f8c66ae52096f"
+    },
+    {
+      "path": "tests/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/test_web_fetch_tool.py",
+      "bytes": 2434,
+      "sha256": "c2e393487e9c9868258f60631e0672d86a3a7d9096256593f175ef6f5a6f33b7"
+    },
+    {
+      "path": "tests/test_egress.py",
+      "bytes": 7896,
+      "sha256": "1052a836b569ffbcf79b1d10e8068e101ff8e23374963a3c78efbd16d8ba9f3a"
+    },
+    {
+      "path": "tests/test_config.py",
+      "bytes": 536,
+      "sha256": "984e29498b687e31e8219a0030a38eec1c3ec87d3a78672c89ee4da4fe67523e"
+    },
+    {
+      "path": "tests/test_model_adapter.py",
+      "bytes": 7973,
+      "sha256": "d7b7268a63b95bd439ee25b4db9d9562bb00e33ba7e867f2c069bc54a3579535"
+    },
+    {
+      "path": "tests/test_policy.py",
+      "bytes": 988,
+      "sha256": "adea745a00edc4ab0068d2ebd7894b83f2fb9951fc0df4c723a92853b06693ab"
+    },
+    {
+      "path": "tests/test_contracts.py",
+      "bytes": 826,
+      "sha256": "cb2dbefb4054da380f6d87e3ab364aea85556d7fc79777a272ec24ddd3c47649"
+    },
+    {
+      "path": "tests/test_federation.py",
+      "bytes": 18227,
+      "sha256": "7c354eb7179948827eb7796b6a3c9cb6b72e3d6581f2b14e3caf4e5fef4bfafe"
+    },
+    {
+      "path": "tests/test_jobs.py",
+      "bytes": 1283,
+      "sha256": "a5884d26d44b0861b8bfd8a022795e197b044146d8298b27fe56d327a26a8c97"
+    },
+    {
+      "path": "tests/test_autonomous_core.py",
+      "bytes": 995,
+      "sha256": "9cfbd311a210bf330ba2b3529b5f93555924844cea2a0b933ebeaa2549c28124"
+    },
+    {
+      "path": "tests/test_federation_proposals.py",
+      "bytes": 5722,
+      "sha256": "70e9d69895307f0000ca835d94ac321be22273cea920732e68f53f81b8b98578"
+    },
+    {
+      "path": "tests/test_federation_assimilation_security.py",
+      "bytes": 3158,
+      "sha256": "a076a48ed81e3c1af06f9f4c76c01897b428e3ae8c497cb72f840f730aa4b967"
+    },
+    {
+      "path": "tests/test_audit_status.py",
+      "bytes": 2022,
+      "sha256": "57893d4c0d1d9d29ce6ac97a7a30c16081e5e2e01049d5eaf1feeb6026601b54"
+    },
+    {
+      "path": "tests/test_policy_gate.py",
+      "bytes": 2304,
+      "sha256": "2ff06e49a6765c09affc851f0d9dea456ab5adcc06103fbc3e7c1d92c77acdb9"
+    },
+    {
+      "path": "tests/test_autonomous_policy_integration.py",
+      "bytes": 1122,
+      "sha256": "83547222ca83e3dd72d3e42ef7b8e4b746bedf09355dc4d1502aa226a90359e3"
+    },
+    {
+      "path": "tests/test_autonomous_worker.py",
+      "bytes": 1728,
+      "sha256": "473c3956c143128f1c2f0d39314e6240e4199670903d8c6131f7d5a1ce34994e"
+    },
+    {
+      "path": "tests/test_autonomous_worker_process.py",
+      "bytes": 429,
+      "sha256": "07f2368e50be3dc9d27e5921d4f6e810353d584a5b240f09a735fffec23404bf"
+    },
+    {
+      "path": "tests/test_autonomous_scheduler.py",
+      "bytes": 3088,
+      "sha256": "c42e6cc0ec1f1907ac7f79e9d6c36f3e3a8f01916801972f14e61e0ce07231e4"
+    },
+    {
+      "path": "tests/test_autonomous_recovery.py",
+      "bytes": 1723,
+      "sha256": "0a65551274aa8c775b72a02cc62fed39989c4362fddc1898a324f8bd82950417"
+    },
+    {
+      "path": "tools/verify.py",
+      "bytes": 2235,
+      "sha256": "cdd9bad3ae90071537a633d65bd2b7993026d16eb643601e1e21a21c0c1c7d7d"
+    },
+    {
+      "path": "tools/run_runtime.py",
+      "bytes": 9258,
+      "sha256": "ecbe2fa663ff819f7c1b55eb05228fa2a499496c97c669a8b5bf04d903a7ece0"
+    },
+    {
+      "path": "tools/release_demo.py",
+      "bytes": 2464,
+      "sha256": "09bc1478e92102d654ad93b0cd0a86056421923a31f321adf41f372068be30ff"
+    },
+    {
+      "path": "tools/online_bootstrap.py",
+      "bytes": 2102,
+      "sha256": "4f3efbe447ef3a77d2375f8caba391bce480ab242edd5b389f16836d8d36574b"
+    },
+    {
+      "path": "tools/iao_autonomy.py",
+      "bytes": 8763,
+      "sha256": "61bfc8d6fc76a8ab60f1cc9800a22aaf7ee9a37311467f8f3625c87d6fef3a05"
+    },
+    {
+      "path": "tools/iao_evolution.py",
+      "bytes": 6570,
+      "sha256": "2928d1bcf324dc5a1167f2ace7b87299dbafc0ec86564f66f0f9470e63ea0cea"
+    },
+    {
+      "path": "tools/iao_flow.py",
+      "bytes": 10431,
+      "sha256": "ed748ace4365d4668daeb6806e0d508598f50da0b83af870204acb6181564638"
+    },
+    {
+      "path": "tools/iao_ingest.py",
+      "bytes": 3241,
+      "sha256": "772f338ac988e7aa499f7aeaf1c6c5d30e982f3789756899acc7401da7ce39b4"
+    },
+    {
+      "path": "tools/iao_guardian.py",
+      "bytes": 5500,
+      "sha256": "ed48150b298e063cc26064d131801f4df35eb331d1456c1bbc2a297b38b92b16"
+    },
+    {
+      "path": "tools/iao_knowledge.py",
+      "bytes": 1101,
+      "sha256": "2ddaed900be945294b0a18cd907cbcbb63a8e120288d57bfe43fb475b45d17bb"
+    },
+    {
+      "path": "tools/iao_boot.py",
+      "bytes": 6019,
+      "sha256": "f5c8aad76bfe72ba427c085d1f8e9781e021e05a711b211f493fe8649f2647c3"
+    },
+    {
+      "path": "tools/iao_watchdog.py",
+      "bytes": 3524,
+      "sha256": "806af4c235e7e6bd6bf6f2c5677a1123e0fb053b154a0777d4346fa273b63d39"
+    },
+    {
+      "path": "tools/iao_federation_agent.py",
+      "bytes": 8158,
+      "sha256": "97690beea53150a10a41cdbc487caf1325fd337e1e3043728dc821749cb5960a"
+    },
+    {
+      "path": "tools/iao_federation_contract.py",
+      "bytes": 5298,
+      "sha256": "230f31e4bf289e3ce4e4db15917dc7ce4e3d718abcfb237159aa12584e616e51"
+    },
+    {
+      "path": "tools/iao_autonomy_cycle.py",
+      "bytes": 6569,
+      "sha256": "26462e58f7cae4b4eb60ebe399a8952efffea209ebb7b7afeba2eee1dc1e647c"
+    },
+    {
+      "path": "tools/iao_ingest_watch.py",
+      "bytes": 2600,
+      "sha256": "e1a6f7d6b5c760bbf7c532f2d38208084f1baa2ce8dc9ae6f74f51414e543fac"
+    },
+    {
+      "path": "tools/iao_continuity.py",
+      "bytes": 4992,
+      "sha256": "636bf87da4ba235988a53c058da25a71979c0e94b5d67afc2d0d7ce6231c9f94"
+    },
+    {
+      "path": "tools/iao_federation_identity.py",
+      "bytes": 1012,
+      "sha256": "21e8d305a702cec005b6d9a6d093d2a33d9658386943e3d2f05e92d3e8b03f59"
+    },
+    {
+      "path": "tools/iao_federation_discover.py",
+      "bytes": 2763,
+      "sha256": "e4991556e3272ca9925291486a6ab2985815e55672a121ccde98a526422d5b0c"
+    },
+    {
+      "path": "tools/iao_federation_binding.py",
+      "bytes": 4448,
+      "sha256": "9a267a06d78c6df6ce53e9237c9a1db883f71aa0200b44fe2ec4cad7a5aabbe7"
+    },
+    {
+      "path": "tools/iao_federation_candidate_verify.py",
+      "bytes": 8567,
+      "sha256": "6b6d7fbc16aff4a49f9a1733b3dd2c49f01d5e3b50ddd7347585afea3024fc26"
+    },
+    {
+      "path": "tools/iao_federation_autonomy.py",
+      "bytes": 8194,
+      "sha256": "55b58ce15d2f6b59b7be95c49432331b03efa708b29c96edcf7990bc8db46b52"
+    },
+    {
+      "path": "tools/iao_control_plane.py",
+      "bytes": 7090,
+      "sha256": "6465d7ce051d0e6942033fa00061a100d234e74b092065604bb60726f8241218"
+    },
+    {
+      "path": "tools/iao_autonomous_core.py",
+      "bytes": 1072,
+      "sha256": "84229026c557fff551dd351d6cb082aab585184ab012b60c09846c5b7e4553f9"
+    },
+    {
+      "path": "tools/iao_autonomy_daemon.py",
+      "bytes": 3436,
+      "sha256": "5fd0e26b6c98d99afddd24c40e17eee49d81178314d844a325b67dc7a210e39b"
+    },
+    {
+      "path": "tools/iao_control_plane_local.py",
+      "bytes": 2785,
+      "sha256": "e0a1b8df5dff345f072bbb23630e6e6717743d4703e77ea6fd44bb73c2d63e90"
+    },
+    {
+      "path": "tools/iao_github_discovery.py",
+      "bytes": 8487,
+      "sha256": "65b12e5e910ed8707126dacfc60021ce97759e92b6b2230b3b30df7860369532"
+    },
+    {
+      "path": "tools/iao_universal_registry.py",
+      "bytes": 6911,
+      "sha256": "71430eb16790b072160a90dcbf4cbcffd0a3cdf4d6c5e8131e301d3c8354fde2"
+    },
+    {
+      "path": "tools/iao_universal_sync.py",
+      "bytes": 7940,
+      "sha256": "19b996ec7a1214b0b9e607403f92359285fb69d3134564986138aaed891733fe"
+    },
+    {
+      "path": "tools/iao_universal_evaluate.py",
+      "bytes": 7650,
+      "sha256": "56e2a5c92780b2b81d6996b6cf311813600d2cf3d3a2c88ae0785a06ffca0796"
+    },
+    {
+      "path": "tools/iao_universal_integrator.py",
+      "bytes": 9218,
+      "sha256": "f7c2b6bab2243315d9d0ef213d96e8d4e4782d634121a2789823bc77116fa916"
+    },
+    {
+      "path": "tools/iao_probe_documented_apis.py",
+      "bytes": 4509,
+      "sha256": "be7267f954bbfbf8a0018bc837b9cb4850cebde0f842f3f506c02c4d454524b5"
+    },
+    {
+      "path": "tools/iao_universal_enablement.py",
+      "bytes": 6903,
+      "sha256": "95962d6165a717065d3107db052e84d50364282105ad800e61cf5025a4db5d57"
+    },
+    {
+      "path": "tools/iao_universal_cycle.py",
+      "bytes": 6075,
+      "sha256": "0e430bd3b5001ebaac0b357b4f17aa13fb766b7aca68bbbcbc895eaa7925f93a"
+    },
+    {
+      "path": "tools/iao_federation_worker.py",
+      "bytes": 3899,
+      "sha256": "719cdc95387fa5aeb7b2c74abc2caab764888adcb01076b7a2483d82d05518f4"
+    },
+    {
+      "path": "tools/iao_autonomous_worker.py",
+      "bytes": 4280,
+      "sha256": "d78513550e0605bffddfbf98a7e57a09c0f3fa1a7a0c46fa77b92da938b56472"
+    },
+    {
+      "path": "tools/iao_production_engine.py",
+      "bytes": 11603,
+      "sha256": "ac76293d68a535cb142cb983c7f02dfde852d3c5abf25e022803c16d628245c1"
+    },
+    {
+      "path": "tools/iao_padge.py",
+      "bytes": 68,
+      "sha256": "723a6dfce822160e48c38907fc9b1be37b54a205cce48010c5a487095ad0c08f"
+    },
+    {
+      "path": "tools/iao_autonomous_worker_supervisor.py",
+      "bytes": 3058,
+      "sha256": "47a17f6b81b7182578c0ddd0464a0f0898b4ba907b3fd9d8edefc88bc6232896"
+    },
+    {
+      "path": "tools/iao_integrated_supervisor.py",
+      "bytes": 4776,
+      "sha256": "23363c07a3df1ec86c3a7c836d28a5df9874e1a3c766a4ebbd3a61314d5871f3"
+    },
+    {
+      "path": "tools/iao_continuous_guard.py",
+      "bytes": 2512,
+      "sha256": "95c49c292b7c713aa5a44b01078a51b5abc8142b4733a3b2a5f263da3f4c4155"
+    },
+    {
+      "path": "tools/iao_node_network_engine.py",
+      "bytes": 26950,
+      "sha256": "37cabe03251c605e8a840ea718bcaa7162ceabc55a2a41c83c94e333a04ff21f"
+    },
+    {
+      "path": "tools/iao_internet_guardian.py",
+      "bytes": 6691,
+      "sha256": "b9922541dee79c1c190dd22e131f05f66235a35c89ce0deec3c733b650d3b64a"
+    }
+  ]
+}

@@ -82,14 +82,24 @@ def _check_url(url: str, pol: EgressPolicy) -> tuple[str, str, int, str, str]:
 def _resolve(host: str, port: int, pol: EgressPolicy) -> str:
     try:
         infos = pol.resolver(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
+        ips: set[str] = set()
+        for item in infos:
+            try:
+                raw_ip = item[4][0]
+                ip = ipaddress.ip_address(raw_ip.split("%")[0])
+                ips.add(str(ip))
+            except (IndexError, TypeError, ValueError, AttributeError):
+                raise EgressDenied("DNS_INVALID_ADDRESS") from None
+    except EgressDenied:
+        raise
+    except Exception:
         raise EgressDenied("DNS_FAILURE") from None
-    ips = sorted({i[4][0] for i in infos})
+
     if not ips:
         raise EgressDenied("DNS_FAILURE")
-    if not pol.allow_private and any(_forbidden(ip) for ip in ips):  # ANY bad address => deny (anti-rebinding)
+    if not pol.allow_private and any(_forbidden(ip) for ip in ips):
         raise EgressDenied("PRIVATE_ADDRESS")
-    return ips[0]  # pinned: we connect to this IP, never re-resolve
+    return sorted(ips)[0]  # conexión fijada a esta IP; nunca vuelve a resolver
 
 
 def fetch(url: str, pol: EgressPolicy) -> dict[str, Any]:
@@ -124,9 +134,23 @@ def fetch(url: str, pol: EgressPolicy) -> dict[str, Any]:
             declared = r.getheader("Content-Length")
             if declared and declared.isdigit() and int(declared) > pol.max_bytes:
                 raise EgressDenied("TOO_LARGE")
-            body = r.read(pol.max_bytes + 1)
-            if len(body) > pol.max_bytes:
-                raise EgressDenied("TOO_LARGE")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise EgressDenied("TIMEOUT")
+                if conn.sock is None:
+                    raise EgressDenied("CONNECT_FAILED")
+                conn.sock.settimeout(left)
+                chunk = r.read1(min(65536, pol.max_bytes + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > pol.max_bytes:
+                    raise EgressDenied("TOO_LARGE")
+            body = b"".join(chunks)
             if time.monotonic() > deadline:
                 raise EgressDenied("TIMEOUT")
             return {"url": cur, "status": r.status, "content_type": ctype, "ip": ip,

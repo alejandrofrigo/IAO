@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 """IAO watchdog: supervisa HTTP local e intenta recuperar omega.supervisor."""
 from pathlib import Path
-import hashlib, os, socket, subprocess, sys, time
+import os
+import socket
+import subprocess
+import sys
+import time
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent.parent

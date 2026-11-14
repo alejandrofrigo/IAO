@@ -1,6 +1,7 @@
 """SQLite persistence for dev/pilot-in-sandbox (PostgreSQL remains the target: ADR-002).
 All reads of user data take the owner as a mandatory parameter (tenant isolation)."""
 import json
+import hashlib
 import sqlite3
 import threading
 import uuid
@@ -52,6 +53,7 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA secure_delete=ON")  # overwrite freed pages: operational deletion must be physical
         self.db.executescript(SCHEMA)
+        self._initialize_audit_v2()
 
     def close(self) -> None:
         self.db.close()
@@ -60,16 +62,148 @@ class Store:
         with self.lock:
             return self.db.execute("SELECT 1").fetchone()[0] == 1
 
+
+    def _legacy_audit_snapshot(self) -> list[dict[str, Any]]:
+        """Fingerprint de las tablas históricas; nunca modifica sus registros."""
+        names = self.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND (name='audit_event' OR name GLOB 'audit_event_legacy_*') "
+            "ORDER BY name"
+        ).fetchall()
+        result = []
+        for item in names:
+            name = item["name"]
+            safe = name.replace('"', '""')
+            rows = self.db.execute(
+                f'SELECT id,ts,event_type,subject,details,previous_hash,event_hash '
+                f'FROM "{safe}" ORDER BY id'
+            ).fetchall()
+            records = [list(row) for row in rows]
+            raw = json.dumps(
+                records, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False
+            ).encode()
+            result.append({
+                "table": name,
+                "event_count": len(records),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            })
+        return result
+
+    def _initialize_audit_v2(self) -> None:
+        """Crea la cadena vigente una sola vez y firma el acta de transición."""
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                self.db.execute("""
+                    CREATE TABLE IF NOT EXISTS audit_event_v2(
+                      id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      ts TEXT NOT NULL,
+                      event_type TEXT NOT NULL,
+                      subject TEXT NOT NULL,
+                      details TEXT NOT NULL,
+                      previous_hash TEXT NOT NULL,
+                      event_hash TEXT NOT NULL UNIQUE
+                    )
+                """)
+                self.db.execute("""
+                    CREATE TABLE IF NOT EXISTS audit_control(
+                      id INTEGER PRIMARY KEY CHECK(id=1),
+                      created_at TEXT NOT NULL,
+                      legacy_status TEXT NOT NULL,
+                      legacy_snapshot_json TEXT NOT NULL,
+                      key_fingerprint TEXT NOT NULL
+                    )
+                """)
+                control = self.db.execute(
+                    "SELECT id FROM audit_control WHERE id=1"
+                ).fetchone()
+
+                if control is None:
+                    snapshot = self._legacy_audit_snapshot()
+                    total = sum(x["event_count"] for x in snapshot)
+                    status = "legacy_unverified" if total else "no_legacy_history"
+                    key_fp = hashlib.sha256(self.audit_key or b"").hexdigest()
+
+                    if total:
+                        details = {
+                            "legacy_status": "legacy_unverified",
+                            "reason": "HISTORICAL_CHAIN_INTEGRITY_NOT_ESTABLISHED",
+                            "tables": snapshot,
+                            "total_historical_events": total,
+                            "key_fingerprint_sha256": key_fp,
+                        }
+                        ev = make_event(
+                            "AUDIT_CHAIN_TRANSITION",
+                            "iao_audit",
+                            details,
+                            GENESIS_HASH,
+                            self.audit_key,
+                        )
+                        self.db.execute(
+                            "INSERT INTO audit_event_v2"
+                            "(ts,event_type,subject,details,previous_hash,event_hash) "
+                            "VALUES(?,?,?,?,?,?)",
+                            (
+                                ev["timestamp"], ev["event_type"], ev["subject"],
+                                json.dumps(details, sort_keys=True, ensure_ascii=False),
+                                ev["previous_hash"], ev["event_hash"],
+                            ),
+                        )
+
+                    self.db.execute(
+                        "INSERT INTO audit_control"
+                        "(id,created_at,legacy_status,legacy_snapshot_json,key_fingerprint) "
+                        "VALUES(1,?,?,?,?)",
+                        (
+                            datetime.now(timezone.utc).isoformat(),
+                            status,
+                            json.dumps(snapshot, sort_keys=True),
+                            key_fp,
+                        ),
+                    )
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+
+    def legacy_audit_status(self) -> dict[str, Any]:
+        """Compara el historial conservado con la huella tomada en la transición."""
+        with self.lock:
+            row = self.db.execute(
+                "SELECT legacy_status,legacy_snapshot_json "
+                "FROM audit_control WHERE id=1"
+            ).fetchone()
+            current = self._legacy_audit_snapshot()
+
+        if row is None:
+            return {"status": "missing_transition_record", "unchanged": False}
+
+        original = json.loads(row["legacy_snapshot_json"])
+        unchanged = current == original
+        historical_event_count = sum(
+            int(item.get("event_count", 0)) for item in original
+        )
+        return {
+            "status": (
+                row["legacy_status"] if unchanged
+                else "legacy_changed_after_transition"
+            ),
+            "unchanged": unchanged,
+            "event_count": historical_event_count,
+            "tables": current,
+        }
+
     # ---- audit (hash chained) ----
     def audit(self, actor: str, event_type: str, subject: str, **details: Any) -> dict[str, Any]:
         details = {"actor": actor, **details}
         with self.lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
-                row = self.db.execute("SELECT event_hash FROM audit_event ORDER BY id DESC LIMIT 1").fetchone()
+                row = self.db.execute("SELECT event_hash FROM audit_event_v2 ORDER BY id DESC LIMIT 1").fetchone()
                 ev = make_event(event_type, subject, details, row[0] if row else GENESIS_HASH, self.audit_key)
                 self.db.execute(
-                    "INSERT INTO audit_event(ts,event_type,subject,details,previous_hash,event_hash) VALUES(?,?,?,?,?,?)",
+                    "INSERT INTO audit_event_v2(ts,event_type,subject,details,previous_hash,event_hash) VALUES(?,?,?,?,?,?)",
                     (ev["timestamp"], event_type, subject, json.dumps(details, sort_keys=True, ensure_ascii=False),
                      ev["previous_hash"], ev["event_hash"]))
                 self.db.execute("COMMIT")
@@ -80,14 +214,43 @@ class Store:
 
     def _all_events(self) -> list[dict[str, Any]]:
         with self.lock:
-            rows = self.db.execute("SELECT * FROM audit_event ORDER BY id").fetchall()
+            rows = self.db.execute("SELECT * FROM audit_event_v2 ORDER BY id").fetchall()
         return [{"id": r["id"], "event_type": r["event_type"], "subject": r["subject"],
                  "details": json.loads(r["details"]), "timestamp": r["ts"],
                  "previous_hash": r["previous_hash"], "event_hash": r["event_hash"]} for r in rows]
 
+    def audit_status(self) -> dict[str, Any]:
+        """Verify active chain and detect changes to the preserved legacy history."""
+        events = self._all_events()
+        payload = [{k: v for k, v in event.items() if k != "id"} for event in events]
+        chain_valid, bad_index = verify_chain(payload, self.audit_key)
+
+        bad_event_id = (
+            events[bad_index]["id"]
+            if bad_index is not None and 0 <= bad_index < len(events)
+            else None
+        )
+
+        legacy = self.legacy_audit_status()
+        legacy_valid = bool(legacy.get("unchanged", False))
+
+        # The legacy transition stores a table-level digest, not per-row hashes.
+        # On mismatch we can prove tampering, but cannot identify the exact row.
+        if chain_valid and not legacy_valid:
+            legacy_count = int(legacy.get("event_count", 0))
+            bad_index = max(0, legacy_count - 1)
+            bad_event_id = None
+
+        return {
+            "valid": bool(chain_valid and legacy_valid),
+            "event_count": len(events),
+            "first_invalid_index": bad_index,
+            "first_invalid_event_id": bad_event_id,
+        }
+
     def verify_audit(self) -> tuple[bool, int | None]:
-        evs = [{k: v for k, v in e.items() if k != "id"} for e in self._all_events()]
-        return verify_chain(evs, self.audit_key)
+        status = self.audit_status()
+        return status["valid"], status["first_invalid_index"]
 
     def audit_events(self, actor: str | None, limit: int, after_id: int = 0) -> list[dict[str, Any]]:
         out = []

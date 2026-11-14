@@ -1,0 +1,10 @@
+{
+  "@context": {
+    "solid": "http://www.w3.org/ns/solid/terms#"
+  },
+  "@id": "http://127.0.0.1:4444/settings/privateTypeIndex.jsonld",
+  "@type": [
+    "solid:TypeIndex",
+    "solid:UnlistedDocument"
+  ]
+}

@@ -1,0 +1,335 @@
+IAO — REPARACIÓN DE DESPLIEGUE
+
+
+===== render.yaml =====
+SHA256: bd2a4495b077306c5b001fa22e3d60535ca9236cd1d2a2b56d47f13423d61974
+1: services:
+2:   - type: web
+3:     name: iao-backend
+4:     runtime: docker
+5:     dockerfilePath: ./deploy/Dockerfile
+6:     dockerContext: .
+7:     healthCheckPath: /health/ready
+8:     envVars:
+9:       - key: HOST
+10:         value: 0.0.0.0
+
+===== deploy/Dockerfile =====
+SHA256: 742a297069a2a22af46ea67e707be91ea213678b90b9f33119eb62fb9825246e
+1: FROM python:3.12.8-slim
+2: ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOST=0.0.0.0
+3: WORKDIR /app
+4: COPY pyproject.toml README.md ./
+5: COPY apps ./apps
+6: COPY omega ./omega
+7: RUN pip install --no-cache-dir .
+8: USER 10001:10001
+9: EXPOSE 8080
+10: CMD ["python", "-m", "omega.server"]
+
+===== apps/api/main.py =====
+SHA256: ae2342293af3bb78175df3b22d810151bf4276e27e9bb99c527aa30d7aa00cdb
+1: from fastapi import FastAPI, HTTPException
+2: 
+3: from apps.api.schemas import ChatRequest, ChatResponse
+4: 
+5: app = FastAPI(title="IAO", version="0.1.0")
+6: 
+7: 
+8: @app.get("/health/live")
+9: def live() -> dict[str, str]:
+10:     return {"status": "live"}
+11: 
+12: 
+13: @app.get("/health/ready")
+14: def ready() -> dict[str, str]:
+15:     # Process-only check. Replace with DB/migration checks before production promotion.
+16:     return {"status": "ready", "checks": "process-only"}
+17: 
+18: 
+19: @app.post("/v1/chat", response_model=ChatResponse)
+20: def chat(request: ChatRequest) -> ChatResponse:
+21:     # The baseline does not pretend that a model or persistent store is configured.
+22:     raise HTTPException(
+23:         status_code=503,
+24:         detail={
+25:             "code": "MODEL_ADAPTER_NOT_CONFIGURED",
+26:             "conversation_id": request.conversation_id,
+27:         },
+28:     )
+
+===== omega/server.py =====
+SHA256: 4fa3603b1da64d39d87356deecdbd2946086cd4d3ac3ae9601382d9a0e34d857
+1: """Stdlib HTTP runtime for IAO. Refuses to start in production with dev auth."""
+2: import json
+3: import os
+4: import signal
+5: import sys
+6: import threading
+7: from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+8: from pathlib import Path
+9: 
+10: from omega.config import load_settings
+11: from omega.service import MAX_BODY, OmegaService
+12: from omega.store import Store
+13: from omega.tools.knowledge_search import KnowledgeCorpus
+14: from omega.tools.registry import ToolRegistry, ToolSpec
+15: 
+16: 
+17: def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: object) -> OmegaService:
+18:     state_dir.mkdir(parents=True, exist_ok=True)
+19:     audit_key_env = os.environ.get("AUDIT_HMAC_KEY", "")
+20:     if audit_key_env:
+21:         audit_key = audit_key_env.encode()
+22:     else:
+23:         key_path = Path.home() / ".config" / "iao" / "audit-hmac-key"
+24:         if not key_path.is_file():
+25:             raise RuntimeError("Persistent audit key is missing")
+26:         audit_key = key_path.read_text().strip().encode()
+27:         if len(audit_key) < 32:
+28:             raise RuntimeError("Persistent audit key is invalid")
+29:     store = Store(state_dir / "omega.db", audit_key=audit_key)
+30:     corpus = KnowledgeCorpus(corpus_dir)
+31:     reg = ToolRegistry()
+32:     reg.register(ToolSpec("knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
+33:                           corpus.validate_input, corpus.run, corpus.verify))
+34:     allow = {h.strip().lower() for h in os.environ.get("OMEGA_EGRESS_ALLOWLIST", "").split(",") if h.strip()}
+35:     if allow:  # F3: web.fetch exists only when an explicit allowlist is configured (deny-by-default)
+36:         from omega.egress import EgressPolicy
+37:         from omega.tools.web_fetch import make_web_fetch
+38:         reg.register(make_web_fetch(EgressPolicy(allow_hosts=frozenset(allow))))
+39:     store.audit("system", "RUNTIME_START", "omega", docs=len(corpus.docs), tools=sorted(reg.names()))
+40:     from omega.adapters.model import adapter_from_env
+41:     router_enabled = os.environ.get("IAO_LLM_ROUTER", "").strip().lower() in {
+42:         "1", "true", "yes", "on"
+43:     }
+44:     if router_enabled:
+45:         from omega.llm_router import RouterModelAdapter
+46:         kw["model_adapter"] = RouterModelAdapter()
+47:     else:
+48:         kw.setdefault("model_adapter", adapter_from_env(dict(os.environ)))
+49:     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
+50: 
+51: 
+52: def make_handler(svc: OmegaService) -> type[BaseHTTPRequestHandler]:
+53:     class H(BaseHTTPRequestHandler):
+54:         protocol_version = "HTTP/1.1"
+55:         server_version = "omega"
+56:         sys_version = ""
+57: 
+58:         def _cors_headers(self) -> None:
+59:             origin = self.headers.get("Origin", "")
+60:             allowed = {
+61:                 x.strip().rstrip("/")
+62:                 for x in os.environ.get(
+63:                     "IAO_CORS_ORIGINS",
+64:                     "https://alejandrofrigo.github.io"
+65:                 ).split(",") if x.strip()
+66:             }
+67:             if origin and origin.rstrip("/") in allowed:
+68:                 self.send_header("Access-Control-Allow-Origin", origin)
+69:                 self.send_header("Vary", "Origin")
+70: 
+71:         def _do(self) -> None:
+72:             if self.command == "OPTIONS":
+73:                 origin = self.headers.get("Origin", "")
+74:                 requested_method = self.headers.get(
+75:                     "Access-Control-Request-Method", ""
+76:                 ).upper()
+77:                 requested_headers = {
+78:                     x.strip().lower()
+79:                     for x in self.headers.get(
+80:                         "Access-Control-Request-Headers", ""
+81:                     ).split(",") if x.strip()
+82:                 }
+83:                 allowed = {
+84:                     x.strip().rstrip("/")
+85:                     for x in os.environ.get(
+86:                         "IAO_CORS_ORIGINS",
+87:                         "https://alejandrofrigo.github.io"
+88:                     ).split(",") if x.strip()
+89:                 }
+90:                 if (
+91:                     origin.rstrip("/") not in allowed
+92:                     or requested_method not in {"POST", "GET"}
+93:                     or not requested_headers.issubset(
+94:                         {"authorization", "content-type"}
+95:                     )
+96:                 ):
+97:                     self.send_response(403)
+98:                     self.end_headers()
+99:                     return
+100:                 self.send_response(204)
+101:                 self._cors_headers()
+102:                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+103:                 self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+104:                 self.send_header("Access-Control-Max-Age", "600")
+105:                 self.send_header("Content-Length", "0")
+106:                 self.end_headers()
+107:                 return
+108:             # Serve only the fixed local chat page; API requests remain in OmegaService.
+109:             if self.command == "GET" and self.path.split("?", 1)[0] in ("/", "/index.html"):
+110:                 page = Path(__file__).resolve().parent.parent / "web" / "index.html"
+111:                 try:
+112:                     data = page.read_bytes()
+113:                 except OSError:
+114:                     self.send_error(503, "WEB_INTERFACE_UNAVAILABLE")
+115:                     return
+116:                 self.send_response(200)
+117:                 self._cors_headers()
+118:                 self.send_header("Content-Type", "text/html; charset=utf-8")
+119:                 self.send_header("Content-Length", str(len(data)))
+120:                 self.send_header("Cache-Control", "no-store")
+121:                 self.send_header("X-Content-Type-Options", "nosniff")
+122:                 self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+123:                 self.end_headers()
+124:                 self.wfile.write(data)
+125:                 return
+126:             n = int(self.headers.get("Content-Length") or 0)
+127:             body = self.rfile.read(min(n, MAX_BODY + 1)) if n else b""
+128:             hdrs = {k.lower(): v for k, v in self.headers.items()}
+129:             hdrs["x-omega-client-ip"] = self.client_address[0]
+130:             status, payload = svc.handle(self.command, self.path, hdrs, body)
+131:             data = json.dumps(payload).encode()
+132:             self.send_response(status)
+133:             self._cors_headers()
+134:             self.send_header("Content-Type", "application/json")
+135:             self.send_header("Content-Length", str(len(data)))
+136:             self.send_header("X-Content-Type-Options", "nosniff")
+137:             self.end_headers()
+138:             self.wfile.write(data)
+139:             sys.stderr.write(json.dumps({"m": self.command, "p": self.path.split("?")[0], "s": status, "cid": payload.get("correlation_id")}) + "\n")
+140: 
+141:         do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = _do
+142: 
+143:         def log_message(self, *a: object) -> None:
+144:             pass
+145: 
+146:     return H
+147: 
+148: 
+149: def main() -> None:
+150:     s = load_settings()
+151:     if s.app_env == "production":
+152:         sys.exit("BLOCKED_EXTERNAL: dev token auth is not allowed in production; configure OIDC")
+153:     key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+154:     if len(key) < 16:
+155:         sys.exit("OMEGA_DEV_TOKEN_KEY (>=16 chars) required")
+156:     state = Path(os.environ.get("OMEGA_STATE_DIR", ".state"))
+157:     svc = build_service(state, key, Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
+158:                         rate_limit_per_min=int(os.environ.get("OMEGA_RATE_LIMIT", "120")))
+159:     httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc))
+160:     (state / "server.pid").write_text(str(os.getpid()))
+161:     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
+162:     sys.stderr.write(json.dumps({"event": "listening", "host": s.host, "port": s.port}) + "\n")
+163:     httpd.serve_forever()
+164:     svc.store.audit("system", "RUNTIME_STOP", "omega")
+165:     svc.store.close()
+166: 
+167: 
+168: if __name__ == "__main__":
+169:     main()
+
+===== omega/supervisor.py =====
+SHA256: b9eb519504659c94c2faf59c5579f26292eb82508239af1e09fd5a8b6c1a07cd
+1: """Minimal supervisor: restarts the runtime on crash with backoff; HALTs after too many restarts.
+2: On SIGTERM/SIGINT it stops the child too (no orphans) and exits 0."""
+3: import signal
+4: import subprocess
+5: import os
+6: import sys
+7: import time
+8: from types import FrameType
+9: 
+10: 
+11: def supervise(cmd: list[str], max_restarts: int = 5, window: float = 60.0) -> int:
+12:     restarts: list[float] = []
+13:     child: dict[str, subprocess.Popen[bytes] | None] = {"p": None}
+14:     stopping = {"v": False}
+15: 
+16:     def stop(_s: int, _f: FrameType | None) -> None:
+17:         stopping["v"] = True
+18:         p = child["p"]
+19:         if p is not None and p.poll() is None:
+20:             p.terminate()
+21: 
+22:     signal.signal(signal.SIGTERM, stop)
+23:     signal.signal(signal.SIGINT, stop)
+24:     while True:
+25:         p = subprocess.Popen(cmd, env={**os.environ, "IAO_LLM_ROUTER": "1"})
+26:         child["p"] = p
+27:         if stopping["v"]:
+28:             p.terminate()
+29:         code = p.wait()
+30:         if stopping["v"] or code == 0:
+31:             return 0
+32:         now = time.monotonic()
+33:         restarts = [t for t in restarts if now - t < window] + [now]
+34:         sys.stderr.write(f'{{"event":"runtime_exit","code":{code},"restarts_in_window":{len(restarts)}}}\n')
+35:         if len(restarts) > max_restarts:
+36:             sys.stderr.write('{"event":"HALT","reason":"restart_limit"}\n')
+37:             return 1
+38:         time.sleep(min(0.25 * 2 ** len(restarts), 5))
+39: 
+40: 
+41: if __name__ == "__main__":
+42:     raise SystemExit(supervise([sys.executable, "-m", "omega.server"]))
+
+===== pyproject.toml =====
+SHA256: c10dcad8609a28339187ee1ce00b43e2562e901944cc494124d2b43aa64091a6
+1: [build-system]
+2: requires = ["setuptools==75.8.0"]
+3: build-backend = "setuptools.build_meta"
+4: 
+5: [project]
+6: name = "iao"
+7: version = "0.1.0"
+8: requires-python = ">=3.12,<3.14"
+9: dependencies = [
+10:   "fastapi==0.115.8",
+11:   "uvicorn[standard]==0.34.0",
+12:   "pydantic==2.10.6",
+13:   "pydantic-settings==2.7.1",
+14:   "psycopg[binary]==3.2.4",
+15: ]
+16: 
+17: [project.optional-dependencies]
+18: dev = ["pytest==8.3.4", "httpx==0.28.1", "ruff==0.9.4", "mypy==1.14.1"]
+19: 
+20: [tool.setuptools.packages.find]
+21: include = ["apps*", "omega*"]
+22: 
+23: [tool.pytest.ini_options]
+24: testpaths = ["tests"]
+25: 
+26: [tool.ruff]
+27: line-length = 100
+28: target-version = "py312"
+29: 
+30: [tool.mypy]
+31: python_version = "3.12"
+32: strict = true
+
+===== web/api-config.js =====
+SHA256: 87de01dab979385a30f2ea0abac01c2e8dcfcb19cc05fa2565cb1bb8e47dbf03
+3:   "use strict";
+4:   var base = 'https://iao-backend.onrender.com'.replace(/\\/+$/, "");
+5:   window.IAO_API_BASE = base;
+6:   window.iaoApiUrl = function (path) {
+7:     return base + "/" + String(path).replace(/^\\/+/, "");
+13:           /^\\/v1\\//.test(input)) {
+14:         input = window.iaoApiUrl(input);
+15:       } else if (input instanceof URL &&
+16:                  input.pathname.startsWith("/v1/")) {
+17:         input = window.iaoApiUrl(input.pathname + input.search);
+18:       } else if (input instanceof Request) {
+21:           input = new Request(
+22:             window.iaoApiUrl(u.pathname + u.search),
+23:             new Request(input, {mode: "cors"})
+
+===== GIT REMOTO =====
+origin	https://github.com/alejandrofrigo/IAO.git (fetch)
+origin	https://github.com/alejandrofrigo/IAO.git (push)
+
+===== ESTADO =====
+No se modificaron archivos ni se publicaron cambios.

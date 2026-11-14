@@ -7,7 +7,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from omega.federation import FedServer, Node, _sign
+from omega.federation import (FedServer, Node, _sign, verify_identity_challenge)
 from omega.store import Store
 from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolRegistry, ToolSpec
@@ -32,7 +32,7 @@ class FedBase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.a, self.b = mk(self.tmp.name, "a", self.clock), mk(self.tmp.name, "b", self.clock)
         self.a.enroll(self.b.contract_for_self(["knowledge.search"]))   # A trusts B
-        self.b.enroll(self.a.contract_for_self(["knowledge.search"]))   # B trusts A
+        self.b.enroll(self.a.contract_for_self(["knowledge.search"]), granted_capabilities=["knowledge.search"])   # B grants A inbound access
         self.sb = FedServer(self.b).start()
         self.servers = [self.sb]
 
@@ -56,11 +56,71 @@ class FedBase(unittest.TestCase):
         return e
 
 
+class IdentityChallengeVerificationTests(FedBase):
+    def make_proof(self):
+        nonce = "a" * 64
+        request_ts = self.clock()
+        request = {
+            "v": 1,
+            "from": self.a.node_id,
+            "to": self.b.node_id,
+            "nonce": nonce,
+            "ts": request_ts,
+        }
+        status, response = self.b.answer_challenge(json.dumps(request).encode())
+        self.assertEqual(status, 200)
+        return self.b.identity_document(), response, nonce, request_ts
+
+    def verify(self, identity, response, nonce, request_ts, **kw):
+        args = {
+            "requester_id": self.a.node_id,
+            "nonce": nonce,
+            "request_ts": request_ts,
+            "now": self.clock(),
+        }
+        args.update(kw)
+        return verify_identity_challenge(identity, response, **args)
+
+    def test_valid_identity_and_signed_challenge(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["peer_id"], self.b.node_id)
+
+    def test_identity_key_substitution_rejected(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        identity["public_key"] = self.a.pub.hex()
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "NODE_ID_KEY_MISMATCH")
+
+    def test_tampered_signed_response_rejected(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        response["nonce"] = "b" * 64
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "BAD_CHALLENGE_SIGNATURE")
+
+    def test_wrong_expected_nonce_rejected(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        result = self.verify(identity, response, "c" * 64, request_ts)
+        self.assertEqual(result["error"], "CHALLENGE_BINDING_MISMATCH")
+
+    def test_expired_response_rejected(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        self.t[0] += 120
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "RESPONSE_CLOCK_SKEW")
+
+
 class HappyAndAuthTests(FedBase):
     def test_roundtrip_signed_verified_untrusted(self) -> None:
         r = self.a.send(self.b.node_id, self.sb.url, "knowledge.search", Q)
         self.assertEqual((r["ok"], r["verification"], r["untrusted"]), (True, "PASS", True))
         self.assertTrue(r["result"]["items"])
+
+    def test_peer_offer_does_not_imply_local_grant(self) -> None:
+        self.b.peers[self.a.node_id]["granted_capabilities"] = []
+        status, payload = self.raw(self.env(nonce="directional-deny-0001"))
+        self.assertEqual((status, payload["error"]), (403, "CAPABILITY_NOT_GRANTED"))
 
     def test_node_id_bound_to_key_at_enrolment(self) -> None:
         c = self.b.contract_for_self(["knowledge.search"])
@@ -141,7 +201,7 @@ class PolicyTests(FedBase):
             self.assertEqual((s, p["error"]), (403, "CAPABILITY_NOT_GRANTED"), cap)
 
     def test_peer_granted_write_capability_still_refused(self) -> None:
-        self.b.peers[self.a.node_id]["capabilities"].append("danger.write")  # even if mis-configured
+        self.b.peers[self.a.node_id]["granted_capabilities"].append("danger.write")  # even if mis-configured
         s, p = self.raw(self.env(capability="danger.write", nonce="w" * 20))
         self.assertEqual(p["error"], "CAPABILITY_NOT_GRANTED")                 # served-set + READ_ONLY are independent layers
 
@@ -232,3 +292,88 @@ class PartitionAndHostilePeerTests(FedBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersistentPeerStoreTests(FedBase):
+    def test_peer_survives_node_restart(self) -> None:
+        from omega.federation import Node
+        path = Path(self.tmp.name) / "federation-peers.json"
+        node = Node(self.a.store, self.a.registry, key=self.a.key,
+                    clock=self.clock, served=self.a.served, peer_store_path=path)
+        node.enroll(self.b.contract_for_self(["knowledge.search"]))
+        restored = Node(self.a.store, self.a.registry, key=self.a.key,
+                        clock=self.clock, served=self.a.served, peer_store_path=path)
+        self.assertIn(self.b.node_id, restored.peers)
+        self.assertFalse(restored.peers[self.b.node_id]["revoked"])
+
+    def test_revocation_survives_node_restart(self) -> None:
+        from omega.federation import Node
+        path = Path(self.tmp.name) / "federation-peers.json"
+        node = Node(self.a.store, self.a.registry, key=self.a.key,
+                    clock=self.clock, served=self.a.served, peer_store_path=path)
+        node.enroll(self.b.contract_for_self(["knowledge.search"]))
+        node.revoke(self.b.node_id)
+        restored = Node(self.a.store, self.a.registry, key=self.a.key,
+                        clock=self.clock, served=self.a.served, peer_store_path=path)
+        self.assertTrue(restored.peers[self.b.node_id]["revoked"])
+
+    def test_corrupt_peer_store_fails_closed(self) -> None:
+        from omega.federation import Node
+        path = Path(self.tmp.name) / "federation-peers.json"
+        path.write_text("{broken", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "PEER_STORE_INVALID_FAIL_CLOSED"):
+            Node(self.a.store, self.a.registry, key=self.a.key,
+                 clock=self.clock, served=self.a.served, peer_store_path=path)
+
+    def test_endpoint_must_be_https_and_exact_path(self) -> None:
+        from omega.federation import Node
+        path = Path(self.tmp.name) / "federation-peers.json"
+        node = Node(self.a.store, self.a.registry, key=self.a.key,
+                    clock=self.clock, served=self.a.served, peer_store_path=path)
+        contract = self.b.contract_for_self(["knowledge.search"])
+        contract["endpoint"] = "http://example.org/fed/v1/message"
+        with self.assertRaisesRegex(ValueError, "INVALID_PEER_ENDPOINT"):
+            node.enroll(contract)
+
+    def test_v2_granted_capabilities_survive_node_restart(self) -> None:
+        from omega.federation import Node
+
+        path = Path(self.tmp.name) / "federation-peers-v2.json"
+        node = Node(self.a.store, self.a.registry, key=self.a.key,
+                    clock=self.clock, served=self.a.served, peer_store_path=path)
+        node.enroll(self.b.contract_for_self(["knowledge.search"]),
+                    granted_capabilities=["knowledge.search"])
+
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["version"], 2)
+        self.assertEqual(saved["peers"][0]["granted_capabilities"],
+                         ["knowledge.search"])
+
+        restored = Node(self.a.store, self.a.registry, key=self.a.key,
+                        clock=self.clock, served=self.a.served, peer_store_path=path)
+        self.assertEqual(
+            restored.peers[self.b.node_id]["granted_capabilities"],
+            ["knowledge.search"],
+        )
+
+    def test_v1_peer_store_migrates_without_inbound_grants(self) -> None:
+        from omega.federation import Node
+
+        path = Path(self.tmp.name) / "federation-peers-v1.json"
+        node = Node(self.a.store, self.a.registry, key=self.a.key,
+                    clock=self.clock, served=self.a.served, peer_store_path=path)
+        node.enroll(self.b.contract_for_self(["knowledge.search"]),
+                    granted_capabilities=["knowledge.search"])
+
+        legacy = json.loads(path.read_text(encoding="utf-8"))
+        legacy["version"] = 1
+        for peer in legacy["peers"]:
+            peer.pop("granted_capabilities", None)
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        restored = Node(self.a.store, self.a.registry, key=self.a.key,
+                        clock=self.clock, served=self.a.served, peer_store_path=path)
+        self.assertEqual(
+            restored.peers[self.b.node_id]["granted_capabilities"],
+            [],
+        )

@@ -1,0 +1,100 @@
+{
+  "@context": {
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "solid": "http://www.w3.org/ns/solid/terms#",
+    "schema": "http://schema.org/",
+    "pim": "http://www.w3.org/ns/pim/space#",
+    "ldp": "http://www.w3.org/ns/ldp#",
+    "cid": "https://www.w3.org/ns/cid/v1#",
+    "lws": "https://www.w3.org/ns/lws#",
+    "inbox": {
+      "@id": "ldp:inbox",
+      "@type": "@id"
+    },
+    "storage": {
+      "@id": "pim:storage",
+      "@type": "@id"
+    },
+    "oidcIssuer": {
+      "@id": "solid:oidcIssuer",
+      "@type": "@id"
+    },
+    "preferencesFile": {
+      "@id": "pim:preferencesFile",
+      "@type": "@id"
+    },
+    "publicTypeIndex": {
+      "@id": "solid:publicTypeIndex",
+      "@type": "@id"
+    },
+    "privateTypeIndex": {
+      "@id": "solid:privateTypeIndex",
+      "@type": "@id"
+    },
+    "isPrimaryTopicOf": {
+      "@id": "foaf:isPrimaryTopicOf",
+      "@type": "@id"
+    },
+    "mainEntityOfPage": {
+      "@id": "schema:mainEntityOfPage",
+      "@type": "@id"
+    },
+    "service": {
+      "@id": "cid:service",
+      "@container": "@set"
+    },
+    "serviceEndpoint": {
+      "@id": "cid:serviceEndpoint",
+      "@type": "@id"
+    },
+    "controller": {
+      "@id": "cid:controller",
+      "@type": "@id"
+    },
+    "verificationMethod": {
+      "@id": "cid:verificationMethod",
+      "@container": "@set"
+    },
+    "authentication": {
+      "@id": "cid:authentication",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "assertionMethod": {
+      "@id": "cid:assertionMethod",
+      "@type": "@id",
+      "@container": "@set"
+    },
+    "publicKeyJwk": {
+      "@id": "cid:publicKeyJwk",
+      "@type": "@json"
+    },
+    "publicKeyMultibase": {
+      "@id": "cid:publicKeyMultibase"
+    },
+    "Multikey": "cid:Multikey",
+    "JsonWebKey": "cid:JsonWebKey"
+  },
+  "@id": "http://127.0.0.1:4444/profile/card.jsonld#me",
+  "@type": [
+    "foaf:Person",
+    "schema:Person"
+  ],
+  "foaf:name": "me",
+  "isPrimaryTopicOf": "",
+  "mainEntityOfPage": "",
+  "controller": "http://127.0.0.1:4444/profile/card.jsonld#me",
+  "inbox": "http://127.0.0.1:4444/inbox/",
+  "storage": "http://127.0.0.1:4444/",
+  "oidcIssuer": "http://127.0.0.1:4444/",
+  "preferencesFile": "http://127.0.0.1:4444/settings/prefs.jsonld",
+  "publicTypeIndex": "http://127.0.0.1:4444/settings/publicTypeIndex.jsonld",
+  "privateTypeIndex": "http://127.0.0.1:4444/settings/privateTypeIndex.jsonld",
+  "service": [
+    {
+      "@id": "http://127.0.0.1:4444/profile/card.jsonld#oidc",
+      "@type": "lws:OpenIdProvider",
+      "serviceEndpoint": "http://127.0.0.1:4444/"
+    }
+  ]
+}

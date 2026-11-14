@@ -4,3 +4,6 @@ __pycache__/
 .env
 .state/
 *.egg-info/
+# IAO: proteger secretos y copias locales de entorno
+.env.*
+!.env.example

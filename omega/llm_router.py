@@ -14,6 +14,32 @@ CONFIG = Path.home() / ".config" / "iao" / "llm-providers.json"
 STATE = Path.home() / ".local" / "share" / "iao" / "llm-health.json"
 LOCK = threading.Lock()
 
+def _secret_value(name):
+    """Resolve a provider secret without logging or persisting its value."""
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    if name != "MODEL_API_KEY":
+        return ""
+    env_file = Path.cwd() / ".env"
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, raw = line.split("=", 1)
+            if key.strip() == name:
+                raw = raw.strip()
+                if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+                    raw = raw[1:-1]
+                return raw
+    except OSError:
+        pass
+    return ""
+
+
 
 def _read_json(path, default):
     try:
@@ -51,7 +77,7 @@ def health():
 def _request(provider, messages, timeout):
     url = provider["url"].rstrip("/") + "/chat/completions"
     key_env = provider.get("key_env", "")
-    key = os.environ.get(key_env, "") if key_env else ""
+    key = _secret_value(key_env) if key_env else ""
     payload = {
         "model": provider["model"],
         "messages": messages,
@@ -71,11 +97,16 @@ def _request(provider, messages, timeout):
     answer = data["choices"][0]["message"]["content"]
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError("empty response")
-    return answer.strip()
+    upstream_model = data.get("model")
+    if not isinstance(upstream_model, str) or not upstream_model.strip():
+        upstream_model = None
+    else:
+        upstream_model = upstream_model.strip()[:120]
+    return answer.strip(), upstream_model
 
 
-def chat(messages, timeout=25):
-    """Try eligible providers in priority order, with automatic failover."""
+def chat_with_metadata(messages, timeout=25):
+    """Return generated text and non-secret technical provider metadata."""
     candidates = providers()
     if not candidates:
         raise RuntimeError(
@@ -98,19 +129,19 @@ def chat(messages, timeout=25):
     if ready:
         candidates = ready
     else:
-        # If every provider is cooling down, probe only the earliest eligible retry.
+        # Probe every cooling provider in recovery order. A failed probe
+        # must not prevent trying the next configured provider.
         candidates.sort(key=lambda p: (
             float(states.get(p.get("id", ""), {}).get("retry_after", 0) or 0),
             states.get(p.get("id", ""), {}).get("failures", 0),
             p.get("priority", 100),
         ))
-        candidates = candidates[:1]
 
     errors = []
     for p in candidates:
         ident = p.get("id", p["url"])
         try:
-            answer = _request(p, messages, timeout)
+            answer, upstream_model = _request(p, messages, timeout)
             with LOCK:
                 states = health()
                 states[ident] = {
@@ -119,7 +150,18 @@ def chat(messages, timeout=25):
                     "retry_after": 0,
                 }
                 _write_json(STATE, states)
-            return answer
+            return {
+                "reply": answer,
+                "model_identity": {
+                    "provider_id": str(ident)[:120],
+                    "configured_model": str(p["model"])[:120],
+                    "upstream_model": upstream_model,
+                    "identity_status": (
+                        "upstream_model_reported"
+                        if upstream_model else "configured_model_only"
+                    ),
+                },
+            }
         except Exception as exc:
             # Record only a generic error class; never save keys or request text.
             errors.append(f"{ident}:{type(exc).__name__}")
@@ -136,6 +178,11 @@ def chat(messages, timeout=25):
                 _write_json(STATE, states)
 
     raise RuntimeError("IAO_ALL_PROVIDERS_FAILED: " + ", ".join(errors))
+
+
+def chat(messages, timeout=25):
+    """Backward-compatible text-only router interface."""
+    return chat_with_metadata(messages, timeout)["reply"]
 
 
 def status():
@@ -158,7 +205,7 @@ def status():
 class RouterModelAdapter:
     """Adapter compatible with the IAO chat service contract."""
 
-    def chat(self, messages):
+    def _prepare(self, messages):
         from omega.adapters.model import ModelError, SYSTEM_PROMPT
 
         prepared = list(messages)
@@ -170,9 +217,18 @@ class RouterModelAdapter:
                 "role": "system",
                 "content": SYSTEM_PROMPT,
             })
+        return prepared
 
+    def chat(self, messages):
+        """Backward-compatible text-only adapter interface."""
+        return self.chat_with_metadata(messages)["reply"]
+
+    def chat_with_metadata(self, messages):
+        from omega.adapters.model import ModelError
+
+        prepared = self._prepare(messages)
         try:
-            return chat(prepared)
+            return chat_with_metadata(prepared)
         except Exception:
             # Never pass provider response bodies, credentials, or prompts
             # into service errors or audit records.

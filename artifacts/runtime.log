@@ -1,25 +1,25 @@
-{"event": "listening", "host": "127.0.0.1", "port": 38309}
-{"m": "GET", "p": "/health/ready", "s": 200, "cid": "2bd50f0f52a9499a91648f63698a03f1"}
-{"m": "GET", "p": "/health/live", "s": 200, "cid": "a6f70b17311d4dd6834fa34ab5956f5e"}
-{"m": "GET", "p": "/health/ready", "s": 200, "cid": "9b7686275e304699815b38537758328b"}
-{"m": "GET", "p": "/v1/me", "s": 401, "cid": "120baa38882249b0bc134d549c883e87"}
-{"m": "GET", "p": "/v1/me", "s": 200, "cid": "eccabee85d1c4d3bbe917d157b946f59"}
-{"m": "POST", "p": "/v1/tasks", "s": 200, "cid": "8586d9ca3da144ce884b0452a0bab800"}
-{"m": "POST", "p": "/v1/tasks", "s": 200, "cid": "c3a33551d20240d7b83a361867c8b1eb"}
-{"m": "POST", "p": "/v1/tasks", "s": 403, "cid": "b85f2d674f754c51b44686423fc00767"}
-{"m": "GET", "p": "/v1/tasks/5a860c51-2711-47c0-9d32-c0f6af7d618c", "s": 404, "cid": "3a0729f00f65404bbffb1f8a44bc1cda"}
-{"m": "POST", "p": "/v1/tasks", "s": 200, "cid": "42b71162f43e4a26a7f6b8e9faabded1"}
-{"m": "POST", "p": "/v1/chat", "s": 404, "cid": "8324774d0ca74594aa8047058a61abe6"}
-{"m": "GET", "p": "/v1/audit/events", "s": 200, "cid": "c9058d2f0d744eefa521869ac9e15f45"}
-{"m": "POST", "p": "/v1/memory", "s": 422, "cid": "12b5d923a6d94893b2aa9aab76de7b2a"}
-{"m": "POST", "p": "/v1/memory", "s": 201, "cid": "b244eee45fde4e32bd05c3655cea0a2a"}
-{"m": "GET", "p": "/v1/memory", "s": 200, "cid": "5f4e1ef5b7bd4e869e5e2c6d63b25e3c"}
-{"m": "GET", "p": "/v1/memory/export", "s": 200, "cid": "06681f0114c4402682e28548e738b8b1"}
+{"event": "listening", "host": "127.0.0.1", "port": 36325}
+{"m": "GET", "p": "/health/ready", "s": 200, "cid": "28d3b4710e62404fb282113cd391e639"}
+{"m": "GET", "p": "/health/live", "s": 200, "cid": "43953de88bca4422aefd396d9d76da57"}
+{"m": "GET", "p": "/health/ready", "s": 200, "cid": "eac8458823c448aaa984d36041e1aa61"}
+{"m": "GET", "p": "/v1/me", "s": 401, "cid": "a83eae46f20345788e7ca5c380a6d6c3"}
+{"m": "GET", "p": "/v1/me", "s": 200, "cid": "0f117c568b6a46aaaf3686f7b5e4e59d"}
+{"m": "POST", "p": "/v1/tasks", "s": 200, "cid": "7bdf70d7e4c64a13876ab5953cc543c7"}
+{"m": "POST", "p": "/v1/tasks", "s": 200, "cid": "de3af42d05a440c4b96b9d08a92731cf"}
+{"m": "POST", "p": "/v1/tasks", "s": 403, "cid": "2a760aaddcfb499d90ffe2fd4801ce30"}
+{"m": "GET", "p": "/v1/tasks/a619be02-082a-475b-a885-3542b0122ec5", "s": 404, "cid": "623cef9e4510431eac3d620470ab8165"}
+{"m": "POST", "p": "/v1/tasks", "s": 200, "cid": "cc837f9842d84c69881dd6179f418bb5"}
+{"m": "POST", "p": "/v1/chat", "s": 404, "cid": "6be35dec1aaa4916aa7e0321848eaf5d"}
+{"m": "GET", "p": "/v1/audit/events", "s": 200, "cid": "291e1fee253541b2a7b0f0141549206d"}
+{"m": "POST", "p": "/v1/memory", "s": 422, "cid": "875c36ee5c9d493bbec46e41a9fee676"}
+{"m": "POST", "p": "/v1/memory", "s": 201, "cid": "f6a7a7e580834c039ad6493f61179505"}
+{"m": "GET", "p": "/v1/memory", "s": 200, "cid": "4a2952cacf2a4d4f8f3b735b2e62bdfd"}
+{"m": "GET", "p": "/v1/memory/export", "s": 200, "cid": "d86c7a9a60ff4b638c9026407539408a"}
 {"event":"runtime_exit","code":-9,"restarts_in_window":1}
-{"event": "listening", "host": "127.0.0.1", "port": 38309}
-{"m": "GET", "p": "/health/ready", "s": 200, "cid": "cc58b541765843d9bb56d3b4d9405678"}
-{"m": "GET", "p": "/v1/tasks/5a860c51-2711-47c0-9d32-c0f6af7d618c", "s": 200, "cid": "aff7d5865f7c4068aeb0d9b84d4a18ef"}
-{"m": "GET", "p": "/v1/memory", "s": 200, "cid": "975e39db6bee46d3b20939dd11fd8375"}
-{"m": "DELETE", "p": "/v1/memory", "s": 200, "cid": "f09a2ca7a51043729fcbe793531c5bd4"}
-{"m": "GET", "p": "/v1/memory", "s": 200, "cid": "ba9684d9161e4a2482e4f36da13e297e"}
-{"m": "GET", "p": "/health/ready", "s": 200, "cid": "2e407ed7bced446cb4a8f76c6b81850f"}
+{"event": "listening", "host": "127.0.0.1", "port": 36325}
+{"m": "GET", "p": "/health/ready", "s": 200, "cid": "482e7af23b70450f81fd0c8ee0fca88e"}
+{"m": "GET", "p": "/v1/tasks/a619be02-082a-475b-a885-3542b0122ec5", "s": 200, "cid": "9019a0fff5504af5b2bb050ef8f3eb71"}
+{"m": "GET", "p": "/v1/memory", "s": 200, "cid": "c2cbb9f608744d86a1fb8af09f7605f3"}
+{"m": "DELETE", "p": "/v1/memory", "s": 200, "cid": "55844ce3719b429c903c5448919d6302"}
+{"m": "GET", "p": "/v1/memory", "s": 200, "cid": "50ea3154789747bdbb600409542e2f08"}
+{"m": "GET", "p": "/health/ready", "s": 200, "cid": "a9ab9fad22f143939835909b2c66836c"}

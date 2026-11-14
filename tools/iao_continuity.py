@@ -2,7 +2,15 @@
 """IAO-021: continuous local supervision with bounded recovery."""
 from pathlib import Path
 from datetime import datetime, timezone
-import hashlib, json, os, socket, subprocess, sys, time, urllib.request, ssl
+import hashlib
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+import ssl
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / ".state"
@@ -69,7 +77,7 @@ def cycle(n):
             try:
                 with (STATE / "iao-continuity-supervisor.log").open("ab") as log:
                     p = subprocess.Popen(
-                        [sys.executable,"-m","omega.supervisor"],cwd=ROOT,
+                        ["bash", str(Path.home() / "start-iao.sh")],cwd=ROOT,
                         stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
                         start_new_session=True,close_fds=True)
                 r["recovery"] = {"result":"START_REQUESTED","pid":p.pid}

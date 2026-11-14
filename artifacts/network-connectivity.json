@@ -1,35 +1,41 @@
 {
-  "timestamp": "2026-10-23T00:35:40.697099+00:00",
+  "timestamp": "2026-10-23T22:13:59.855731+00:00",
   "origin": "omega.net.probe_https",
-  "state": "BLOCKED_NETWORK",
+  "state": "DIRECT_INTERNET_CONNECTED",
   "probes": [
     {
       "host": "pypi.org",
       "port": 443,
-      "timestamp": "2026-10-23T00:35:40.695658+00:00",
-      "dns": "FAIL",
-      "address": null,
-      "scope": null,
-      "tls": null,
-      "http_status": null,
-      "latency_ms": null,
-      "error_class": "DNS_FAILURE",
-      "error": "[Errno -2] Name or service not known",
-      "verdict": "BLOCKED_NETWORK"
+      "timestamp": "2026-10-23T22:13:56.214912+00:00",
+      "dns": "OK",
+      "address": "151.101.128.223",
+      "scope": "external",
+      "tls": {
+        "version": "TLSv1.3",
+        "verified": true
+      },
+      "http_status": 200,
+      "latency_ms": 1730.23,
+      "error_class": null,
+      "error": null,
+      "verdict": "DIRECT_INTERNET_CONNECTED"
     },
     {
       "host": "example.com",
       "port": 443,
-      "timestamp": "2026-10-23T00:35:40.696531+00:00",
-      "dns": "FAIL",
-      "address": null,
-      "scope": null,
-      "tls": null,
-      "http_status": null,
-      "latency_ms": null,
-      "error_class": "DNS_FAILURE",
-      "error": "[Errno -2] Name or service not known",
-      "verdict": "BLOCKED_NETWORK"
+      "timestamp": "2026-10-23T22:13:57.949602+00:00",
+      "dns": "OK",
+      "address": "104.20.23.154",
+      "scope": "external",
+      "tls": {
+        "version": "TLSv1.3",
+        "verified": true
+      },
+      "http_status": 200,
+      "latency_ms": 1898.96,
+      "error_class": null,
+      "error": null,
+      "verdict": "DIRECT_INTERNET_CONNECTED"
     }
   ]
 }

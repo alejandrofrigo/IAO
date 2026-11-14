@@ -118,6 +118,28 @@ class EgressTests(unittest.TestCase):
         mixed = lambda host, port, **k: [(2, 1, 6, "", ("93.184.216.34", port)), (2, 1, 6, "", ("127.0.0.1", port))]  # noqa: E731
         self.denied("https://good.example/", "PRIVATE_ADDRESS", allow_hosts=frozenset({"good.example"}), allowed_ports=frozenset({443}), allow_private=False, resolver=mixed)
 
+    def test_unexpected_dns_resolver_error_fails_closed(self) -> None:
+        def broken(*a: object, **k: object) -> list:
+            raise RuntimeError("resolver failure")
+
+        self.denied(
+            "https://good.example/",
+            "DNS_FAILURE",
+            allow_hosts=frozenset({"good.example"}),
+            allowed_ports=frozenset({443}),
+            resolver=broken,
+        )
+
+    def test_malformed_dns_answer_fails_closed(self) -> None:
+        malformed = lambda host, port, **k: [(2, 1, 6, "", ())]  # noqa: E731
+        self.denied(
+            "https://good.example/",
+            "DNS_INVALID_ADDRESS",
+            allow_hosts=frozenset({"good.example"}),
+            allowed_ports=frozenset({443}),
+            resolver=malformed,
+        )
+
     def test_dns_failure_classified(self) -> None:
         def boom(*a: object, **k: object) -> list:  # type: ignore[type-arg]
             raise socket.gaierror("x")

@@ -155,7 +155,13 @@ class LimitsAndIntegrityTests(Base):
         self.assertEqual(self.svc.store.verify_audit(), (True, None))
         self.assertEqual(self.call("GET", "/health/ready")[0], 200)
         c = sqlite3.connect(str(self.state / "omega.db"))
-        c.execute("UPDATE audit_event SET details=replace(details,'alice','mallory') WHERE id=3")
+        changed = c.execute(
+            "UPDATE audit_event_v2 SET details=replace(details,'alice','mallory') WHERE id=3"
+        ).rowcount
+        self.assertEqual(
+            changed, 1,
+            "AUD01 debe modificar exactamente un evento de la cadena activa"
+        )
         c.commit()
         c.close()
         ok, bad = self.svc.store.verify_audit()
