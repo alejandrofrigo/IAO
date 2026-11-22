@@ -1,5 +1,5 @@
-/* IAO public API endpoint; HTTP/2 tunnel health and CORS verified. */
-window.IAO_API_BASE = "https://gzip-mercury-intensive-terminology.trycloudflare.com";
+/* IAO public API endpoint; temporary Cloudflare Quick Tunnel. */
+window.IAO_API_BASE = "https://laundry-municipal-cooling-huntington.trycloudflare.com";
 window.iaoApiUrl = function (path) {
-  return new URL(String(path).replace(/^\/+/, ""), window.IAO_API_BASE + "/").toString();
+ return new URL(String(path).replace(/^\/+/, ""), window.IAO_API_BASE + "/").toString();
 };

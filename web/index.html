@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>IAO</title>
+<title>Chat público IAO</title>
 <style>
 :root{font-family:system-ui,sans-serif;color-scheme:dark}
 body{margin:0;background:#10141d;color:#edf2fa}
@@ -19,12 +19,12 @@ button:disabled{opacity:.5}
 .user{background:#263d60}.omega{background:#202b38}
 .status{min-height:1.5em;color:#b9d0f7}
 </style>
-<script src="./api-config.js"></script>
+
 </head>
 <body>
 <main>
-<h1>IAO</h1>
-<div class="muted">Inteligencia Artificial</div>
+<h1>Chat público IAO</h1>
+<div class="muted">Creado por Alejandro Lago · Inteligencia Artificial</div>
 <section class="panel">
 <p>Conéctate para iniciar una sesión temporal de visitante.</p>
 <button id="connect">Entrar al chat</button>
@@ -39,6 +39,7 @@ button:disabled{opacity:.5}
 <small>No compartas contraseñas, claves privadas ni datos sensibles.</small>
 </section>
 </main>
+<script src="./api-config.js"></script>
 <script>
 (() => {
   const statusEl = document.querySelector("#status");
