@@ -1,0 +1,378 @@
+(() => {
+  "use strict";
+
+  if (window.__IAO_DEVICE_AUTHORITY_LOADED__) return;
+  window.__IAO_DEVICE_AUTHORITY_LOADED__ = true;
+
+  const DB_NAME = "iao-device-authority";
+  const STORE = "identity";
+  const encoder = new TextEncoder();
+
+  const apiUrl = (path) => {
+    if (typeof window.iaoApiUrl !== "function") {
+      throw new Error("API_CONFIG_NOT_AVAILABLE");
+    }
+    return window.iaoApiUrl(path);
+  };
+
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(STORE)) {
+          request.result.createObjectStore(STORE);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function dbGet() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const req = tx.objectStore(STORE).get("primary");
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  }
+
+  async function dbPut(value) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).put(value, "primary");
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  }
+
+  async function dbDelete() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).delete("primary");
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  }
+
+  function b64url(bytes) {
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
+  function pem(label, bytes) {
+    const binary = Array.from(bytes, b => String.fromCharCode(b)).join("");
+    const base64 = btoa(binary).match(/.{1,64}/g).join("\n");
+    return `-----BEGIN ${label}-----\n${base64}\n-----END ${label}-----`;
+  }
+
+  function derInteger(bytes) {
+    let first = 0;
+    while (first < bytes.length - 1 && bytes[first] === 0) first++;
+    let value = bytes.slice(first);
+    if (value[0] & 0x80) {
+      const padded = new Uint8Array(value.length + 1);
+      padded.set(value, 1);
+      value = padded;
+    }
+    const result = new Uint8Array(value.length + 2);
+    result[0] = 0x02;
+    result[1] = value.length;
+    result.set(value, 2);
+    return result;
+  }
+
+  function rawEcdsaToDer(raw) {
+    if (raw.length !== 64) throw new Error("INVALID_ECDSA_SIGNATURE_LENGTH");
+    const r = derInteger(raw.slice(0, 32));
+    const s = derInteger(raw.slice(32, 64));
+    const sequence = new Uint8Array(r.length + s.length + 2);
+    sequence[0] = 0x30;
+    sequence[1] = r.length + s.length;
+    sequence.set(r, 2);
+    sequence.set(s, 2 + r.length);
+    return sequence;
+  }
+
+  async function post(path, body) {
+    const response = await fetch(apiUrl(path), {
+      method: "POST",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch (_) {
+      throw new Error("INVALID_SERVER_RESPONSE");
+    }
+
+    if (!response.ok) {
+      throw new Error(data.error || data.code || `HTTP_${response.status}`);
+    }
+    return data;
+  }
+
+  async function createIdentity() {
+    const generated = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    );
+
+    const spki = new Uint8Array(
+      await crypto.subtle.exportKey("spki", generated.publicKey)
+    );
+    const privateBytes = new Uint8Array(
+      await crypto.subtle.exportKey("pkcs8", generated.privateKey)
+    );
+
+    let privateKey;
+    try {
+      privateKey = await crypto.subtle.importKey(
+        "pkcs8",
+        privateBytes,
+        { name: "ECDSA", namedCurve: "P-256" },
+        false,
+        ["sign"]
+      );
+    } finally {
+      privateBytes.fill(0);
+    }
+
+    return {
+      privateKey,
+      publicKeyPem: pem("PUBLIC KEY", spki)
+    };
+  }
+
+  async function enroll(code) {
+    if (!crypto.subtle || !indexedDB) {
+      throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
+    }
+
+    const identity = await createIdentity();
+    const result = await post("/v1/device/enroll", {
+      code,
+      public_key_pem: identity.publicKeyPem
+    });
+
+    await dbPut({
+      deviceId: result.device_id,
+      privateKey: identity.privateKey,
+      algorithm: result.algorithm,
+      enrolledAt: Date.now()
+    });
+
+    return result;
+  }
+
+  async function signedStatus() {
+    const identity = await dbGet();
+    if (!identity || !identity.privateKey || !identity.deviceId) {
+      throw new Error("DEVICE_NOT_ENROLLED");
+    }
+
+    const challenge = await post("/v1/device/challenge", {
+      device_id: identity.deviceId
+    });
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const action = "status";
+    const canonical = JSON.stringify({ action });
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", encoder.encode(canonical))
+    );
+
+    const hexDigest = Array.from(
+      digest, b => b.toString(16).padStart(2, "0")
+    ).join("");
+
+    const signedText = [
+      "POST",
+      "/v1/device/command",
+      String(timestamp),
+      challenge.nonce,
+      hexDigest
+    ].join("\n");
+
+    const rawSignature = new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        identity.privateKey,
+        encoder.encode(signedText)
+      )
+    );
+
+    const signatureDer = rawEcdsaToDer(rawSignature);
+
+    return post("/v1/device/command", {
+      device_id: identity.deviceId,
+      nonce: challenge.nonce,
+      timestamp,
+      action,
+      signature: b64url(signatureDer)
+    });
+  }
+
+  function showResult(message, isError = false) {
+    const output = document.getElementById("iao-device-result");
+    if (!output) return;
+    output.textContent = message;
+    output.style.color = isError ? "#c44" : "inherit";
+  }
+
+  function addPanel() {
+    if (document.getElementById("iao-device-panel")) return;
+
+    const panel = document.createElement("section");
+    panel.id = "iao-device-panel";
+    panel.style.cssText =
+      "margin:18px auto;padding:16px;max-width:680px;" +
+      "border:1px solid #8886;border-radius:14px;" +
+      "font:inherit;";
+
+    const heading = document.createElement("h3");
+    heading.textContent = "Centro de mando · Dispositivo autorizado";
+
+    const explanation = document.createElement("p");
+    explanation.textContent =
+      "Registra este navegador con un código de un solo uso. " +
+      "La autorización disponible actualmente es únicamente de consulta.";
+
+    const input = document.createElement("input");
+    input.id = "iao-device-enrollment-code";
+    input.type = "password";
+    input.autocomplete = "off";
+    input.placeholder = "Código de enrolamiento";
+    input.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
+
+    const enrollButton = document.createElement("button");
+    enrollButton.type = "button";
+    enrollButton.textContent = "Registrar este dispositivo";
+
+    const statusButton = document.createElement("button");
+    statusButton.type = "button";
+    statusButton.textContent = "Verificar autorización";
+
+    const revokeButton = document.createElement("button");
+    revokeButton.type = "button";
+    revokeButton.textContent = "Eliminar clave local";
+
+    for (const button of [enrollButton, statusButton, revokeButton]) {
+      button.style.cssText = "padding:10px 14px;margin:5px;cursor:pointer;";
+    }
+
+    const output = document.createElement("pre");
+    output.id = "iao-device-result";
+    output.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;";
+
+    enrollButton.addEventListener("click", async () => {
+      enrollButton.disabled = true;
+      try {
+        const code = input.value.trim();
+        if (!code) throw new Error("ENROLLMENT_CODE_REQUIRED");
+        if (await dbGet()) throw new Error("DEVICE_ALREADY_ENROLLED");
+
+        const result = await enroll(code);
+        input.value = "";
+        showResult(
+          "DISPOSITIVO REGISTRADO\nID: " + result.device_id +
+          "\nAlgoritmo: " + result.algorithm
+        );
+      } catch (error) {
+        showResult("ERROR: " + error.message, true);
+      } finally {
+        enrollButton.disabled = false;
+      }
+    });
+
+    statusButton.addEventListener("click", async () => {
+      statusButton.disabled = true;
+      try {
+        const result = await signedStatus();
+        showResult(
+          "AUTORIZACIÓN VERIFICADA\n" +
+          "Acción: " + result.action +
+          "\nAutoridad: " + result.authority +
+          "\nDispositivo: " + result.device_id
+        );
+      } catch (error) {
+        showResult("ERROR: " + error.message, true);
+      } finally {
+        statusButton.disabled = false;
+      }
+    });
+
+    revokeButton.addEventListener("click", async () => {
+      if (!window.confirm(
+        "Esto elimina la clave local de este navegador. " +
+        "No revoca el dispositivo en el servidor. ¿Continuar?"
+      )) return;
+
+      try {
+        await dbDelete();
+        showResult(
+          "CLAVE LOCAL ELIMINADA\n" +
+          "Para revocación completa también debe revocarse el dispositivo en el servidor."
+        );
+      } catch (error) {
+        showResult("ERROR: " + error.message, true);
+      }
+    });
+
+    panel.append(
+      heading, explanation, input,
+      enrollButton, statusButton, revokeButton, output
+    );
+    document.body.appendChild(panel);
+
+    dbGet().then(identity => {
+      if (identity) {
+        showResult("Dispositivo registrado localmente: " + identity.deviceId);
+      } else {
+        showResult("Este navegador todavía no está registrado.");
+      }
+    }).catch(error => {
+      showResult("Almacenamiento no disponible: " + error.message, true);
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", addPanel, { once: true });
+  } else {
+    addPanel();
+  }
+})();
