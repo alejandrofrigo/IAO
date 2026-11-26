@@ -81,8 +81,7 @@ def test_backup_does_not_restore_revoked_state_or_replace_live_databases(tmp_pat
     with sqlite3.connect(identity_db) as db:
         row = db.execute("SELECT identity_id FROM operator_identities WHERE status='ACTIVE'").fetchone()
     identity_id = row[0]
-    payload = b"revoke-root-v1
-" + identity_id.encode("ascii")
+    payload = b"revoke-root-v1\\n" + identity_id.encode("ascii")
     signature = root_private.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
     identity.revoke(identity_id, signature, expected_key_version=1)
     with pytest.raises(IdentityBackupError, match="IDENTITY_BACKUP_DESTINATION_EXISTS"):
