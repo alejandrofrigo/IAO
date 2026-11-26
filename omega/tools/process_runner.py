@@ -8,13 +8,12 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
-import signal
 import time
 from typing import Any, Callable
 
 MAX_RESULT_BYTES = 1_048_576
 MAX_INPUT_BYTES = 65_536
-MAX_ADDRESS_SPACE = 1_073_741_824
+MAX_ADDRESS_SPACE = 2_147_483_648
 
 
 class ToolProcessTimeout(TimeoutError):
@@ -94,7 +93,6 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
         args=(send_conn, run, verify, payload, timeout_seconds),
         daemon=True,
     )
-    started = time.monotonic()
     process.start()
     send_conn.close()
     try:
