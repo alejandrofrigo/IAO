@@ -966,10 +966,11 @@ def test_recovery_retries_after_device_commit_and_identity_transaction_failure(t
     assert result["key_version"] == 2
     assert authority.primary_device_public_key() == new_device_public
     assert devices.verify_registered_public_key(new_device_public, owner_subject=owner)
-    assert not authority.verify_root_signature(
-        identity_id, b"old-root-probe", sign(old_root, b"old-root-probe"),
-        expected_key_version=2,
-    ) if False else True
+    with pytest.raises(OperatorIdentityError, match="INVALID_ROOT_SIGNATURE"):
+        authority.verify_root_signature(
+            identity_id, b"old-root-probe", sign(old_root, b"old-root-probe"),
+            expected_key_version=2,
+        )
     with authority._database() as db:
         final = db.execute(
             "SELECT key_version,recovery_code_digest FROM operator_identities"
