@@ -199,7 +199,6 @@ def test_device_proofs_are_bound_to_the_enrolling_operator(tmp_path):
 
 def test_operator_owner_binding_is_atomic_and_rejects_old_owner(tmp_path):
     authority, _, device_id = _enrolled_authority(tmp_path)
-    public_key = authority._connect
     with authority._database() as db:
         pem = db.execute(
             "SELECT public_key_pem FROM devices WHERE device_id=?", (device_id,)
