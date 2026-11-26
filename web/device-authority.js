@@ -603,6 +603,8 @@
 
   window.IAODeviceAuthority = Object.freeze({
     publicKeyPem,
+    prepareBootstrapIdentity,
+    signBootstrapPayload,
     prepareRecoveryIdentity,
     recoveryPublicKeyPem,
     hasRecoveryKey,
