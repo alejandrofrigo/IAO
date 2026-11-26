@@ -21,6 +21,17 @@ def test_liveness_does_not_require_database_or_model() -> None:
     assert response.json() == {"status": "live"}
 
 
+def test_readiness_never_claims_full_production_before_security_gates(monkeypatch, tmp_path) -> None:
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["production_gates"]["device_bound_command_authority"] == "not_integrated"
+    assert body["production_gates"]["independent_federation"] == "not_verified"
+    assert body["production_gates"]["model_provider"] == "not_configured"
+
+
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
