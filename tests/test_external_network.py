@@ -122,3 +122,71 @@ def test_tor_onion_directory_adapter_discovers_candidates(monkeypatch):
     source = TorOnionDirectories(["http://" + "d"*56 + ".onion/peers.json"])
     assert source.discover() == [record()]
     assert calls[0][1] == {"timeout": 15, "max_bytes": 500_000}
+
+
+def test_candidate_refresh_preserves_local_verification_state(tmp_path):
+    item = record()
+    network = ExternalNetwork(tmp_path, [Source([item])])
+    network.run_cycle()
+    registry_path = tmp_path / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    candidate = next(iter(registry["candidates"].values()))
+    candidate.update({
+        "status": "IDENTITY_VERIFIED",
+        "identity_verified": True,
+        "enrolled": True,
+        "granted_capabilities": ["knowledge.search"],
+    })
+    registry_path.write_text(json.dumps(registry))
+    network.run_cycle()
+    refreshed = next(iter(json.loads(registry_path.read_text())["candidates"].values()))
+    assert refreshed["status"] == "IDENTITY_VERIFIED"
+    assert refreshed["identity_verified"] is True
+    assert refreshed["enrolled"] is True
+    assert refreshed["granted_capabilities"] == ["knowledge.search"]
+
+
+def test_unverified_candidates_become_stale_and_are_pruned(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    network = ExternalNetwork(tmp_path, [Source([])])
+    network.state_dir.mkdir(parents=True)
+    old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    ancient = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    stale = _candidate(record(), "unit")
+    stale.update({"first_seen": old, "last_seen": old})
+    expired = _candidate(record("node-00000002"), "unit")
+    expired.update({"first_seen": ancient, "last_seen": ancient})
+    registry = {
+        "schema": 1,
+        "candidates": {stale["candidate_id"]: stale, expired["candidate_id"]: expired},
+        "p2p_peers": {},
+    }
+    (tmp_path / "registry.json").write_text(json.dumps(registry))
+    result = network.run_cycle()
+    saved = json.loads((tmp_path / "registry.json").read_text())["candidates"]
+    assert result["stale"] == 1
+    assert result["pruned"] == 1
+    assert len(saved) == 1
+    assert next(iter(saved.values()))["status"] == "STALE_UNVERIFIED"
+
+
+def test_verified_candidates_are_not_pruned_by_inventory_retention(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    network = ExternalNetwork(tmp_path, [Source([])])
+    network.state_dir.mkdir(parents=True)
+    ancient = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    item = _candidate(record(), "unit")
+    item.update({
+        "first_seen": ancient, "last_seen": ancient,
+        "status": "IDENTITY_VERIFIED", "identity_verified": True,
+        "enrolled": True,
+    })
+    (tmp_path / "registry.json").write_text(json.dumps({
+        "schema": 1, "candidates": {item["candidate_id"]: item}, "p2p_peers": {},
+    }))
+    network.run_cycle()
+    saved = json.loads((tmp_path / "registry.json").read_text())["candidates"]
+    assert item["candidate_id"] in saved
+    assert saved[item["candidate_id"]]["identity_verified"] is True

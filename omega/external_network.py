@@ -20,6 +20,8 @@ from urllib.parse import urlsplit
 MAX_CANDIDATES = 5000
 MAX_ITEMS = 1000
 DEFAULT_INTERVAL = 1800
+STALE_AFTER_SECONDS = 7 * 24 * 60 * 60
+PRUNE_AFTER_SECONDS = 30 * 24 * 60 * 60
 _LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None
 
@@ -348,9 +350,13 @@ class ExternalNetwork:
                             now = _utc()
                             p2p_peers[peer_id] = {
                                 "peer_id": peer_id, "multiaddrs": addrs,
-                                "source": source.name, "status": "DISCOVERED_UNVERIFIED",
+                                "source": source.name, "status": previous.get(
+                                    "status", "DISCOVERED_UNVERIFIED"
+                                ),
                                 "first_seen": previous.get("first_seen", now),
-                                "last_seen": now, "granted_capabilities": [],
+                                "last_seen": now, "granted_capabilities": previous.get(
+                                    "granted_capabilities", []
+                                ),
                                 "remote_code_execution": False, "private_data_access": False,
                             }
                             totals["discovered"] += 1
@@ -365,6 +371,16 @@ class ExternalNetwork:
                         item["first_seen"] = previous.get("first_seen", now) if previous else now
                         item["last_seen"] = now
                         item["observations"] = min(1_000_000, int(previous.get("observations", 1)) + 1) if previous else 1
+                        # Discovery refreshes observations, never overwrites locally
+                        # verified identity/enrollment state for the same node+origin.
+                        if previous and previous.get("node_id") == item["node_id"] and previous.get("origin") == item["origin"]:
+                            for field in (
+                                "status", "identity_verified", "enrolled",
+                                "granted_capabilities", "remote_code_execution",
+                                "private_data_access",
+                            ):
+                                if field in previous:
+                                    item[field] = previous[field]
                         candidates[item["candidate_id"]] = item
                         totals["refreshed" if previous else "added"] += 1
                     self._audit("DISCOVERY_SOURCE_COMPLETED", source=source.name,
@@ -373,6 +389,34 @@ class ExternalNetwork:
                     totals["source_errors"] += 1
                     self._audit("DISCOVERY_SOURCE_FAILED", source=source.name,
                                 error_type=type(exc).__name__)
+            # Age only unverified inventory. Enrolled/verified records are retained
+            # for explicit lifecycle/revocation handling, never silently deleted.
+            now_epoch = time.time()
+            aged = {"stale": 0, "pruned": 0}
+            for collection in (candidates, p2p_peers):
+                for key, item in list(collection.items()):
+                    try:
+                        seen = datetime.fromisoformat(
+                            str(item.get("last_seen", "")).replace("Z", "+00:00")
+                        ).timestamp()
+                    except (TypeError, ValueError, OverflowError):
+                        seen = 0.0
+                    age = max(0.0, now_epoch - seen)
+                    untrusted = (
+                        item.get("status", "DISCOVERED_UNVERIFIED") in {
+                            "DISCOVERED_UNVERIFIED", "STALE_UNVERIFIED"
+                        }
+                        and item.get("identity_verified") is not True
+                        and item.get("enrolled") is not True
+                    )
+                    if untrusted and age >= PRUNE_AFTER_SECONDS:
+                        del collection[key]
+                        aged["pruned"] += 1
+                    elif untrusted and age >= STALE_AFTER_SECONDS:
+                        if item.get("status") != "STALE_UNVERIFIED":
+                            item["status"] = "STALE_UNVERIFIED"
+                            aged["stale"] += 1
+            totals.update(aged)
             ordered = sorted(candidates.values(),
                              key=lambda item: item.get("last_seen", ""), reverse=True)
             registry["candidates"] = {
