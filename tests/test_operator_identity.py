@@ -411,15 +411,15 @@ def test_session_binding_is_invalidated_by_root_rotation_and_revocation(tmp_path
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
     rotate_payload = (
-        b"rotate-root-v1\\n" + identity["identity_id"].encode("ascii") + b"\\n"
-        + b"2\\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
+        b"rotate-root-v1\n" + identity["identity_id"].encode("ascii") + b"\n"
+        + b"2\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
     )
     authority.rotate_root(
         identity["identity_id"], new_public, sign(old_root, rotate_payload)
     )
     assert not authority.verify_authenticated_session("verified-subject")
 
-    revoke_payload = b"revoke-root-v1\\n" + identity["identity_id"].encode("ascii")
+    revoke_payload = b"revoke-root-v1\n" + identity["identity_id"].encode("ascii")
     authority.revoke(
         identity["identity_id"], sign(new_root, revoke_payload),
         expected_key_version=2,
