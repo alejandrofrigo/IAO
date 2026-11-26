@@ -464,3 +464,105 @@ def test_session_binding_is_invalidated_by_root_rotation_and_revocation(tmp_path
         expected_key_version=2,
     )
     assert not authority.verify_authenticated_session("verified-subject", token)
+
+
+def test_dual_signature_operator_login_is_one_time_and_read_only(tmp_path):
+    import base64
+    from omega.auth import verify_token
+
+    code = "operator-login-bootstrap-" + "l" * 40
+    root_private, root_public = keypair()
+    device_private, device_public = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "operator-login.sqlite3", code,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key="operator-login-session-key-" + "s" * 40,
+    )
+    identity = authority.bootstrap(code, root_public)
+    device_id, binding_payload = authority.device_binding_payload(
+        device_public, key_version=1
+    )
+    authority.bind_primary_device(
+        identity["identity_id"], device_public,
+        sign(root_private, binding_payload), expected_key_version=1,
+    )
+
+    challenge = authority.create_operator_login_challenge()
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"]
+        + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = sign(root_private, payload)
+    device_signature = device_private.sign(
+        b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    result = authority.complete_operator_login(
+        challenge["challenge"], root_signature, device_signature,
+        "operator-login-token-key-" + "k" * 40,
+    )
+    assert result["authority"] == "OPERATOR_AUTHENTICATED_READ_ONLY"
+    assert result["scopes"] == []
+    assert result["expires_in"] == 900
+    principal = verify_token(
+        "operator-login-token-key-" + "k" * 40, result["access_token"]
+    )
+    assert principal is not None
+    assert principal.subject == "operator:" + identity["identity_id"]
+    assert principal.scopes == frozenset()
+    assert authority.verify_authenticated_session(
+        principal.subject, result["access_token"]
+    )
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_LOGIN_REPLAYED"):
+        authority.complete_operator_login(
+            challenge["challenge"], root_signature, device_signature,
+            "operator-login-token-key-" + "k" * 40,
+        )
+    assert result["access_token"].encode() not in (
+        tmp_path / "operator-login.sqlite3"
+    ).read_bytes()
+    assert device_id not in challenge["signing_payload"]
+
+
+def test_dual_signature_operator_login_rejects_wrong_device_signature(tmp_path):
+    import base64
+
+    code = "operator-login-invalid-" + "m" * 40
+    root_private, root_public = keypair()
+    device_private, device_public = keypair()
+    attacker, _ = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "operator-login-invalid.sqlite3", code,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key="operator-login-session-key-" + "t" * 40,
+    )
+    identity = authority.bootstrap(code, root_public)
+    _, binding_payload = authority.device_binding_payload(device_public, key_version=1)
+    authority.bind_primary_device(
+        identity["identity_id"], device_public,
+        sign(root_private, binding_payload), expected_key_version=1,
+    )
+    challenge = authority.create_operator_login_challenge()
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"]
+        + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_LOGIN_SIGNATURE"):
+        authority.complete_operator_login(
+            challenge["challenge"], sign(root_private, payload),
+            attacker.sign(
+                b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + payload,
+                ec.ECDSA(hashes.SHA256()),
+            ),
+            "operator-login-token-key-" + "u" * 40,
+        )
+    # Failed proof does not consume the challenge; the enrolled device can retry.
+    valid_device_signature = device_private.sign(
+        b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    result = authority.complete_operator_login(
+        challenge["challenge"], sign(root_private, payload),
+        valid_device_signature, "operator-login-token-key-" + "u" * 40,
+    )
+    assert result["scopes"] == []
