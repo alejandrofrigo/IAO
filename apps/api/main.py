@@ -23,7 +23,7 @@ _allowed_origins = [
     item.strip().rstrip("/")
     for item in os.environ.get(
         "IAO_CORS_ORIGINS",
-        "https://alejandrofrigo.github.io",
+        "",
     ).split(",")
     if item.strip()
 ]
@@ -105,9 +105,15 @@ def ready():
     # explicit acceptance gates, even when the database and audit chain work.
     payload["status"] = "degraded"
     payload["production_gates"] = {
-        "device_bound_command_authority": "not_integrated",
+        "device_identity_verification": "integrated_read_only",
+        "privileged_device_commands": "disabled",
+        "identity_provider": "dev_hmac_not_oidc",
         "independent_federation": "not_verified",
-        "model_provider": "configured" if _get_service().model is not None else "not_configured",
+        "model_provider": (
+            "configured_unverified"
+            if _get_service().model is not None
+            else "not_configured"
+        ),
     }
     return JSONResponse(status_code=200, content=payload)
 
