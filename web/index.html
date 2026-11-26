@@ -93,6 +93,7 @@ button:disabled{opacity:.5}
         throw new Error("INVALID_PUBLIC_SESSION");
       }
       token = session.access_token;
+      window.dispatchEvent(new Event("iao-session-changed"));
       const conversation = await request("/v1/conversations", "POST",
         {title: "Chat público IAO"});
       if (typeof conversation.conversation_id !== "string" || !conversation.conversation_id) {
@@ -121,6 +122,7 @@ button:disabled{opacity:.5}
     } catch (e) {
       token = null;
       conversationId = null;
+      window.dispatchEvent(new Event("iao-session-changed"));
       status("No se pudo conectar: " + e.message);
     } finally {
       busy = false;
@@ -148,6 +150,7 @@ button:disabled{opacity:.5}
       if (e.status === 401) {
         token = null;
         conversationId = null;
+        window.dispatchEvent(new Event("iao-session-changed"));
         messageEl.disabled = true;
       }
     } finally {
