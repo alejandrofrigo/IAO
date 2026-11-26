@@ -619,15 +619,26 @@ class OmegaService:
             if not isinstance(proof, dict):
                 raise ApiError(400, "INVALID_DEVICE_PROOF")
             request_digest = hashlib.sha256(body).hexdigest()
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
             try:
                 self.device_authority.verify_request(
                     proof, method="POST", path="/v1/tasks",
                     request_digest=request_digest,
                     owner_subject=pr.subject,
                 )
+                self.operator_identity_authority.verify_primary_device_for_session(
+                    pr.subject, self._verified_bearer_token(headers), proof.get("device_id"),
+                )
             except DeviceAuthorityError as exc:
                 self.store.audit(
                     pr.subject, "DEVICE_REQUEST_DENIED", "task_submission",
+                    decision="DENY", reason=exc.code,
+                )
+                raise ApiError(exc.status, exc.code) from None
+            except OperatorIdentityError as exc:
+                self.store.audit(
+                    pr.subject, "OPERATOR_DEVICE_BINDING_DENIED", "task_submission",
                     decision="DENY", reason=exc.code,
                 )
                 raise ApiError(exc.status, exc.code) from None
