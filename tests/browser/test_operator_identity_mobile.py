@@ -124,9 +124,18 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 page.get_by_text("IDENTIDAD RAÍZ REGISTRADA", exact=False).wait_for(timeout=20000)
 
                 panel.get_by_role("button", name="Iniciar sesión de operador").click()
-                page.get_by_text(
-                    "SESIÓN DE OPERADOR AUTENTICADA", exact=False
-                ).wait_for(timeout=20000)
+                output = panel.locator("pre")
+                page.wait_for_function(
+                    """() => {
+                      const panel = document.querySelector('#iao-operator-identity-panel pre');
+                      return panel && (
+                        panel.textContent.includes('SESIÓN DE OPERADOR AUTENTICADA') ||
+                        panel.textContent.startsWith('ERROR:')
+                      );
+                    }""",
+                    timeout=20000,
+                )
+                assert "SESIÓN DE OPERADOR AUTENTICADA" in output.inner_text(), output.inner_text()
                 page.get_by_text(
                     "Sesión de operador autenticada. Solo lectura; sin permisos de mando.",
                     exact=False,
