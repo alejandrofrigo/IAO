@@ -191,6 +191,14 @@ class OmegaService:
             if self.store.get_conversation(cid, pr.subject) is None:
                 raise ApiError(404, "NOT_FOUND")
             if self.model is None:
+                missing_model_digest = hashlib.sha256(msg.encode()).hexdigest()
+                self.store.audit(
+                    pr.subject,
+                    "CHAT_MODEL_ERROR",
+                    cid,
+                    code="MODEL_ADAPTER_NOT_CONFIGURED",
+                    input_digest=missing_model_digest,
+                )
                 raise ApiError(503, "MODEL_ADAPTER_NOT_CONFIGURED")
             history = [{"role": r["role"].lower(), "content": r["content"]}
                        for r in (self.store.list_messages(cid, pr.subject) or []) if r["role"] in ("USER", "ASSISTANT")]
