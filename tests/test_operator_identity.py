@@ -579,6 +579,7 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
     authority = OperatorIdentityAuthority(
         tmp_path / "recover.sqlite3", bootstrap,
         bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=b"operator-recovery-test-key-" + b"a" * 40,
     )
     identity = authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
     identity_id = identity["identity_id"]
@@ -645,6 +646,7 @@ def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_sig
     authority = OperatorIdentityAuthority(
         tmp_path / "recover-signatures.sqlite3", bootstrap,
         bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=b"operator-recovery-test-key-" + b"b" * 40,
     )
     authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
     challenge = authority.create_operator_recovery_challenge(
