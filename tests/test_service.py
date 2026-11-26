@@ -413,7 +413,7 @@ class AuthTests(Base):
             ec.ECDSA(hashes.SHA256()),
         )
         device_signature = device.sign(
-            b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + binding_payload,
+            b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\x00" + binding_payload,
             ec.ECDSA(hashes.SHA256()),
         )
         request_body = {
@@ -460,7 +460,7 @@ class AuthTests(Base):
                 ).decode().rstrip("="),
                 "device_signature": base64.urlsafe_b64encode(
                     device.sign(
-                        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + login_payload,
+                        b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + login_payload,
                         ec.ECDSA(hashes.SHA256()),
                     )
                 ).decode().rstrip("="),
@@ -521,7 +521,7 @@ class AuthTests(Base):
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
         body["device_signature"] = base64.urlsafe_b64encode(
             device.sign(
-                b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + payload,
+                b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\x00" + payload,
                 ec.ECDSA(hashes.SHA256()),
             )
         ).decode().rstrip("=")
