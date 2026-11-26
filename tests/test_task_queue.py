@@ -4,7 +4,6 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 
 from omega.store import Store
@@ -40,9 +39,11 @@ class DurableTaskQueueTests(unittest.TestCase):
         second = Store(self.db_path, AUDIT_KEY)
         barrier = threading.Barrier(2)
 
-        def claim(store: Store, worker: str) -> dict | None:
+        results: list[dict | None] = []
+
+        def claim(store: Store, worker: str) -> None:
             barrier.wait(timeout=5)
-            return store.claim_next_task(worker, lease_seconds=60)
+            results.append(store.claim_next_task(worker, lease_seconds=60))
 
         try:
             first_thread = threading.Thread(
@@ -58,8 +59,8 @@ class DurableTaskQueueTests(unittest.TestCase):
             self.assertFalse(first_thread.is_alive())
             self.assertFalse(second_thread.is_alive())
 
-            # Collect results deterministically in a second, sequential check:
-            # the unique row is already RUNNING and cannot be claimed again.
+            self.assertEqual(len(results), 2)
+            self.assertEqual(sum(result is not None for result in results), 1)
             self.assertIsNone(self.store.claim_next_task("worker-c"))
             row = self.store.get_task("task-1", "owner-a")
             self.assertEqual(row["state"], "RUNNING")
