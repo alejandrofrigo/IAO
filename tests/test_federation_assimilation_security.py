@@ -83,7 +83,7 @@ class FederationEndpointSafetyTests(unittest.TestCase):
                 registry.authorize(item["candidate_id"])
             self.assertFalse(registry.get(item["candidate_id"])["authorized"])
 
-    def test_valid_signed_identity_can_be_reverified_for_autonomous_policy(self):
+    def test_valid_signed_identity_does_not_bypass_untrusted_transport_gate(self):
         """La revalidación usa la firma Ed25519, nonce y nodo esperado."""
         import hashlib
         import time
