@@ -19,8 +19,10 @@ permanently stranded. This does not itself implement or authorize production
 recovery; a separately provisioned, expiring bootstrap capability is still
 required, and recovery remains outside the API/session flow.
 
-The registry implements persistent session-association primitives and the
-authenticated service exposes challenge, bind and read-only status routes.
+The registry implements persistent session-association primitives. The
+service exposes challenge, bind and read-only status routes, plus a
+rate-limited one-time bootstrap endpoint that is disabled unless deployment
+configuration supplies an out-of-band secret and expiry.
 A challenge is bound to the server-supplied authenticated subject digest,
 active root identity digest, root key version, one-time nonce, expiry and
 fixed protocol purpose; the root signature is verified and the challenge is
@@ -32,10 +34,17 @@ subject substitution, guest rejection, invalid signature, replay, expiry,
 restart persistence, rotation and revocation. The production service stores
 the registry in its persistent state directory.
 
-This is still not an end-to-end operator identity system. The browser root-key
-lifecycle, trusted bootstrap provisioning, device-to-root binding, enforcement
-of the association on protected device/task routes, and safe recovery remain
-unimplemented. The current public session remains guest-only, and the current
+Browser support now exists in web/operator-identity.js: it generates a P-256
+key in the browser, imports the private component as a non-extractable
+WebCrypto key, stores that CryptoKey in IndexedDB, submits only the public key
+for bootstrap, and signs the session challenge locally. The bootstrap
+capability is cleared from the input and is not persisted. This browser path
+has not yet passed target-mobile-browser end-to-end testing.
+
+This is still not an end-to-end operator identity system. Trusted deployment
+provisioning, a usable non-guest authentication/session provider, device-to-root
+binding, enforcement of the association on protected device/task routes, and
+safe recovery remain unimplemented. The current public session remains guest-only, and the current
 device proof proves possession of one separately enrolled device key only.
 The new status is explicitly READ_ONLY and does not grant scopes or task
 authority. No command authority may be claimed until those integrations and
@@ -117,18 +126,28 @@ subject argument is designed to come from a server-verified principal, never
 from a caller-supplied field. Guest principals are rejected. A root signature
 does not create a session or grant scopes; it only authorizes association.
 
-**Implemented:** authenticated challenge, bind and read-only status API
-routes; the authenticated subject is always taken from the verified bearer
-principal, guest sessions are rejected, challenge consumption is atomic, and
-the persistent registry is injected by the production service.
+**Implemented:** one-time bootstrap API; bootstrap rate limit; explicit
+deployment-only secret and expiry configuration; authenticated challenge,
+bind and read-only status API routes; subject taken only from the verified
+bearer principal; guest rejection; atomic challenge consumption; persistent
+registry; browser-side P-256 key generation, non-extractable private-key
+storage and local challenge signing.
 
-**Still pending:** provision the bootstrap capability safely, generate and
-retain the root private key in browser WebCrypto as non-extractable material,
-complete mobile-browser signing, cryptographically cross-check the enrolled
-device key against the root-signed device binding, and enforce current session
-association plus device binding on protected device/task routes. Until those
-gates pass, the association endpoint is informational/read-only and must not
-be treated as command authority.
+**Deployment configuration:** set IAO_OPERATOR_BOOTSTRAP_CODE to a
+high-entropy, one-time secret delivered out of band, and
+IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT to its short validity deadline as a Unix
+timestamp. Leave both unset to keep bootstrap disabled. Never put the secret
+in source control, public build artifacts, URLs, analytics or logs. Remove the
+environment secret after successful bootstrap; the database also enforces
+single-use consumption.
+
+**Still pending:** verify this flow in the target mobile browser, provide a
+non-guest authentication/session provider, cryptographically cross-check the
+enrolled device key against the root-signed device binding, and enforce current
+session association plus device binding on protected device/task routes. The
+public chat currently creates guest sessions only, which are intentionally
+rejected by session association. Until the remaining gates pass, the endpoint
+is informational/read-only and must not be treated as command authority.
 
 ## Authorization and task flow
 
