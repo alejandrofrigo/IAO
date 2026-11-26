@@ -17,6 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title="IAO API", version="11.2.0")
 _service = None
 _device_authority = None
+_federation_node = None
+_federation_lock = threading.Lock()
+_federation_worker_status = {"autojoin": False, "discovery": False, "external_network": False}
 _service_lock = threading.Lock()
 
 _allowed_origins = [
@@ -60,24 +63,181 @@ async def _device_json(request: Request):
     return payload if isinstance(payload, dict) else None
 
 
-def _get_service():
-    """Create one process-wide service over the configured persistent state."""
-    global _service
-    if _service is not None:
-        return _service
-    with _service_lock:
-        if _service is not None:
-            return _service
-        token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
-        audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
-        if len(token_key) < 32 or len(audit_key) < 32:
-            raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
-        from omega.server import build_service
-
+def _ensure_federation(service):
+    """Create the local federation identity and start bounded discovery workers once."""
+    global _federation_node
+    with _federation_lock:
+        if _federation_node is not None:
+            return _federation_node
         state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
-        corpus_dir = Path(os.environ.get("IAO_CORPUS_DIR", "/app/knowledge"))
-        _service = build_service(state_dir, token_key, corpus_dir)
-        return _service
+        from omega.federation import Node
+        from omega.federation_identity import load_or_create_key
+        from omega.federation_ledger import FederationLedger
+
+        key = load_or_create_key(state_dir / "federation-node-ed25519.key")
+        ledger = FederationLedger(
+            state_dir / "federation-audit.jsonl",
+            state_dir / "federation-audit.key",
+        )
+        node = Node(
+            service.store,
+            service.registry,
+            key=key,
+            peer_store_path=state_dir / "federation-peers.json",
+            audit_fn=ledger.append,
+        )
+        ledger.append(
+            "system", "FEDERATION_NODE_READY", node.node_id,
+            capabilities=sorted(node.served),
+        )
+        _federation_node = node
+
+        starters = (
+            ("autojoin", "omega.federation_autojoin", "start_federation_autojoin"),
+            ("discovery", "omega.federation_discovery", "start_federation_discovery"),
+            ("external_network", "omega.external_network", "start_external_network"),
+        )
+        for status_key, module_name, function_name in starters:
+            try:
+                module = __import__(module_name, fromlist=[function_name])
+                starter = getattr(module, function_name)
+                if status_key == "external_network":
+                    started = starter(state_dir / "external-network", fed_node=node)
+                elif status_key == "autojoin":
+                    started = starter(node, state_dir)
+                else:
+                    started = starter(state_dir)
+                _federation_worker_status[status_key] = started is not False
+            except Exception as exc:
+                _federation_worker_status[status_key] = False
+                try:
+                    service.store.audit(
+                        "system", "FEDERATION_WORKER_START_FAILED",
+                        status_key, error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    pass
+        return node
+
+
+def _get_federation_node():
+    service = _get_service()
+    return _ensure_federation(service)
+
+
+def _get_service():
+    """Create the persistent service and activate federation discovery in this API process."""
+    global _service
+    if _service is None:
+        with _service_lock:
+            if _service is None:
+                token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+                audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
+                if len(token_key) < 32 or len(audit_key) < 32:
+                    raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
+                from omega.server import build_service
+
+                state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+                corpus_dir = Path(os.environ.get("IAO_CORPUS_DIR", "/app/knowledge"))
+                _service = build_service(state_dir, token_key, corpus_dir)
+    service = _service
+    _ensure_federation(service)
+    return service
+
+
+
+def _federation_json(status: int, payload: dict):
+    return JSONResponse(
+        status_code=status,
+        content=payload,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+async def _federation_body(request: Request):
+    if request.headers.get("transfer-encoding"):
+        return None, _federation_json(400, {"error": "INVALID_TRANSFER_ENCODING"})
+    raw_length = request.headers.get("content-length")
+    try:
+        length = int(raw_length) if raw_length is not None else -1
+    except ValueError:
+        length = -1
+    from omega.federation import MAX_MSG
+    if length < 0:
+        return None, _federation_json(411, {"error": "CONTENT_LENGTH_REQUIRED"})
+    if length > MAX_MSG:
+        return None, _federation_json(413, {"error": "PAYLOAD_TOO_LARGE"})
+    body = await request.body()
+    if len(body) != length:
+        return None, _federation_json(400, {"error": "INCOMPLETE_BODY"})
+    return body, None
+
+
+@app.get("/fed/v1/contract")
+def federation_contract():
+    try:
+        node = _get_federation_node()
+        return _federation_json(200, node.contract_for_self(sorted(node.served)))
+    except Exception:
+        return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+
+
+@app.get("/fed/v1/publication")
+def federation_publication():
+    try:
+        node = _get_federation_node()
+        origin = os.environ.get("IAO_FEDERATION_PUBLIC_ORIGIN", "").strip().rstrip("/")
+        if os.environ.get("IAO_FEDERATION_PUBLIC_PEERING", "").lower() != "true" or not origin:
+            return _federation_json(404, {"error": "PUBLIC_PEERING_NOT_OFFERED"})
+        from urllib.parse import urlsplit
+        parsed = urlsplit(origin)
+        if (parsed.scheme != "https" or not parsed.hostname
+                or parsed.username or parsed.password
+                or parsed.port not in (None, 443)
+                or parsed.path or parsed.query or parsed.fragment):
+            return _federation_json(503, {"error": "PUBLIC_PEERING_CONFIG_INVALID"})
+        publication = node.identity_publication(
+            origin + "/fed/v1/message",
+            capabilities=sorted(node.served),
+            consent=True,
+        )
+        return _federation_json(200, publication)
+    except Exception:
+        return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+
+
+@app.get("/fed/v1/identity")
+def federation_identity():
+    try:
+        return _federation_json(200, _get_federation_node().identity_document())
+    except Exception:
+        return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+
+
+@app.post("/fed/v1/handshake")
+async def federation_handshake(request: Request):
+    try:
+        node = _get_federation_node()
+        body, error = await _federation_body(request)
+        if error is not None:
+            return error
+        status, payload = node.answer_challenge(body)
+        return _federation_json(status, payload)
+    except Exception:
+        return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+
+
+@app.post("/fed/v1/message")
+async def federation_message(request: Request):
+    try:
+        node = _get_federation_node()
+        body, error = await _federation_body(request)
+        if error is not None:
+            return error
+        status, payload = node.handle(body)
+        return _federation_json(status, payload)
+    except Exception:
+        return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
 @app.get("/health/live")
@@ -110,7 +270,11 @@ def ready():
         "operator_root_bootstrap": "out_of_band_configurable_not_verified",
         "privileged_device_commands": "disabled",
         "identity_provider": "dev_hmac_not_oidc",
-        "independent_federation": "not_verified",
+        "independent_federation": (
+            "discovery_workers_started_unverified"
+            if any(_federation_worker_status.values())
+            else "not_started_or_unavailable"
+        ),
         "model_provider": (
             "configured_unverified"
             if _get_service().model is not None
