@@ -23,6 +23,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+MAX_ACTIVE_CHALLENGES_PER_DEVICE = 5
+CHALLENGE_TTL_SECONDS = 60
+
 
 class DeviceAuthorityError(RuntimeError):
     def __init__(self, code: str, status: int = 400) -> None:
@@ -60,6 +63,9 @@ class DeviceAuthority:
                 );
                 CREATE INDEX IF NOT EXISTS device_challenges_expiry
                     ON device_challenges(expires_at);
+                CREATE INDEX IF NOT EXISTS device_challenges_device_active
+                    ON device_challenges(device_id, expires_at)
+                    WHERE consumed_at IS NULL;
                 """
             )
         try:
@@ -149,15 +155,29 @@ class DeviceAuthority:
             if row is None or row["active"] != 1:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("DEVICE_NOT_FOUND", 404)
+            # Bound persistent state even if a caller repeatedly requests
+            # challenges without completing the signed proof. BEGIN IMMEDIATE
+            # makes the per-device cap atomic across server processes.
+            db.execute(
+                "DELETE FROM device_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL",
+                (now,),
+            )
+            active_count = db.execute(
+                """
+                SELECT COUNT(*) FROM device_challenges
+                WHERE device_id=? AND consumed_at IS NULL AND expires_at > ?
+                """,
+                (device_id, now),
+            ).fetchone()[0]
+            if active_count >= MAX_ACTIVE_CHALLENGES_PER_DEVICE:
+                db.execute("ROLLBACK")
+                raise DeviceAuthorityError("DEVICE_CHALLENGE_RATE_LIMITED", 429)
             db.execute(
                 "INSERT INTO device_challenges(nonce,device_id,expires_at) VALUES(?,?,?)",
-                (nonce, device_id, now + 60),
-            )
-            db.execute(
-                "DELETE FROM device_challenges WHERE expires_at < ?", (now - 300,)
+                (nonce, device_id, now + CHALLENGE_TTL_SECONDS),
             )
             db.execute("COMMIT")
-        return {"nonce": nonce, "expires_in": 60}
+        return {"nonce": nonce, "expires_in": CHALLENGE_TTL_SECONDS}
 
     def verify_status(self, payload: Any) -> dict[str, str]:
         if not isinstance(payload, dict):
