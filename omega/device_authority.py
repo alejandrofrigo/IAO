@@ -207,7 +207,7 @@ class DeviceAuthority:
         try:
             key.verify(
                 signature,
-                b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + payload,
+                b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\x00" + payload,
                 ec.ECDSA(hashes.SHA256()),
             )
         except (InvalidSignature, ValueError, TypeError):
