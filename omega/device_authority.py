@@ -249,7 +249,7 @@ class DeviceAuthority:
         except (ValueError, TypeError):
             raise DeviceAuthorityError("INVALID_SIGNATURE", 401) from None
 
-        signed_text = "\\n".join(
+        signed_text = "\n".join(
             [method, path, str(timestamp), nonce, request_digest]
         ).encode("utf-8")
         with self.lock, self._database() as db:
