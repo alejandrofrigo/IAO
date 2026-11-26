@@ -120,49 +120,31 @@ def ready():
 
 @app.post("/v1/device/enroll")
 async def device_enroll(request: Request):
-    from omega.device_authority import DeviceAuthorityError
-
-    payload = await _device_json(request)
-    if payload is None:
-        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
-    try:
-        result = _get_device_authority().enroll(
-            payload.get("code"),
-            payload.get("public_key_pem"),
-        )
-        return JSONResponse(status_code=201, content=result)
-    except DeviceAuthorityError as exc:
-        return JSONResponse(status_code=exc.status, content={"error": exc.code})
+    return await _device_service_route(request, "/v1/device/enroll")
 
 
 @app.post("/v1/device/challenge")
 async def device_challenge(request: Request):
-    from omega.device_authority import DeviceAuthorityError
-
-    payload = await _device_json(request)
-    if payload is None:
-        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
-    try:
-        return JSONResponse(
-            status_code=200,
-            content=_get_device_authority().challenge(payload.get("device_id")),
-        )
-    except DeviceAuthorityError as exc:
-        return JSONResponse(status_code=exc.status, content={"error": exc.code})
+    return await _device_service_route(request, "/v1/device/challenge")
 
 
 @app.post("/v1/device/command")
 async def device_command(request: Request):
-    from omega.device_authority import DeviceAuthorityError
+    return await _device_service_route(request, "/v1/device/command")
 
-    payload = await _device_json(request)
-    if payload is None:
-        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
+
+async def _device_service_route(request: Request, path: str):
+    """Keep device endpoints behind the same authenticated service boundary."""
     try:
-        result = _get_device_authority().verify_status(payload)
-        return JSONResponse(status_code=200, content=result)
-    except DeviceAuthorityError as exc:
-        return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        service = _get_service()
+        body = await request.body()
+        headers = {key.lower(): value for key, value in request.headers.items()}
+        status, payload = service.handle("POST", path, headers, body)
+        return JSONResponse(status_code=status, content=payload)
+    except RuntimeError:
+        return JSONResponse(
+            status_code=503, content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE"}
+        )
 
 
 @app.api_route(
