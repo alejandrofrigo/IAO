@@ -195,6 +195,8 @@ class OmegaService:
             if os.environ.get("IAO_DEVICE_ENROLLMENT_ENABLED", "").strip() != "1":
                 raise ApiError(403, "DEVICE_ENROLLMENT_DISABLED")
             pr = self._auth(headers)
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             data = self._json(body)
             try:
                 enrolled = self.device_authority.enroll(
@@ -203,7 +205,7 @@ class OmegaService:
             except DeviceAuthorityError as exc:
                 raise ApiError(exc.status, exc.code) from None
             self.store.audit(
-                "system", "DEVICE_ENROLLED", "primary_device",
+                pr.subject, "DEVICE_ENROLLED", "primary_device",
                 algorithm=enrolled["algorithm"],
             )
             # The client derives the public-key fingerprint locally.
@@ -231,6 +233,8 @@ class OmegaService:
         if method == "POST" and p == "/v1/device/challenge":
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             data = self._json(body)
             try:
                 challenge = self.device_authority.challenge(data.get("device_id"))
