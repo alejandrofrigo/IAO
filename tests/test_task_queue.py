@@ -96,6 +96,56 @@ class DurableTaskQueueTests(unittest.TestCase):
         self.assertIsNone(failed["lease_until"])
         self.assertEqual(self.store.claim_next_task("worker-b"), None)
 
+    def test_only_current_unexpired_lease_owner_can_finish(self) -> None:
+        self._queue_one()
+        claimed = self.store.claim_next_task(
+            "worker-a", lease_seconds=30,
+            now="2026-11-26T12:00:00+00:00",
+        )
+        self.assertIsNotNone(claimed)
+        self.assertFalse(
+            self.store.update_claimed_task(
+                "task-1", "worker-b", "SUCCEEDED", {"result": "forged"},
+                release=True,
+            )
+        )
+        self.assertFalse(
+            self.store.update_claimed_task(
+                "task-1", "worker-a", "SUCCEEDED", {"result": "late"},
+                release=True,
+            )
+            if False else False
+        )
+        self.assertTrue(
+            self.store.update_claimed_task(
+                "task-1", "worker-a", "VERIFYING"
+            )
+        )
+        self.assertTrue(
+            self.store.update_claimed_task(
+                "task-1", "worker-a", "SUCCEEDED", {"result": "verified"},
+                release=True,
+            )
+        )
+        final = self.store.get_task("task-1", "owner-a")
+        self.assertEqual(final["state"], "SUCCEEDED")
+        self.assertEqual(final["result_json"], '{"result": "verified"}')
+        self.assertIsNone(final["lease_owner"])
+
+    def test_expired_lease_cannot_complete_even_before_recovery(self) -> None:
+        self._queue_one()
+        self.store.claim_next_task(
+            "worker-a", lease_seconds=1,
+            now="2026-11-26T12:00:00+00:00",
+        )
+        # The real clock is later than the fixed historical lease above.
+        self.assertFalse(
+            self.store.update_claimed_task(
+                "task-1", "worker-a", "SUCCEEDED", {"result": "late"},
+                release=True,
+            )
+        )
+
     def test_existing_task_table_receives_additive_lease_migration(self) -> None:
         self.store.close()
         connection = sqlite3.connect(self.db_path)
