@@ -44,10 +44,13 @@ may be claimed until those integrations and their end-to-end tests pass.
 1. **Operator root key**: a P-256 signing key generated client-side. Its private
    component never leaves the trusted operator device or an explicitly
    controlled offline recovery medium. The server stores only its public key.
-2. **Device key**: a distinct P-256 key per enrolled device. The operator root
-   key signs a canonical device-binding statement containing the device public
-   key, key algorithm, a random enrollment identifier, creation time and
-   permitted device class. The device key signs individual requests.
+2. **Device key**: a distinct P-256 key per enrolled device. The isolated
+   registry currently signs a canonical binding statement containing the
+   derived device-key identifier, public-key digest, root key version, protocol
+   version and PRIMARY role. It does not yet include a challenge nonce,
+   enrollment expiry or device-class policy; those fields must be added to the
+   end-to-end enrollment protocol before production activation. The device key
+   signs individual requests.
 3. **Session token**: short-lived transport convenience only. A token may name
    an opaque durable operator subject, but cannot create, rotate or recover an
    identity and cannot replace request signatures.
@@ -86,6 +89,22 @@ fixed route, timestamp, nonce and digest of the exact request bytes.
   policy exists. Do not silently enroll a replacement.
 - Device status remains read-only. Enrollment and identity proof alone grant
   no WRITE, EXECUTE, DEPLOY, CREDENTIAL or ADMIN capability.
+
+## Session association (not yet implemented)
+
+A non-guest bearer token is not, by itself, proof that its subject owns the
+root key. Before a session can be associated with an operator identity, the
+server must verify a fresh root-key signature over a domain-separated,
+canonical statement that binds the intended session subject, identity key
+version, challenge nonce, expiry and fixed protocol purpose. The challenge
+must be one-time, stored server-side, scoped to the authenticated session,
+consumed atomically, and invalidated on root rotation or revocation. The
+subject must come from a server-verified authentication principal, never from
+a caller-supplied field. A root signature must not create a session or grant
+scopes; it only authorizes the association. Guest principals are always
+rejected. This association requires persistence, concurrency/replay tests,
+privacy review and browser integration before any device/task route may rely
+on it.
 
 ## Authorization and task flow
 
