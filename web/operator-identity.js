@@ -112,20 +112,25 @@
   }
   async function bootstrap(code) {
     if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
-    if (await readIdentity()) throw new Error("ROOT_IDENTITY_ALREADY_STORED");
-    const key = await generateRootKey();
-    await writeIdentity({ privateKey: key.privateKey, publicKeyPem: key.publicKeyPem, createdAt: Date.now() });
-    try {
-      const result = await request("/v1/operator/bootstrap", "POST", {
-        code, root_public_key_pem: key.publicKeyPem
-      });
-      const stored = await readIdentity();
-      await writeIdentity({ ...stored, keyVersion: result.key_version });
-      return result;
-    } catch (error) {
-      await deleteIdentity();
-      throw error;
+    let stored = await readIdentity();
+    if (stored && stored.keyVersion) throw new Error("ROOT_IDENTITY_ALREADY_REGISTERED");
+    if (!stored) {
+      const key = await generateRootKey();
+      stored = {
+        privateKey: key.privateKey,
+        publicKeyPem: key.publicKeyPem,
+        createdAt: Date.now(),
+        bootstrapPending: true
+      };
+      // Keep the key if the network outcome is ambiguous: the server may have
+      // consumed the one-time code before a response was lost.
+      await writeIdentity(stored);
     }
+    const result = await request("/v1/operator/bootstrap", "POST", {
+      code, root_public_key_pem: stored.publicKeyPem
+    });
+    await writeIdentity({ ...stored, keyVersion: result.key_version, bootstrapPending: false });
+    return result;
   }
   async function associateSession() {
     const identity = await readIdentity();
