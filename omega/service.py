@@ -173,8 +173,8 @@ class OmegaService:
                 },
             }
         if method == "POST" and p == "/v1/operator/bootstrap":
-            if self.operator_identity_authority is None:
-                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_BOOTSTRAP_UNAVAILABLE")
             now = self.clock()
             with self._rl:
                 while self._operator_bootstrap_hits and self._operator_bootstrap_hits[0] < now - 60:
@@ -187,30 +187,67 @@ class OmegaService:
             data = self._json(body)
             code = data.get("code")
             recovery_code = data.get("recovery_code")
-            public_key = data.get("root_public_key_pem")
+            root_public_key = data.get("root_public_key_pem")
+            device_public_key = data.get("device_public_key_pem")
+            root_encoded = data.get("root_signature")
+            device_encoded = data.get("device_signature")
             if (
                 not isinstance(code, str) or not 32 <= len(code) <= 512
                 or not isinstance(recovery_code, str) or not 32 <= len(recovery_code) <= 512
                 or hmac.compare_digest(code, recovery_code)
-                or not isinstance(public_key, str) or not 1 <= len(public_key) <= 4096
+                or not isinstance(root_public_key, str) or not 1 <= len(root_public_key) <= 4096
+                or not isinstance(device_public_key, str) or not 1 <= len(device_public_key) <= 4096
+                or not isinstance(root_encoded, str) or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", root_encoded)
+                or not isinstance(device_encoded, str) or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", device_encoded)
             ):
                 raise ApiError(400, "INVALID_OPERATOR_BOOTSTRAP")
             try:
-                result = self.operator_identity_authority.bootstrap(
-                    code, public_key, recovery_code=recovery_code,
+                root_signature = base64.b64decode(
+                    root_encoded + "=" * (-len(root_encoded) % 4),
+                    altchars=b"-_", validate=True,
                 )
+                device_signature = base64.b64decode(
+                    device_encoded + "=" * (-len(device_encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                identity = self.operator_identity_authority.bootstrap(
+                    code, root_public_key, recovery_code=recovery_code,
+                )
+                owner_subject = "operator:" + identity["identity_id"]
+                _, binding_payload = self.operator_identity_authority.device_binding_payload(
+                    device_public_key, key_version=identity["key_version"],
+                )
+                self.operator_identity_authority.verify_root_signature(
+                    identity["identity_id"], binding_payload, root_signature,
+                    expected_key_version=identity["key_version"],
+                )
+                self.operator_identity_authority.bind_primary_device(
+                    identity["identity_id"], device_public_key, root_signature,
+                    expected_key_version=identity["key_version"],
+                )
+                enrolled = self.device_authority.enroll_bootstrap_primary_device(
+                    device_public_key, owner_subject=owner_subject,
+                    signature=device_signature,
+                )
+            except (binascii.Error, ValueError):
+                raise ApiError(400, "INVALID_OPERATOR_BOOTSTRAP_PROOF") from None
             except OperatorIdentityError as exc:
-                # Never echo or audit the supplied bootstrap capability or key.
+                raise ApiError(exc.status, exc.code) from None
+            except DeviceAuthorityError as exc:
                 raise ApiError(exc.status, exc.code) from None
             self.store.audit(
-                "operator_bootstrap", "OPERATOR_ROOT_BOOTSTRAPPED",
+                "operator_bootstrap", "OPERATOR_ROOT_AND_DEVICE_BOOTSTRAPPED",
                 "root_identity", decision="ALLOW",
-                key_version=result["key_version"],
+                key_version=identity["key_version"],
+                device_algorithm=enrolled["algorithm"],
+                authority="READ_ONLY",
             )
             return 201, {
                 "algorithm": "ECDSA-P256-SHA256",
-                "key_version": result["key_version"],
-                "status": "ROOT_REGISTERED",
+                "key_version": identity["key_version"],
+                "status": "ROOT_AND_DEVICE_REGISTERED",
+                "authority": "OPERATOR_BOOTSTRAPPED_READ_ONLY",
+                "device_registered": True,
             }
 
         if method == "POST" and p == "/v1/operator/recovery/status":
