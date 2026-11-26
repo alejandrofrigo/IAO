@@ -78,7 +78,7 @@ class FederationEndpointSafetyTests(unittest.TestCase):
                 }
                 registry._save(data)
             with self.assertRaisesRegex(
-                AssimilationError, "VERIFICATION_EVIDENCE_HASH_MISMATCH"
+                AssimilationError, "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
             ):
                 registry.authorize(item["candidate_id"])
             self.assertFalse(registry.get(item["candidate_id"])["authorized"])
