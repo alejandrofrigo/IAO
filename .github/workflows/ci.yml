@@ -37,7 +37,7 @@ jobs:
         run: python -m pip check
 
       - name: Lint production integration
-        run: python -m ruff check apps/api/main.py omega/device_authority.py omega/service.py tests/test_production_api.py
+        run: python -m ruff check apps/api/main.py omega/device_authority.py omega/service.py omega/store.py tests/test_production_api.py tests/test_federation_status_truth.py tests/test_store_file_permissions.py
 
       - name: Report repository-wide legacy lint debt
         continue-on-error: true
