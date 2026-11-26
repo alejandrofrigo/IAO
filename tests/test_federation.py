@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -27,6 +28,8 @@ def mk(tmp: str, name: str, clock) -> Node:  # type: ignore[no-untyped-def]
 
 class FedBase(unittest.TestCase):
     def setUp(self) -> None:
+        self._old_loopback_http = os.environ.get("IAO_ALLOW_LOOPBACK_HTTP")
+        os.environ["IAO_ALLOW_LOOPBACK_HTTP"] = "1"
         self.t = [1_000_000.0]
         self.clock = lambda: self.t[0]
         self.tmp = tempfile.TemporaryDirectory()
@@ -289,6 +292,19 @@ class PartitionAndHostilePeerTests(FedBase):
         self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
         r = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
         self.assertFalse(r["ok"])
+
+    def test_loopback_http_requires_explicit_integration_flag(self) -> None:
+        os.environ.pop("IAO_ALLOW_LOOPBACK_HTTP", None)
+        try:
+            result = self.a.send(
+                self.b.node_id, self.sb.url, "knowledge.search", Q
+            )
+            self.assertEqual(
+                (result["ok"], result["error"]),
+                (False, "LOOPBACK_HTTP_DISABLED"),
+            )
+        finally:
+            os.environ["IAO_ALLOW_LOOPBACK_HTTP"] = "1"
 
     def test_send_requires_a_pinned_peer_endpoint(self) -> None:
         endpoint = self.a.peers[self.b.node_id].pop("endpoint")
