@@ -231,6 +231,33 @@ class QueuedTaskApiTests(Base):
         )
         self.assertFalse(worker.run_once())
 
+    def test_queued_mode_rejects_non_read_only_capability(self) -> None:
+        self.svc.registry.register(
+            ToolSpec(
+                "test.write", "1", "test.write", "WRITE",
+                1.0, lambda value: value, lambda value: value,
+                lambda output: "PASS",
+            )
+        )
+        status, response = self.call(
+            "POST", "/v1/tasks", self.tok("queued-user", ["test.write"]),
+            {
+                "goal": "attempt queued write",
+                "capability": "test.write",
+                "input": {"value": "x"},
+                "execution_mode": "queued",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(response["state"], "DENIED")
+        self.assertEqual(
+            response["reason"], "QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY"
+        )
+        self.assertEqual(
+            self.svc.store.get_task(response["task_id"], "queued-user")["state"],
+            "DENIED",
+        )
+
     def test_queued_mode_rejects_non_string_mode(self) -> None:
         status, payload = self.call(
             "POST", "/v1/tasks", self.tok("queued-user"),
