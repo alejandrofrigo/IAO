@@ -98,23 +98,13 @@ class DurableTaskQueueTests(unittest.TestCase):
 
     def test_only_current_unexpired_lease_owner_can_finish(self) -> None:
         self._queue_one()
-        claimed = self.store.claim_next_task(
-            "worker-a", lease_seconds=30,
-            now="2026-11-26T12:00:00+00:00",
-        )
+        claimed = self.store.claim_next_task("worker-a", lease_seconds=300)
         self.assertIsNotNone(claimed)
         self.assertFalse(
             self.store.update_claimed_task(
                 "task-1", "worker-b", "SUCCEEDED", {"result": "forged"},
                 release=True,
             )
-        )
-        self.assertFalse(
-            self.store.update_claimed_task(
-                "task-1", "worker-a", "SUCCEEDED", {"result": "late"},
-                release=True,
-            )
-            if False else False
         )
         self.assertTrue(
             self.store.update_claimed_task(
@@ -136,7 +126,7 @@ class DurableTaskQueueTests(unittest.TestCase):
         self._queue_one()
         self.store.claim_next_task(
             "worker-a", lease_seconds=1,
-            now="2026-11-26T12:00:00+00:00",
+            now="2000-01-01T00:00:00+00:00",
         )
         # The real clock is later than the fixed historical lease above.
         self.assertFalse(
