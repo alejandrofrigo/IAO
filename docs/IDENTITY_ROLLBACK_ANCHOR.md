@@ -4,9 +4,13 @@
 
 The paired identity backup manifest detects accidental corruption and mismatched
 snapshots, but it is itself part of the backup and therefore cannot establish
-freshness. The rollback anchor adds an authenticated monotonic sequence and a
-privacy-minimized digest of the complete root, primary-device binding and device
-ledger.
+freshness. The rollback anchor adds an authenticated monotonic sequence and
+privacy-minimized digests of the complete identity and device databases, as
+well as explicit root, primary-device binding and revocation summaries. This
+covers recovery-code digests, consumed bootstrap capabilities, login/session/
+recovery challenges, device nonces and replay records, table schemas and
+historical device/root rows. Only database digests are retained in the anchor;
+raw rows and secrets are never exported.
 
 The anchor JSON, its independent 256-bit HMAC key and its lock file must be
 stored in a private state directory outside both SQLite databases and outside

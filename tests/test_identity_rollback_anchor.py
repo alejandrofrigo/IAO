@@ -1,5 +1,6 @@
 """Monotonic identity rollback-anchor tests, including an old SQLite snapshot replay."""
 import shutil
+import sqlite3
 import time
 
 import pytest
@@ -78,6 +79,25 @@ def test_anchor_rejects_wrong_sequence_and_unchanged_state(tmp_path):
         anchor.advance({**state, "ledger_digest": "f" * 64}, expected_sequence=2)
     with pytest.raises(IdentityRollbackAnchorError, match="IDENTITY_ANCHOR_NO_STATE_CHANGE"):
         anchor.advance(state, expected_sequence=1)
+
+
+def test_anchor_digest_covers_recovery_and_replay_state_tables(tmp_path):
+    identity_db, device_db, *_ = _pair(tmp_path)
+    before = capture_identity_state(identity_db, device_db)
+    anchor = IdentityRollbackAnchor(
+        tmp_path / "trusted" / "identity.anchor",
+        tmp_path / "trusted" / "identity.key",
+    )
+    anchor.initialize(before)
+    with sqlite3.connect(identity_db) as db:
+        db.execute(
+            "INSERT INTO consumed_bootstrap_codes(code_digest,consumed_at) VALUES(?,?)",
+            ("a" * 64, 123.0),
+        )
+    after = capture_identity_state(identity_db, device_db)
+    assert after["identity_database_digest"] != before["identity_database_digest"]
+    with pytest.raises(IdentityRollbackAnchorError, match="IDENTITY_ANCHOR_STATE_MISMATCH"):
+        anchor.verify(after)
 
 
 def test_anchor_detects_record_tampering_and_missing_key(tmp_path):

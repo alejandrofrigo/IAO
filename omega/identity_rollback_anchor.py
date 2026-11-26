@@ -22,9 +22,10 @@ from pathlib import Path
 from typing import Any
 
 ANCHOR_FORMAT_VERSION = 1
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 MAC_DOMAIN = b"IAO-IDENTITY-ROLLBACK-ANCHOR-V1\x00"
 STATE_DOMAIN = b"IAO-IDENTITY-ROLLBACK-STATE-V1\x00"
+DATABASE_DOMAIN = b"IAO-IDENTITY-ROLLBACK-DATABASE-V1\\x00"
 _KEY_BYTES = 32
 _process_lock = threading.RLock()
 
@@ -52,6 +53,46 @@ def _key_fingerprint(pem: str) -> str:
         serialization.PublicFormat.SubjectPublicKeyInfo,
     )
     return hashlib.sha256(der).hexdigest()
+
+
+def _database_digest(path: Path) -> str:
+    """Hash every table, schema object and row without exporting database contents."""
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10) as db:
+            objects = db.execute(
+                """SELECT type,name,sql FROM sqlite_master
+                WHERE type IN ('table','index','trigger','view')
+                ORDER BY type,name"""
+            ).fetchall()
+            tables = []
+            for kind, name, sql in objects:
+                if kind != "table":
+                    continue
+                escaped = name.replace('"', '""')
+                rows = db.execute(f'SELECT * FROM "{escaped}"').fetchall()
+                normalized = []
+                for row in rows:
+                    values = []
+                    for value in row:
+                        if isinstance(value, bytes):
+                            values.append({"bytes_hex": value.hex()})
+                        elif value is None or isinstance(value, (str, int, float)):
+                            values.append(value)
+                        else:
+                            values.append({"type": type(value).__name__})
+                    normalized.append(values)
+                normalized.sort(key=_canonical)
+                tables.append({"name": name, "schema": sql, "rows": normalized})
+            snapshot = {
+                "schema_objects": [
+                    {"type": kind, "name": name, "sql": sql}
+                    for kind, name, sql in objects
+                ],
+                "tables": tables,
+            }
+    except sqlite3.DatabaseError:
+        raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_DATABASE_INVALID") from None
+    return hashlib.sha256(DATABASE_DOMAIN + _canonical(snapshot)).hexdigest()
 
 
 def capture_identity_state(
@@ -143,6 +184,10 @@ def capture_identity_state(
         "revoked_root_count": sum(row["status"] == "REVOKED" for row in roots),
         "inactive_device_count": sum(row["active"] == 0 for row in devices),
         "ledger_digest": ledger_digest,
+        # Covers recovery codes, consumed bootstrap capabilities, login/session/
+        # recovery challenges, device nonces, replay records and database schemas.
+        "identity_database_digest": _database_digest(identity_path),
+        "device_database_digest": _database_digest(device_path),
     }
 
 
