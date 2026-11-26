@@ -377,6 +377,13 @@ class OperatorIdentityAuthority:
                 ).rowcount
                 if changed != 1:
                     raise OperatorIdentityError("OPERATOR_ROOT_CHANGED_CONCURRENTLY", 409)
+                # A revoked identity must release the single-primary slot.
+                # The historical identity remains REVOKED; its device binding
+                # is no longer an active authorization and cannot block recovery.
+                db.execute(
+                    "DELETE FROM primary_device_bindings WHERE identity_id=?",
+                    (identity_id,),
+                )
                 db.execute("COMMIT")
             except Exception:
                 db.execute("ROLLBACK")
