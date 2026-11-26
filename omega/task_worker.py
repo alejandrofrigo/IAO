@@ -96,6 +96,11 @@ class TaskWorker:
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "AUTHORIZATION_REVALIDATION_FAILED"},
                 )
+            if spec.effect_class != "READ_ONLY":
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "WORKER_READ_ONLY_ONLY"},
+                )
 
             try:
                 clean = spec.validate_input(payload)
