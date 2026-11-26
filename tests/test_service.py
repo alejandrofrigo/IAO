@@ -247,7 +247,10 @@ class LimitsAndIntegrityTests(Base):
         events = self.svc.store._all_events()
         self.assertTrue(any(
             event["event_type"] == "TASK_INTERRUPTED_ON_RESTART"
-            and event["subject"] == "alice"
+            and event["subject"] == task["id"]
+            and event["details"].get("actor") == "alice"
+            and event["details"].get("decision") == "FAIL_CLOSED"
+            and event["details"].get("reason") == "PROCESS_INTERRUPTED"
             for event in events
         ))
 
