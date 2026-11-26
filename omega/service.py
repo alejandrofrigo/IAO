@@ -80,7 +80,14 @@ class OmegaService:
             status, payload = self._route(method.upper(), path, headers, body)
         except ApiError as e:
             status, payload = e.status, {"error": e.code}
-        except Exception:  # never leak internals
+        except Exception as exc:  # never expose internals to the caller
+            try:
+                self.store.audit(
+                    "system", "API_INTERNAL_ERROR", path,
+                    error_type=type(exc).__name__,
+                )
+            except Exception:
+                pass
             status, payload = 500, {"error": "INTERNAL_ERROR"}
         payload["correlation_id"] = cid
         return status, payload
