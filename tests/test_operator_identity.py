@@ -6,6 +6,8 @@ import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from omega.device_authority import DeviceAuthority
+
 from omega.operator_identity import (
     OperatorIdentityAuthority,
     OperatorIdentityError,
@@ -723,3 +725,93 @@ def test_recovery_invalidates_preexisting_operator_session_binding(tmp_path):
         device_replacement=lambda public, owner, old=None: None,
     )
     assert not authority.verify_authenticated_session(subject, token)
+
+
+def test_recovery_challenge_and_device_binding_survive_server_restart(tmp_path):
+    bootstrap = "restart-bootstrap-" + "b" * 40
+    recovery = "restart-recovery-" + "r" * 48
+    rotated_recovery = "restart-rotated-recovery-" + "n" * 48
+    digest_key = b"restart-recovery-digest-key-" + b"k" * 32
+    old_root, old_root_public = keypair()
+    _, old_device_public = keypair()
+    new_root, new_root_public = keypair()
+    _, new_device_public = keypair()
+
+    identity_db = tmp_path / "operator-identity.sqlite3"
+    device_db = tmp_path / "device-authority.sqlite3"
+    authority = OperatorIdentityAuthority(
+        identity_db, bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=digest_key,
+    )
+    identity = authority.bootstrap(
+        bootstrap, old_root_public, recovery_code=recovery,
+    )
+    identity_id = identity["identity_id"]
+    owner = "operator:" + identity_id
+
+    enrollment_code = "restart-device-enrollment-" + "e" * 40
+    devices = DeviceAuthority(device_db, enrollment_code=enrollment_code)
+    devices.enroll(
+        enrollment_code, old_device_public, owner_subject="pre-login-owner",
+    )
+    _, binding_payload = authority.device_binding_payload(
+        old_device_public, key_version=1,
+    )
+    authority.bind_primary_device(
+        identity_id, old_device_public, sign(old_root, binding_payload),
+        expected_key_version=1,
+    )
+
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, new_root_public, new_device_public, rotated_recovery,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"]
+        + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = new_root.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    device_signature = keypair()[0].sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    # Recreate both authorities as a process restart would, then finish the
+    # already-issued one-time challenge against the same durable databases.
+    restarted = OperatorIdentityAuthority(
+        identity_db, subject_digest_key=digest_key,
+    )
+    restarted_devices = DeviceAuthority(device_db, enrollment_code="")
+    result = restarted.complete_operator_recovery(
+        challenge["challenge"], root_signature, device_signature,
+        device_replacement=lambda public, subject, old=None: (
+            restarted_devices.replace_active_device_for_recovery(
+                public, owner_subject=subject,
+                expected_old_public_key_pem=old,
+            )
+        ),
+    )
+
+    assert result["key_version"] == 2
+    assert restarted.primary_device_public_key() == new_device_public
+    assert restarted.verify_root_signature(
+        identity_id, b"restart-probe", sign(new_root, b"restart-probe"),
+        expected_key_version=2,
+    )
+    assert restarted_devices.verify_registered_public_key(
+        new_device_public, owner_subject=owner,
+    )
+    with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_RECOVERY_CODE"):
+        restarted.create_operator_recovery_challenge(
+            recovery, *keypair()[1:2], new_device_public,
+            "unused-recovery-after-restart-" + "u" * 40,
+        )
+    next_root_private, next_root_public = keypair()
+    _, next_device_public = keypair()
+    next_challenge = restarted.create_operator_recovery_challenge(
+        rotated_recovery, next_root_public, next_device_public,
+        "second-rotated-recovery-" + "s" * 48,
+    )
+    assert next_challenge["protocol"] == "IAO-OPERATOR-RECOVERY-V1"
