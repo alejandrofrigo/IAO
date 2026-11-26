@@ -407,6 +407,40 @@ class Store:
                 self.db.execute("ROLLBACK")
                 raise
 
+    def update_claimed_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        state: str,
+        result: dict[str, Any] | None = None,
+        *,
+        release: bool = False,
+    ) -> bool:
+        """Fenced task update: only the current lease holder may change its task."""
+        if state not in {"VERIFYING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"}:
+            raise ValueError("INVALID_CLAIMED_TASK_STATE")
+        if release and state == "VERIFYING":
+            raise ValueError("VERIFYING_CANNOT_RELEASE_LEASE")
+        with self.lock:
+            if result is None:
+                changed = self.db.execute(
+                    "UPDATE task SET state=?, updated_at=?, "
+                    "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
+                    "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
+                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') AND lease_owner=?",
+                    (state, now_iso(), int(release), int(release), task_id, worker_id),
+                ).rowcount
+            else:
+                changed = self.db.execute(
+                    "UPDATE task SET state=?, result_json=?, updated_at=?, "
+                    "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
+                    "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
+                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') AND lease_owner=?",
+                    (state, json.dumps(result, sort_keys=True), now_iso(),
+                     int(release), int(release), task_id, worker_id),
+                ).rowcount
+        return changed == 1
+
     def recover_interrupted_tasks(
         self, *, now: str | None = None
     ) -> list[dict[str, str]]:
