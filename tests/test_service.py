@@ -195,7 +195,7 @@ class AuthTests(Base):
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
-        identity.bootstrap(bootstrap, root_pem)
+        identity_record = identity.bootstrap(bootstrap, root_pem)
         device = ec.generate_private_key(ec.SECP256R1())
         device_pem = device.public_key().public_bytes(
             serialization.Encoding.PEM,
@@ -238,10 +238,7 @@ class AuthTests(Base):
             "authority": "PRIMARY_DEVICE_BOUND_READ_ONLY", "key_version": 1,
         }))
         self.assertTrue(identity.verify_primary_device(
-            identity._active_identity_id_for_test() if hasattr(identity, "_active_identity_id_for_test") else
-            __import__("sqlite3").connect(identity.database).execute(
-                "SELECT identity_id FROM operator_identities WHERE status='ACTIVE'"
-            ).fetchone()[0], device_pem,
+            identity_record["identity_id"], device_pem,
         ))
 
         other = ec.generate_private_key(ec.SECP256R1())
