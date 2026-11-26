@@ -352,6 +352,8 @@ def main() -> None:
     start_federation_autojoin(fed_node, state)
     from omega.federation_discovery import start_federation_discovery
     start_federation_discovery(state)
+    from omega.external_network import start_external_network
+    start_external_network(state / "external-network")
     httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
     (state / "server.pid").write_text(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
