@@ -154,16 +154,21 @@
       };
       await writeIdentity(stored);
     }
-    let devicePublicKeyPem = await window.IAODeviceAuthority.recoveryPublicKeyPem().catch(async () => {
-      const prepared = await window.IAODeviceAuthority.prepareRecoveryIdentity();
-      return prepared.publicKeyPem;
-    });
+    let devicePublicKeyPem = stored.recoveryPendingDevicePublicKeyPem;
+    if (!devicePublicKeyPem) {
+      devicePublicKeyPem = await window.IAODeviceAuthority.recoveryPublicKeyPem().catch(async () => {
+        const prepared = await window.IAODeviceAuthority.prepareRecoveryIdentity();
+        return prepared.publicKeyPem;
+      });
+      stored = { ...stored, recoveryPendingDevicePublicKeyPem: devicePublicKeyPem };
+      await writeIdentity(stored);
+    }
     const reconciliation = await request("/v1/operator/recovery/status", "POST", {
       new_root_public_key_pem: stored.recoveryPendingPublicKeyPem,
       new_device_public_key_pem: devicePublicKeyPem
     });
     if (reconciliation.committed === true) {
-      await window.IAODeviceAuthority.activateRecoveryIdentity();
+      await window.IAODeviceAuthority.activateRecoveryIdentity(devicePublicKeyPem);
       await writeIdentity({
         privateKey: stored.recoveryPendingPrivateKey,
         publicKeyPem: stored.recoveryPendingPublicKeyPem,
