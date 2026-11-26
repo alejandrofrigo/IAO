@@ -666,9 +666,22 @@ class OperatorIdentityAuthority:
         """Verify root possession before consuming the one-time bootstrap capability."""
         if not isinstance(signature, bytes) or not 64 <= len(signature) <= 80:
             raise OperatorIdentityError("INVALID_OPERATOR_BOOTSTRAP_SIGNATURE", 401)
-        root_key, _ = OperatorIdentityAuthority._public_key(root_public_key_pem)
+        root_key, root_pem = OperatorIdentityAuthority._public_key(root_public_key_pem)
+        device_key, device_pem = OperatorIdentityAuthority._public_key(device_public_key_pem)
+        root_der = root_key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        device_der = device_key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        if hmac.compare_digest(
+            hashlib.sha256(root_der).digest(), hashlib.sha256(device_der).digest(),
+        ):
+            raise OperatorIdentityError("OPERATOR_BOOTSTRAP_KEYS_MUST_BE_DISTINCT", 400)
         _, payload = OperatorIdentityAuthority.device_binding_payload(
-            device_public_key_pem, key_version=1,
+            device_pem, key_version=1,
         )
         try:
             root_key.verify(
