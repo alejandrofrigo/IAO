@@ -75,6 +75,15 @@ claim a persistent account-to-device binding. Production worker startup remains
 blocked pending durable operator identity, complete device lifecycle controls,
 and end-to-end validation.
 
+## Durable operator identity
+
+The implementation requirements, key hierarchy, bootstrap/recovery rules,
+device lifecycle, privacy constraints and production release tests are specified
+in [OPERATOR_IDENTITY_PROTOCOL.md](OPERATOR_IDENTITY_PROTOCOL.md). That document
+is a design contract, not evidence of implementation. Until its release gate is
+satisfied, public sessions remain guest identities, device proof remains
+read-only, and production worker startup stays blocked.
+
 ## Health semantics
 
 - `/health/live` reports only that the HTTP process can answer.
