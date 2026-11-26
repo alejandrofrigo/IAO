@@ -122,6 +122,16 @@ class Base(unittest.TestCase):
         self.assertTrue(self.svc.device_authority.verify_registered_public_key(
             new_device_public, owner_subject="operator:" + identity["identity_id"]
         ))
+        status, reconciled = self.call(
+            "POST", "/v1/operator/recovery/status", {},
+            {
+                "new_root_public_key_pem": new_root_public,
+                "new_device_public_key_pem": new_device_public,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(reconciled["authority"], "RECOVERY_COMMITTED_READ_ONLY")
+        self.assertEqual(reconciled["key_version"], 2)
         with self.assertRaisesRegex(OperatorIdentityError, "INVALID_OPERATOR_RECOVERY_CODE"):
             authority.create_operator_recovery_challenge(
                 recovery, new_root_public, new_device_public, "another-new-recovery-" + "z" * 40,
