@@ -223,7 +223,7 @@ class QueuedTaskApiTests(Base):
         challenge = self.svc.device_authority.challenge(self.device_id)
         timestamp = int(time.time())
         digest = hashlib.sha256(body).hexdigest()
-        signed = "\\n".join(
+        signed = "\n".join(
             ["POST", "/v1/tasks", str(timestamp), challenge["nonce"], digest]
         ).encode()
         signature = self.device_private_key.sign(
