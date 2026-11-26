@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.process_runner import (
     ToolProcessTimeout,
     run_tool_isolated,
@@ -41,3 +42,20 @@ def test_timed_out_tool_process_is_terminated():
     with pytest.raises(ToolProcessTimeout):
         run_tool_isolated(_sleep_tool, _verify_sleep, {}, 0.5)
     assert time.monotonic() - started < 5
+
+
+def test_bound_local_corpus_tool_is_pickleable_in_spawned_process(tmp_path):
+    (tmp_path / "security.txt").write_text(
+        "IAO local knowledge corpus verifies source provenance.",
+        encoding="utf-8",
+    )
+    corpus = KnowledgeCorpus(tmp_path)
+    payload = corpus.validate_input({"query": "source provenance", "limit": 2})
+
+    output, verdict = run_tool_isolated(
+        corpus.run, corpus.verify, payload, 5
+    )
+
+    assert output["tool"] == "knowledge.search"
+    assert output["items"][0]["document_id"] == "security"
+    assert verdict == "PASS"
