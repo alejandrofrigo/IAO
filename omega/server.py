@@ -11,6 +11,7 @@ from omega.env_loader import load_env_files
 from omega.config import load_settings
 from omega.service import MAX_BODY, OmegaService
 from omega.device_authority import DeviceAuthority
+from omega.operator_identity import OperatorIdentityAuthority
 from omega.store import Store
 from omega.federation import MAX_MSG, Node
 from omega.federation_identity import load_or_create_key
@@ -60,6 +61,10 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
             state_dir / "device-authority.sqlite3",
             enrollment_code=os.environ.get("IAO_DEVICE_ENROLLMENT_CODE", ""),
         ),
+    )
+    kw.setdefault(
+        "operator_identity_authority",
+        OperatorIdentityAuthority(state_dir / "operator-identity.sqlite3"),
     )
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
