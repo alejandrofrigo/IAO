@@ -92,8 +92,10 @@ def test_dns_resolution_rejects_private_and_mixed_public_private(monkeypatch):
 def test_fetch_public_json_pins_ip_and_parses_json(monkeypatch):
     created = []
 
-    def factory(hostname, address, *, timeout, context):
-        conn = FakeConnection(hostname, address, timeout=timeout, context=context)
+    def factory(hostname, address, *, port=443, timeout, context):
+        conn = FakeConnection(
+            hostname, address, port=port, timeout=timeout, context=context
+        )
         created.append(conn)
         return conn
 
