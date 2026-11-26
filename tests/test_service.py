@@ -85,7 +85,7 @@ class AuthTests(Base):
         )
         self.assertEqual(
             (repeated[0], repeated[1]["error"]),
-            (409, "OPERATOR_BOOTSTRAP_ALREADY_USED"),
+            (503, "OPERATOR_BOOTSTRAP_DISABLED"),
         )
         audit = json.dumps(self.svc.store._all_events())
         self.assertNotIn(code, audit)
