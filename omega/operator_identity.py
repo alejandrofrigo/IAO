@@ -480,6 +480,17 @@ class OperatorIdentityAuthority:
         with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
+                db.execute(
+                    "DELETE FROM operator_login_challenges WHERE expires_at <= ?",
+                    (now,),
+                )
+                active_challenges = db.execute(
+                    """SELECT COUNT(*) FROM operator_login_challenges
+                    WHERE consumed_at IS NULL AND expires_at > ?""",
+                    (now,),
+                ).fetchone()[0]
+                if active_challenges >= 100:
+                    raise OperatorIdentityError("OPERATOR_LOGIN_CHALLENGE_LIMIT", 429)
                 row = db.execute(
                     """SELECT i.identity_id,i.key_version,b.device_id,
                     b.device_public_key_pem
