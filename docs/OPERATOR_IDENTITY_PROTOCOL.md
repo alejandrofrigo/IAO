@@ -145,8 +145,10 @@ does not create a session or grant scopes; it only authorizes association.
 
 **Implemented:** one-time dual-key bootstrap API; root/device proof
 validation before bootstrap-code consumption; primary-device enrollment under
-the opaque root-derived subject; bootstrap rate limit; explicit deployment-only
-secret and expiry configuration; authenticated challenge,
+the opaque root-derived subject; `POST /v1/operator/bootstrap/status` to reconcile
+an ambiguous browser response without revealing identity/device identifiers;
+bootstrap rate limit; explicit deployment-only secret and expiry configuration;
+authenticated challenge,
 bind and read-only status API routes; subject taken only from the verified
 bearer principal; guest rejection; atomic challenge consumption; persistent
 registry; browser-side P-256 key generation, non-extractable private-key
