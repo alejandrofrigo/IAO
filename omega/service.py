@@ -277,9 +277,10 @@ class OmegaService:
                 )
                 result = self.operator_identity_authority.complete_operator_recovery(
                     handle, root_signature, device_signature,
-                    device_replacement=lambda public_key, subject: (
+                    device_replacement=lambda public_key, subject, old_public_key: (
                         self.device_authority.replace_active_device_for_recovery(
                             public_key, owner_subject=subject,
+                            expected_old_public_key_pem=old_public_key,
                         )
                     ),
                 )
