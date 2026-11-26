@@ -143,3 +143,41 @@ def test_fetch_public_json_requires_json_content_type(monkeypatch):
         match="JSON_CONTENT_TYPE_REQUIRED",
     ):
         transport.fetch_public_json("https://directory.example.org/peers")
+
+
+def test_discover_feed_uses_bounded_verified_transport(monkeypatch):
+    from tools import iao_federation_autonomous as federation
+
+    calls = []
+
+    def fake_fetch(url, *, timeout, max_bytes):
+        calls.append((url, timeout, max_bytes))
+        return {
+            "peers": [
+                {"id": "peer-1", "url": "https://peer.example.org/fed/v1/message",
+                 "capabilities": ["knowledge.search"]},
+                {"id": "bad-scheme", "url": "http://peer.example.org/fed/v1/message"},
+                {"id": "bad-shape", "url": 123},
+            ]
+        }
+
+    monkeypatch.setattr(federation, "fetch_public_json", fake_fetch)
+    peers = federation.discover_feed("https://directory.example.org/feed")
+    assert len(peers) == 1
+    assert peers[0]["id"] == "peer-1"
+    assert peers[0]["source"] == "public_feed"
+    assert calls == [
+        ("https://directory.example.org/feed", 10, 500_000)
+    ]
+
+
+def test_discover_feed_fails_closed_on_transport_error(monkeypatch):
+    from tools import iao_federation_autonomous as federation
+
+    def fail(*args, **kwargs):
+        raise federation.fetch_public_json.__globals__["FederationTransportError"](
+            "REDIRECT_REFUSED"
+        )
+
+    monkeypatch.setattr(federation, "fetch_public_json", fail)
+    assert federation.discover_feed("https://directory.example.org/feed") == []
