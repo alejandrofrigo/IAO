@@ -187,7 +187,10 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
 
 def _client_tls_context() -> ssl.SSLContext:
     ca_file = os.environ.get("IAO_TLS_CA_FILE") or None
-    context = ssl.create_default_context(cafile=ca_file)
+    try:
+        context = ssl.create_default_context(cafile=ca_file)
+    except (OSError, ssl.SSLError) as exc:
+        raise FederationTransportError("TLS_CA_CONFIGURATION_INVALID") from exc
     cert_file = os.environ.get("IAO_TLS_CLIENT_CERT_FILE")
     key_file = os.environ.get("IAO_TLS_CLIENT_KEY_FILE")
     require_client_cert = os.environ.get("IAO_TLS_REQUIRE_CLIENT_CERT", "").lower() in {
@@ -200,9 +203,12 @@ def _client_tls_context() -> ssl.SSLContext:
     if cert_file and key_file:
         cert_path, key_path = Path(cert_file), Path(key_file)
         for path, is_private in ((cert_path, False), (key_path, True)):
-            if path.is_symlink() or not path.is_file():
-                raise FederationTransportError("CLIENT_CERT_PATH_REFUSED")
-            mode = stat.S_IMODE(path.stat().st_mode)
+            try:
+                if path.is_symlink() or not path.is_file():
+                    raise FederationTransportError("CLIENT_CERT_PATH_REFUSED")
+                mode = stat.S_IMODE(path.stat().st_mode)
+            except OSError as exc:
+                raise FederationTransportError("CLIENT_CERT_PATH_REFUSED") from exc
             if is_private and mode & 0o077:
                 raise FederationTransportError("CLIENT_KEY_PERMISSIONS_TOO_OPEN")
         try:
