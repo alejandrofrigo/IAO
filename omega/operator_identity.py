@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-import secrets
 import sqlite3
 import stat
 import threading
@@ -74,6 +73,13 @@ class OperatorIdentityAuthority:
                 CREATE TABLE IF NOT EXISTS consumed_bootstrap_codes (
                     code_digest TEXT PRIMARY KEY,
                     consumed_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS primary_device_bindings (
+                    identity_id TEXT PRIMARY KEY REFERENCES operator_identities(identity_id),
+                    device_id TEXT NOT NULL UNIQUE,
+                    device_public_key_pem TEXT NOT NULL,
+                    key_version INTEGER NOT NULL CHECK(key_version >= 1),
+                    bound_at REAL NOT NULL
                 );
                 """
             )
@@ -237,6 +243,92 @@ class OperatorIdentityAuthority:
                 db.execute("ROLLBACK")
                 raise
         return {"key_version": next_version}
+
+
+    @staticmethod
+    def device_binding_payload(device_public_key_pem: Any, *, key_version: int) -> tuple[str, bytes]:
+        """Return the canonical device identifier and root-signed binding payload."""
+        _, canonical_pem = OperatorIdentityAuthority._public_key(device_public_key_pem)
+        key = serialization.load_pem_public_key(canonical_pem.encode("ascii"))
+        der = key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        device_id = hashlib.sha256(der).hexdigest()
+        document = {
+            "device_id": device_id,
+            "key_version": key_version,
+            "protocol": "IAO-DEVICE-BINDING-V1",
+            "public_key_sha256": hashlib.sha256(der).hexdigest(),
+            "role": "PRIMARY",
+        }
+        payload = __import__("json").dumps(
+            document, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+        return device_id, payload
+
+    def bind_primary_device(
+        self, identity_id: str, device_public_key_pem: Any,
+        root_signature: bytes, *, expected_key_version: int,
+    ) -> dict[str, int]:
+        """Persist exactly one device binding authorized by the active root."""
+        device_id, payload = self.device_binding_payload(
+            device_public_key_pem, key_version=expected_key_version
+        )
+        self.verify_root_signature(
+            identity_id, payload, root_signature,
+            expected_key_version=expected_key_version,
+        )
+        _, canonical_pem = self._public_key(device_public_key_pem)
+        now = time.time()
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT key_version,status FROM operator_identities WHERE identity_id=?",
+                    (identity_id,),
+                ).fetchone()
+                if row is None or row["status"] != "ACTIVE":
+                    raise OperatorIdentityError("OPERATOR_IDENTITY_NOT_ACTIVE", 403)
+                if row["key_version"] != expected_key_version:
+                    raise OperatorIdentityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
+                if db.execute(
+                    "SELECT 1 FROM primary_device_bindings"
+                ).fetchone():
+                    raise OperatorIdentityError("PRIMARY_DEVICE_ALREADY_BOUND", 409)
+                db.execute(
+                    """INSERT INTO primary_device_bindings
+                    (identity_id,device_id,device_public_key_pem,key_version,bound_at)
+                    VALUES(?,?,?,?,?)""",
+                    (identity_id, device_id, canonical_pem, expected_key_version, now),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        return {"key_version": expected_key_version}
+
+    def verify_primary_device(self, identity_id: str, device_public_key_pem: Any) -> bool:
+        """Check a binding is still current, active, and bound to this exact key."""
+        device_id, _ = self.device_binding_payload(device_public_key_pem, key_version=1)
+        with self._database() as db:
+            row = db.execute(
+                """SELECT b.device_id,b.device_public_key_pem,b.key_version,i.status,i.key_version
+                FROM primary_device_bindings b
+                JOIN operator_identities i ON i.identity_id=b.identity_id
+                WHERE b.identity_id=?""",
+                (identity_id,),
+            ).fetchone()
+        if row is None or row["status"] != "ACTIVE":
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        if row["device_id"] != device_id:
+            raise OperatorIdentityError("PRIMARY_DEVICE_KEY_MISMATCH", 403)
+        if row["key_version"] != row["key_version"]:
+            raise OperatorIdentityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
+        _, canonical_pem = self._public_key(device_public_key_pem)
+        if not hmac.compare_digest(row["device_public_key_pem"], canonical_pem):
+            raise OperatorIdentityError("PRIMARY_DEVICE_KEY_MISMATCH", 403)
+        return True
 
     def revoke(self, identity_id: str, signature: bytes, *, expected_key_version: int) -> None:
         payload = b"revoke-root-v1\\n" + identity_id.encode("ascii")
