@@ -350,8 +350,10 @@ class ExternalNetwork:
                             now = _utc()
                             p2p_peers[peer_id] = {
                                 "peer_id": peer_id, "multiaddrs": addrs,
-                                "source": source.name, "status": previous.get(
-                                    "status", "DISCOVERED_UNVERIFIED"
+                                "source": source.name, "status": (
+                                    "DISCOVERED_UNVERIFIED"
+                                    if previous.get("status") == "STALE_UNVERIFIED"
+                                    else previous.get("status", "DISCOVERED_UNVERIFIED")
                                 ),
                                 "first_seen": previous.get("first_seen", now),
                                 "last_seen": now, "granted_capabilities": previous.get(
@@ -381,6 +383,8 @@ class ExternalNetwork:
                             ):
                                 if field in previous:
                                     item[field] = previous[field]
+                            if item.get("status") == "STALE_UNVERIFIED":
+                                item["status"] = "DISCOVERED_UNVERIFIED"
                         candidates[item["candidate_id"]] = item
                         totals["refreshed" if previous else "added"] += 1
                     self._audit("DISCOVERY_SOURCE_COMPLETED", source=source.name,

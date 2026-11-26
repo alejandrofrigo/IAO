@@ -190,3 +190,21 @@ def test_verified_candidates_are_not_pruned_by_inventory_retention(tmp_path):
     saved = json.loads((tmp_path / "registry.json").read_text())["candidates"]
     assert item["candidate_id"] in saved
     assert saved[item["candidate_id"]]["identity_verified"] is True
+
+
+def test_rediscovery_reactivates_stale_unverified_candidate(tmp_path):
+    item = _candidate(record(), "unit")
+    item.update({
+        "first_seen": "2020-01-01T00:00:00+00:00",
+        "last_seen": "2020-01-01T00:00:00+00:00",
+        "status": "STALE_UNVERIFIED",
+    })
+    network = ExternalNetwork(tmp_path, [Source([record()])])
+    network.state_dir.mkdir(parents=True)
+    (tmp_path / "registry.json").write_text(json.dumps({
+        "schema": 1, "candidates": {item["candidate_id"]: item}, "p2p_peers": {},
+    }))
+    network.run_cycle()
+    refreshed = json.loads((tmp_path / "registry.json").read_text())["candidates"][item["candidate_id"]]
+    assert refreshed["status"] == "DISCOVERED_UNVERIFIED"
+    assert refreshed["last_seen"] != item["last_seen"]
