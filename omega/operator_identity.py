@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import sqlite3
 import stat
@@ -22,7 +23,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-ROOT_SIGNATURE_DOMAIN = b"IAO-OPERATOR-ROOT-V1\\x00"
+ROOT_SIGNATURE_DOMAIN = b"IAO-OPERATOR-ROOT-V1\x00"
 MAX_PUBLIC_KEY_BYTES = 4096
 MAX_SIGNED_PAYLOAD_BYTES = 8192
 
@@ -215,8 +216,8 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("OPERATOR_IDENTITY_NOT_ACTIVE", 403)
         next_version = row["key_version"] + 1
         payload = (
-            b"rotate-root-v1\\n" + identity_id.encode("ascii") + b"\\n"
-            + str(next_version).encode("ascii") + b"\\n"
+            b"rotate-root-v1\n" + identity_id.encode("ascii") + b"\n"
+            + str(next_version).encode("ascii") + b"\n"
             + hashlib.sha256(new_pem.encode("ascii")).hexdigest().encode("ascii")
         )
         self.verify_root_signature(
@@ -262,7 +263,7 @@ class OperatorIdentityAuthority:
             "public_key_sha256": hashlib.sha256(der).hexdigest(),
             "role": "PRIMARY",
         }
-        payload = __import__("json").dumps(
+        payload = json.dumps(
             document, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
         return device_id, payload
@@ -333,7 +334,7 @@ class OperatorIdentityAuthority:
         return True
 
     def revoke(self, identity_id: str, signature: bytes, *, expected_key_version: int) -> None:
-        payload = b"revoke-root-v1\\n" + identity_id.encode("ascii")
+        payload = b"revoke-root-v1\n" + identity_id.encode("ascii")
         self.verify_root_signature(
             identity_id, payload, signature,
             expected_key_version=expected_key_version,
