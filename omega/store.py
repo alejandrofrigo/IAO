@@ -422,22 +422,25 @@ class Store:
         if release and state == "VERIFYING":
             raise ValueError("VERIFYING_CANNOT_RELEASE_LEASE")
         with self.lock:
+            now = now_iso()
             if result is None:
                 changed = self.db.execute(
                     "UPDATE task SET state=?, updated_at=?, "
                     "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
                     "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
-                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') AND lease_owner=?",
-                    (state, now_iso(), int(release), int(release), task_id, worker_id),
+                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
+                    "AND lease_owner=? AND lease_until>?",
+                    (state, now, int(release), int(release), task_id, worker_id, now),
                 ).rowcount
             else:
                 changed = self.db.execute(
                     "UPDATE task SET state=?, result_json=?, updated_at=?, "
                     "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
                     "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
-                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') AND lease_owner=?",
-                    (state, json.dumps(result, sort_keys=True), now_iso(),
-                     int(release), int(release), task_id, worker_id),
+                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
+                    "AND lease_owner=? AND lease_until>?",
+                    (state, json.dumps(result, sort_keys=True), now,
+                     int(release), int(release), task_id, worker_id, now),
                 ).rowcount
         return changed == 1
 
