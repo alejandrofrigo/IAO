@@ -167,6 +167,96 @@ def test_root_signature_binds_exact_primary_device_key_once(tmp_path):
         authority.verify_primary_device(identity["identity_id"], attacker_public)
 
 
+
+def test_root_rotation_racing_primary_device_binding_never_leaves_current_unauthorized_binding(tmp_path):
+    """A signature checked before rotation cannot bind under the new root version."""
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    bootstrap = "root-device-race-bootstrap-" + "b" * 40
+    root_private, root_public = keypair()
+    next_root_private, next_root_public = keypair()
+    _, device_public = keypair()
+    db_path = tmp_path / "root-device-race.sqlite3"
+    authority = OperatorIdentityAuthority(
+        db_path, bootstrap, bootstrap_expires_at=time.time() + 600,
+    )
+    identity = authority.bootstrap(bootstrap, root_public)
+    identity_id = identity["identity_id"]
+    _, device_payload = authority.device_binding_payload(
+        device_public, key_version=1,
+    )
+    binding_signature = sign(root_private, device_payload)
+    canonical_new = serialization.load_pem_public_key(
+        next_root_public.encode("ascii")
+    ).public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    rotate_payload = (
+        b"rotate-root-v1\\n" + identity_id.encode("ascii") + b"\\n"
+        + b"2\\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
+    )
+    rotate_signature = sign(root_private, rotate_payload)
+    workers = [
+        authority,
+        OperatorIdentityAuthority(db_path),
+    ]
+    gate = Barrier(2)
+
+    def bind():
+        gate.wait(timeout=10)
+        try:
+            workers[0].bind_primary_device(
+                identity_id, device_public, binding_signature,
+                expected_key_version=1,
+            )
+            return "bound"
+        except OperatorIdentityError as exc:
+            return exc.code
+
+    def rotate():
+        gate.wait(timeout=10)
+        return workers[1].rotate_root(
+            identity_id, next_root_public, rotate_signature,
+        )["key_version"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        bind_future = pool.submit(bind)
+        rotate_future = pool.submit(rotate)
+        bind_outcome = bind_future.result()
+        rotated_version = rotate_future.result()
+
+    assert rotated_version == 2
+    assert bind_outcome in {"bound", "OPERATOR_ROOT_KEY_VERSION_MISMATCH"}
+    with authority._database() as db:
+        identity_row = db.execute(
+            "SELECT key_version,status FROM operator_identities WHERE identity_id=?",
+            (identity_id,),
+        ).fetchone()
+        binding = db.execute(
+            "SELECT key_version,device_id FROM primary_device_bindings WHERE identity_id=?",
+            (identity_id,),
+        ).fetchone()
+    assert identity_row["key_version"] == 2
+    assert identity_row["status"] == "ACTIVE"
+    if binding is not None:
+        assert binding["key_version"] == 1
+        with pytest.raises(
+            OperatorIdentityError, match="OPERATOR_ROOT_KEY_VERSION_MISMATCH"
+        ):
+            authority.verify_primary_device(identity_id, device_public)
+    _, current_payload = authority.device_binding_payload(
+        device_public, key_version=2,
+    )
+    authority.bind_primary_device(
+        identity_id, device_public, sign(next_root_private, current_payload),
+        expected_key_version=2,
+    )
+    assert authority.verify_primary_device(identity_id, device_public)
+
+
 def test_primary_device_binding_rejects_wrong_root_signature_and_duplicate(tmp_path):
     code = "bootstrap-secret-" + "x" * 40
     root_private, root_public = keypair()
