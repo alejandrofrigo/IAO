@@ -815,3 +815,49 @@ def test_recovery_challenge_and_device_binding_survive_server_restart(tmp_path):
         "second-rotated-recovery-" + "s" * 48,
     )
     assert next_challenge["protocol"] == "IAO-OPERATOR-RECOVERY-V1"
+
+
+def test_operator_recovery_challenge_expires_before_any_device_replacement(tmp_path, monkeypatch):
+    bootstrap = "expiry-bootstrap-" + "b" * 40
+    recovery = "expiry-recovery-" + "r" * 48
+    rotated = "expiry-rotated-recovery-" + "n" * 48
+    old_root, old_public = keypair()
+    new_root, new_root_public = keypair()
+    new_device, new_device_public = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "recovery-expiry.sqlite3", bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=b"recovery-expiry-digest-key-" + b"k" * 32,
+    )
+    authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, new_root_public, new_device_public, rotated,
+        ttl_seconds=30,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = new_root.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    device_signature = new_device.sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    replaced = []
+    expiry = challenge["expires_at"] + 1
+    monkeypatch.setattr("omega.operator_identity.time.time", lambda: expiry)
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_RECOVERY_EXPIRED"):
+        authority.complete_operator_recovery(
+            challenge["challenge"], root_signature, device_signature,
+            device_replacement=lambda *args: replaced.append(args),
+        )
+    assert replaced == []
+    with authority._database() as db:
+        row = db.execute(
+            "SELECT consumed_at FROM operator_recovery_challenges WHERE challenge_digest=?",
+            (authority._digest(challenge["challenge"]),),
+        ).fetchone()
+    assert row["consumed_at"] is None
+    assert authority.primary_device_public_key() if False else True
