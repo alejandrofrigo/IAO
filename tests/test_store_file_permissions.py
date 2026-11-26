@@ -1,5 +1,4 @@
 """Persistent SQLite state must be private and must not follow DB symlinks."""
-import os
 import stat
 
 import pytest
