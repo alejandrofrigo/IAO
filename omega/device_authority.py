@@ -198,6 +198,99 @@ class DeviceAuthority:
             db.execute("COMMIT")
         return {"nonce": nonce, "expires_in": CHALLENGE_TTL_SECONDS}
 
+    def verify_request(
+        self,
+        payload: Any,
+        *,
+        method: str,
+        path: str,
+        request_digest: str,
+    ) -> dict[str, str]:
+        """Verify a one-time device signature bound to one exact API request.
+
+        The caller must compute request_digest from the canonical request
+        content and pass the same value when constructing the signed proof.
+        This method grants no capability by itself.
+        """
+        if not isinstance(payload, dict):
+            raise DeviceAuthorityError("INVALID_REQUEST")
+        device_id = payload.get("device_id")
+        nonce = payload.get("nonce")
+        timestamp = payload.get("timestamp")
+        supplied_digest = payload.get("request_digest")
+        signature = payload.get("signature")
+        if (
+            not isinstance(device_id, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", device_id)
+            or not isinstance(nonce, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", nonce)
+            or isinstance(timestamp, bool)
+            or not isinstance(timestamp, int)
+            or not isinstance(method, str)
+            or not re.fullmatch(r"[A-Z]{3,10}", method)
+            or not isinstance(path, str)
+            or not path.startswith("/")
+            or "?" in path
+            or not isinstance(request_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", request_digest)
+            or not isinstance(supplied_digest, str)
+            or not hmac.compare_digest(supplied_digest, request_digest)
+            or not isinstance(signature, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{80,160}", signature)
+        ):
+            raise DeviceAuthorityError("INVALID_REQUEST")
+        now = time.time()
+        if abs(now - timestamp) > 60:
+            raise DeviceAuthorityError("DEVICE_TIMESTAMP_EXPIRED", 401)
+        try:
+            raw_signature = base64.urlsafe_b64decode(
+                signature + "=" * (-len(signature) % 4)
+            )
+        except (ValueError, TypeError):
+            raise DeviceAuthorityError("INVALID_SIGNATURE", 401) from None
+
+        signed_text = "\\n".join(
+            [method, path, str(timestamp), nonce, request_digest]
+        ).encode("utf-8")
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """
+                SELECT d.public_key_pem, d.active, c.expires_at, c.consumed_at
+                FROM devices d JOIN device_challenges c ON c.device_id=d.device_id
+                WHERE d.device_id=? AND c.nonce=?
+                """,
+                (device_id, nonce),
+            ).fetchone()
+            if row is None or row["active"] != 1:
+                db.execute("ROLLBACK")
+                raise DeviceAuthorityError("DEVICE_OR_CHALLENGE_NOT_FOUND", 404)
+            if row["consumed_at"] is not None or row["expires_at"] < now:
+                db.execute("ROLLBACK")
+                raise DeviceAuthorityError("CHALLENGE_EXPIRED_OR_REPLAYED", 401)
+            try:
+                public_key = serialization.load_pem_public_key(
+                    row["public_key_pem"].encode("ascii")
+                )
+                if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(
+                    public_key.curve, ec.SECP256R1
+                ):
+                    raise ValueError("wrong key type")
+                public_key.verify(
+                    raw_signature,
+                    signed_text,
+                    ec.ECDSA(hashes.SHA256()),
+                )
+            except (InvalidSignature, ValueError, TypeError):
+                db.execute("ROLLBACK")
+                raise DeviceAuthorityError("INVALID_DEVICE_SIGNATURE", 401) from None
+            db.execute(
+                "UPDATE device_challenges SET consumed_at=? WHERE nonce=? AND consumed_at IS NULL",
+                (now, nonce),
+            )
+            db.execute("COMMIT")
+        return {"authority": "DEVICE_REQUEST_VERIFIED"}
+
     def verify_status(self, payload: Any) -> dict[str, str]:
         if not isinstance(payload, dict):
             raise DeviceAuthorityError("INVALID_REQUEST")
