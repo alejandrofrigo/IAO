@@ -25,5 +25,9 @@ jobs:
           python -m pip install -e ".[dev]" cryptography
       - name: Compile source
         run: python -m compileall -q omega tools tests
+      - name: Prepare isolated test runtime
+        run: |
+          mkdir -p apps
+          echo "AUDIT_HMAC_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
       - name: Run tests
         run: python -m pytest -q
