@@ -148,11 +148,19 @@ class OmegaService:
             return 201, {"access_token": token, "token_type": "Bearer", "expires_in": ttl}
 
         if method == "GET" and p == "/v1/federation/status":
+            # No afirmar que existe una red federada operativa: el servicio
+            # API todavía no consume un registro de peers verificados.
+            # El descubrimiento de candidatos no equivale a enrolamiento ni confianza.
             return 200, {
-                "orchestrator": "DeepSeek",
-                "network_nodes": ["Tavily", "DuckDuckGo", "Pollinations"],
-                "mode": "hierarchical_federated_network",
-                "status": "active"
+                "status": "unknown",
+                "mode": "discovery_only",
+                "orchestrator": None,
+                "network_nodes": [],
+                "peer_count": None,
+                "trusted_peer_count": None,
+                "identity_verification": "not_reported",
+                "remote_enrollment": "disabled",
+                "reason": "RUNTIME_FEDERATION_STATUS_NOT_WIRED",
             }
 
         if method == "POST" and p == "/v1/federation/internet":
