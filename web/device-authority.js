@@ -177,8 +177,16 @@
       privateBytes.fill(0);
     }
 
+    const fingerprint = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", spki)
+    );
+    const deviceId = Array.from(
+      fingerprint, b => b.toString(16).padStart(2, "0")
+    ).join("");
+
     return {
       privateKey,
+      deviceId,
       publicKeyPem: pem("PUBLIC KEY", spki)
     };
   }
@@ -195,13 +203,13 @@
     });
 
     await dbPut({
-      deviceId: result.device_id,
+      deviceId: identity.deviceId,
       privateKey: identity.privateKey,
       algorithm: result.algorithm,
       enrolledAt: Date.now()
     });
 
-    return result;
+    return { algorithm: result.algorithm };
   }
 
   async function signedTaskHeaders(payload) {
@@ -369,8 +377,8 @@
         const result = await enroll(code);
         input.value = "";
         showResult(
-          "DISPOSITIVO REGISTRADO\nID: " + result.device_id +
-          "\nAlgoritmo: " + result.algorithm
+          "DISPOSITIVO REGISTRADO\n" +
+          "Algoritmo: " + result.algorithm
         );
       } catch (error) {
         showResult("ERROR: " + error.message, true);
@@ -386,8 +394,7 @@
         showResult(
           "AUTORIZACIÓN VERIFICADA\n" +
           "Acción: " + result.action +
-          "\nAutoridad: " + result.authority +
-          "\nDispositivo: " + result.device_id
+          "\nAutoridad: " + result.authority
         );
       } catch (error) {
         showResult("ERROR: " + error.message, true);
@@ -421,7 +428,7 @@
 
     dbGet().then(identity => {
       if (identity) {
-        showResult("Dispositivo registrado localmente: " + identity.deviceId);
+        showResult("Este navegador tiene una clave de dispositivo registrada.");
       } else {
         showResult("Este navegador todavía no está registrado.");
       }
