@@ -238,3 +238,48 @@ def test_bootstrap_rejects_expired_or_missing_expiry(tmp_path):
     no_expiry = OperatorIdentityAuthority(tmp_path / "no-expiry.sqlite3", code, bootstrap_expires_at=time.time() + 600)
     with pytest.raises(OperatorIdentityError, match="OPERATOR_BOOTSTRAP_DISABLED"):
         no_expiry.bootstrap(code, public)
+
+
+
+def test_revocation_releases_primary_slot_for_explicit_new_root_recovery(tmp_path):
+    code = "bootstrap-secret-" + "x" * 40
+    recovery_code = "recovery-bootstrap-" + "y" * 40
+    old_root, old_root_public = keypair()
+    new_root, new_root_public = keypair()
+    _, old_device_public = keypair()
+    _, new_device_public = keypair()
+    db = tmp_path / "identity.sqlite3"
+    authority = OperatorIdentityAuthority(
+        db, code, bootstrap_expires_at=time.time() + 600
+    )
+    old_identity = authority.bootstrap(code, old_root_public)
+    old_id = old_identity["identity_id"]
+    _, old_binding = authority.device_binding_payload(
+        old_device_public, key_version=1
+    )
+    authority.bind_primary_device(
+        old_id, old_device_public, sign(old_root, old_binding),
+        expected_key_version=1,
+    )
+    authority.revoke(
+        old_id, sign(old_root, b"revoke-root-v1\\n" + old_id.encode("ascii")),
+        expected_key_version=1,
+    )
+    with pytest.raises(OperatorIdentityError, match="PRIMARY_DEVICE_NOT_AUTHORIZED"):
+        authority.verify_primary_device(old_id, old_device_public)
+
+    recovered = OperatorIdentityAuthority(
+        db, recovery_code, bootstrap_expires_at=time.time() + 600
+    )
+    new_identity = recovered.bootstrap(recovery_code, new_root_public)
+    new_id = new_identity["identity_id"]
+    _, new_binding = recovered.device_binding_payload(
+        new_device_public, key_version=1
+    )
+    recovered.bind_primary_device(
+        new_id, new_device_public, sign(new_root, new_binding),
+        expected_key_version=1,
+    )
+    assert recovered.verify_primary_device(new_id, new_device_public)
+    with pytest.raises(OperatorIdentityError, match="PRIMARY_DEVICE_NOT_AUTHORIZED"):
+        recovered.verify_primary_device(old_id, old_device_public)
