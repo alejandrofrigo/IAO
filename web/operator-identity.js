@@ -110,6 +110,12 @@
 
   async function bootstrap(code, recoveryCode) {
     if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
+    if (!window.IAODeviceAuthority ||
+        typeof window.IAODeviceAuthority.prepareBootstrapIdentity !== "function" ||
+        typeof window.IAODeviceAuthority.signBootstrapPayload !== "function" ||
+        typeof window.IAODeviceAuthority.activateRecoveryIdentity !== "function") {
+      throw new Error("DEVICE_BOOTSTRAP_NOT_AVAILABLE");
+    }
     let stored = await readIdentity();
     if (stored && stored.keyVersion) throw new Error("ROOT_IDENTITY_ALREADY_REGISTERED");
     if (!stored) {
@@ -120,14 +126,52 @@
         createdAt: Date.now(),
         bootstrapPending: true
       };
-      // Keep the key if the network outcome is ambiguous: the server may have
-      // consumed the one-time code before a response was lost.
+      // Keep both pending private keys if the network outcome is ambiguous.
       await writeIdentity(stored);
     }
+    const device = await window.IAODeviceAuthority.prepareBootstrapIdentity();
+    const devicePublicKeyPem = device.publicKeyPem;
+    const encodedPem = devicePublicKeyPem
+      .replace(/-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\\s/g, "");
+    const deviceDer = Uint8Array.from(atob(encodedPem), ch => ch.charCodeAt(0));
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", deviceDer));
+    const deviceId = Array.from(digest, value => value.toString(16).padStart(2, "0")).join("");
+    const bindingPayload = encoder.encode(JSON.stringify({
+      device_id: deviceId,
+      key_version: 1,
+      protocol: "IAO-DEVICE-BINDING-V1",
+      public_key_sha256: deviceId,
+      role: "PRIMARY"
+    }));
+    const rootMessage = new Uint8Array(ROOT_DOMAIN.length + bindingPayload.length);
+    rootMessage.set(ROOT_DOMAIN);
+    rootMessage.set(bindingPayload, ROOT_DOMAIN.length);
+    const rootRaw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, stored.privateKey, rootMessage
+    ));
+    const payloadEncoded = b64url(bindingPayload);
+    const deviceSignature = await window.IAODeviceAuthority.signBootstrapPayload(payloadEncoded);
     const result = await request("/v1/operator/bootstrap", "POST", {
-      code, recovery_code: recoveryCode, root_public_key_pem: stored.publicKeyPem
+      code,
+      recovery_code: recoveryCode,
+      root_public_key_pem: stored.publicKeyPem,
+      device_public_key_pem: devicePublicKeyPem,
+      root_signature: b64url(rawEcdsaToDer(rootRaw)),
+      device_signature: deviceSignature
     });
-    await writeIdentity({ ...stored, identityId: result.identity_id, keyVersion: result.key_version, bootstrapPending: false });
+    if (result.status !== "ROOT_AND_DEVICE_REGISTERED" ||
+        result.authority !== "OPERATOR_BOOTSTRAPPED_READ_ONLY" ||
+        result.device_registered !== true || result.key_version !== 1) {
+      throw new Error("INVALID_OPERATOR_BOOTSTRAP_RESPONSE");
+    }
+    await window.IAODeviceAuthority.activateRecoveryIdentity(devicePublicKeyPem);
+    await writeIdentity({
+      privateKey: stored.privateKey,
+      publicKeyPem: stored.publicKeyPem,
+      keyVersion: result.key_version,
+      createdAt: Date.now(),
+      bootstrapPending: false
+    });
     return { ...result, recoveryCode };
   }
   async function recoverIdentity(recoveryCode, newRecoveryCode) {
