@@ -569,7 +569,7 @@ class OperatorIdentityAuthority:
                 ):
                     raise OperatorIdentityError("OPERATOR_LOGIN_AUTHORITY_CHANGED", 403)
                 message = ROOT_SIGNATURE_DOMAIN + row["signing_payload"]
-                device_message = b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + row["signing_payload"]
+                device_message = b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + row["signing_payload"]
                 try:
                     root_key = serialization.load_pem_public_key(
                         row["root_public_key_pem"].encode("ascii")
