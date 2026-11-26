@@ -137,6 +137,15 @@ def test_device_routes_require_operator_session_and_reject_guest_enrollment(monk
     assert unauthenticated_status.status_code == 401
 
 
+def test_cors_allows_signed_device_task_proof_header():
+    cors = next(
+        middleware for middleware in main.app.user_middleware
+        if middleware.cls.__name__ == "CORSMiddleware"
+    )
+    allowed = {header.lower() for header in cors.kwargs["allow_headers"]}
+    assert "x-iao-device-proof" in allowed
+
+
 def test_device_routes_do_not_bypass_persistent_service_authentication(monkeypatch, tmp_path):
     client = configured_client(monkeypatch, tmp_path)
     response = client.post(
