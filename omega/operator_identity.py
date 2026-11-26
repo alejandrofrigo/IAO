@@ -311,8 +311,11 @@ class OperatorIdentityAuthority:
                     (now,),
                 )
                 row = db.execute(
-                    """SELECT identity_id,key_version,status,recovery_code_digest
-                    FROM operator_identities WHERE recovery_code_digest=?""",
+                    """SELECT i.identity_id,i.key_version,i.status,i.recovery_code_digest,
+                    i.root_public_key_pem,b.device_public_key_pem AS old_device_public_key_pem
+                    FROM operator_identities i
+                    LEFT JOIN primary_device_bindings b ON b.identity_id=i.identity_id
+                    WHERE i.recovery_code_digest=?""",
                     (recovery_digest,),
                 ).fetchone()
                 if row is None or row["status"] not in ("ACTIVE", "REVOKED"):
@@ -349,6 +352,27 @@ class OperatorIdentityAuthority:
                     serialization.Encoding.DER,
                     serialization.PublicFormat.SubjectPublicKeyInfo,
                 )
+                old_root_key = serialization.load_pem_public_key(
+                    row["root_public_key_pem"].encode("ascii")
+                )
+                old_root_der = old_root_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                if hmac.compare_digest(hashlib.sha256(root_der).digest(), hashlib.sha256(old_root_der).digest()):
+                    raise OperatorIdentityError("OPERATOR_RECOVERY_ROOT_KEY_MUST_ROTATE", 400)
+                if hmac.compare_digest(hashlib.sha256(root_der).digest(), hashlib.sha256(device_der).digest()):
+                    raise OperatorIdentityError("OPERATOR_RECOVERY_KEYS_MUST_BE_DISTINCT", 400)
+                if row["old_device_public_key_pem"] is not None:
+                    old_device_key = serialization.load_pem_public_key(
+                        row["old_device_public_key_pem"].encode("ascii")
+                    )
+                    old_device_der = old_device_key.public_bytes(
+                        serialization.Encoding.DER,
+                        serialization.PublicFormat.SubjectPublicKeyInfo,
+                    )
+                    if hmac.compare_digest(hashlib.sha256(device_der).digest(), hashlib.sha256(old_device_der).digest()):
+                        raise OperatorIdentityError("OPERATOR_RECOVERY_DEVICE_KEY_MUST_ROTATE", 400)
                 payload = json.dumps({
                     "device_key_sha256": hashlib.sha256(device_der).hexdigest(),
                     "expires_at": int(expires_at),
