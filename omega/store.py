@@ -323,6 +323,14 @@ class Store:
                 row = self.db.execute("SELECT * FROM task WHERE owner=? AND idem_key=?", (owner, idem)).fetchone()
         return dict(row), created
 
+    def get_task_by_idempotency(self, owner: str, idem: str) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT * FROM task WHERE owner=? AND idem_key=?",
+                (owner, idem),
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_task(self, task_id: str, owner: str) -> dict[str, Any] | None:
         with self.lock:
             r = self.db.execute("SELECT * FROM task WHERE id=? AND owner=?", (task_id, owner)).fetchone()
