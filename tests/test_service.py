@@ -443,6 +443,32 @@ class AuthTests(Base):
         self.assertTrue(device_authority.verify_registered_public_key(
             device_public, owner_subject=row["owner_subject"],
         ))
+        bootstrap_status, bootstrap_reconciliation = self.call(
+            "POST", "/v1/operator/bootstrap/status", {},
+            {
+                "root_public_key_pem": root_public,
+                "device_public_key_pem": device_public,
+            },
+        )
+        self.assertEqual(bootstrap_status, 200)
+        self.assertTrue(bootstrap_reconciliation["committed"])
+        self.assertEqual(
+            bootstrap_reconciliation["authority"], "OPERATOR_BOOTSTRAPPED_READ_ONLY",
+        )
+        self.assertNotIn("identity_id", bootstrap_reconciliation)
+        other_device = ec.generate_private_key(ec.SECP256R1())
+        other_device_public = other_device.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        _, not_committed = self.call(
+            "POST", "/v1/operator/bootstrap/status", {},
+            {
+                "root_public_key_pem": root_public,
+                "device_public_key_pem": other_device_public,
+            },
+        )
+        self.assertFalse(not_committed["committed"])
         login_status, login_challenge = self.call(
             "POST", "/v1/operator/login/challenge", {}, {},
         )
