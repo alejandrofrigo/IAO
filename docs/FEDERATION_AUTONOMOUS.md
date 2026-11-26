@@ -11,6 +11,7 @@
 - La identidad persistente libp2p se protege con permisos de archivo 0600; los directorios de estado usan 0700 cuando el sistema lo permite.
 - La identidad IAO HTTP usa Ed25519; el challenge vincula clave pública, ID del nodo, nonce, requester y timestamp.
 - Las respuestas federadas se tratan como datos no confiables, aunque su firma sea válida.
+- Los directorios y feeds públicos de descubrimiento usan un cliente HTTPS fijado a una IP DNS global verificada, sin proxies ambientales ni redirects, con validación TLS del hostname, límite de respuesta y tipo JSON obligatorio.
 
 ## Bloqueos de seguridad intencionados
 
@@ -22,7 +23,7 @@ El descubrimiento continúa disponible, pero un peer descubierto no obtiene conf
 
 ## Trabajo pendiente para habilitar federación externa
 
-1. Implementar un cliente HTTPS de transporte confiable que valide certificados y hostname, rechace redirects, limite tiempo/tamaño y resuelva DNS con protección SSRF y DNS rebinding.
+1. Integrar el cliente HTTPS fijado y limitado también en el handshake de federación, sin abrir el acceso remoto hasta completar las pruebas.
 2. Integrar mTLS real (certificado de cliente y validación de CA) en la misma conexión usada para el handshake; no aceptar flags declarativos.
 3. Vincular la atestación de transporte al challenge Ed25519 y a la URL/peer esperado; evitar replay y sustitución de endpoint.
 4. Separar capacidades públicas explícitamente exportables de conocimiento, registros, memoria y datos privados del operador.
