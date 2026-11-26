@@ -11,7 +11,12 @@ an explicit future expiry timestamp is configured; missing, malformed or
 expired bootstrap windows fail closed. It also supports a root-signed,
 canonical device-binding payload and a persistent single-primary-device
 binding. A binding is invalidated when the root key version changes and must
-be explicitly re-authorized by the new root key version.
+be explicitly re-authorized by the new root key version. Root revocation
+transactionally removes that identity's active primary-device binding while
+retaining the revoked identity record, so the single-primary slot is not
+permanently stranded. This does not itself implement or authorize production
+recovery; a separately provisioned, expiring bootstrap capability is still
+required, and recovery remains outside the API/session flow.
 
 This is a foundation only, not an end-to-end operator identity system. It is
 not yet wired to API sessions, device enrollment/binding, task authorization,
