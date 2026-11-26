@@ -57,6 +57,7 @@ class OmegaService:
         self._operator_bootstrap_hits: deque[float] = deque()
         self._operator_login_hits: deque[float] = deque()
         self._operator_recovery_hits: deque[float] = deque()
+        self._operator_recovery_complete_hits: deque[float] = deque()
         self._rl = threading.Lock()
 
         # A RUNNING task after restart has an unknown execution outcome.
@@ -254,6 +255,15 @@ class OmegaService:
         if method == "POST" and p == "/v1/operator/recovery/complete":
             if self.operator_identity_authority is None or self.device_authority is None:
                 raise ApiError(503, "OPERATOR_RECOVERY_UNAVAILABLE")
+            now = self.clock()
+            with self._rl:
+                while self._operator_recovery_complete_hits and self._operator_recovery_complete_hits[0] < now - 60:
+                    self._operator_recovery_complete_hits.popleft()
+                limited = len(self._operator_recovery_complete_hits) >= 12
+                if not limited:
+                    self._operator_recovery_complete_hits.append(now)
+            if limited:
+                raise ApiError(429, "RATE_LIMITED")
             data = self._json(body)
             handle = data.get("challenge")
             root_encoded = data.get("root_signature")
