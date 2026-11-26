@@ -354,7 +354,7 @@ class OperatorIdentityAuthority:
                     "expires_at": int(expires_at),
                     "identity_tag": hashlib.sha256(row["identity_id"].encode("ascii")).hexdigest(),
                     "next_key_version": row["key_version"] + 1,
-                    "new_recovery_code_sha256": new_recovery_digest,
+                    "new_recovery_code_hmac_sha256": new_recovery_digest,
                     "nonce": nonce,
                     "protocol": "IAO-OPERATOR-RECOVERY-V1",
                     "purpose": "REPLACE_ROOT_AND_PRIMARY_DEVICE",
@@ -439,7 +439,24 @@ class OperatorIdentityAuthority:
                     raise OperatorIdentityError("INVALID_OPERATOR_RECOVERY_SIGNATURE", 401) from None
                 next_version = row["old_key_version"] + 1
                 payload_obj = json.loads(row["signing_payload"])
-                if payload_obj.get("next_key_version") != next_version:
+                root_der = root_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                device_der = device_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                if (
+                    payload_obj.get("next_key_version") != next_version
+                    or payload_obj.get("new_recovery_code_hmac_sha256") != row["new_recovery_digest"]
+                    or payload_obj.get("root_key_sha256") != hashlib.sha256(root_der).hexdigest()
+                    or payload_obj.get("device_key_sha256") != hashlib.sha256(device_der).hexdigest()
+                    or payload_obj.get("identity_tag") != hashlib.sha256(row["identity_id"].encode("ascii")).hexdigest()
+                    or payload_obj.get("expires_at") != int(row["expires_at"])
+                    or not isinstance(payload_obj.get("nonce"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", payload_obj["nonce"])
+                ):
                     raise OperatorIdentityError("OPERATOR_RECOVERY_AUTHORITY_CHANGED", 409)
                 subject = "operator:" + row["identity_id"]
                 if device_replacement is None:
