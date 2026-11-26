@@ -83,10 +83,13 @@ python -m omega.task_worker
 
 The worker claims only `QUEUED` tasks using a SQLite write transaction, then
 revalidates the policy version, saved capability scope and task expiry before
-calling the registered tool. Completion is fenced by the worker lease owner and
-lease expiry. A stale or expired worker cannot commit a result. A task whose
-execution outcome is uncertain is failed closed; it is not automatically
-requeued or replayed.
+calling the registered tool. Both API acceptance and the worker enforce
+`effect_class == READ_ONLY`; queued write, execution and administrative
+capabilities are rejected. This is a conservative boundary until cryptographic
+primary-device command authorization is integrated into the task endpoint.
+Completion is fenced by the worker lease owner and lease expiry. A stale or
+expired worker cannot commit a result. A task whose execution outcome is
+uncertain is failed closed; it is not automatically requeued or replayed.
 
 The HTTP server does **not** launch the worker implicitly. A running worker
 process is not guaranteed by CI or image qualification. The current worker
