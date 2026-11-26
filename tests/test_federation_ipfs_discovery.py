@@ -124,3 +124,11 @@ def test_external_peer_is_not_enrolled_without_trusted_transport():
     assert result["status"] == "BLOCKED_TRUSTED_TRANSPORT_NOT_INTEGRATED"
     assert result["enrollment_performed"] is False
     assert result["capabilities_granted"] == []
+
+
+def test_external_federation_handshake_is_blocked_until_transport_adapter():
+    from tools.iao_federation_autonomous import _remote_handshake_allowed
+    assert _remote_handshake_allowed("http://127.0.0.1:8080/fed/v1/message")
+    assert _remote_handshake_allowed("https://localhost/fed/v1/message")
+    assert not _remote_handshake_allowed("https://peer.example.org/fed/v1/message")
+    assert not _remote_handshake_allowed("https://10.1.2.3/fed/v1/message")
