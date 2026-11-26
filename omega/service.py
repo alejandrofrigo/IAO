@@ -619,16 +619,11 @@ class OmegaService:
             if not isinstance(proof, dict):
                 raise ApiError(400, "INVALID_DEVICE_PROOF")
             request_digest = hashlib.sha256(body).hexdigest()
-            if self.operator_identity_authority is None:
-                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
             try:
                 self.device_authority.verify_request(
                     proof, method="POST", path="/v1/tasks",
                     request_digest=request_digest,
                     owner_subject=pr.subject,
-                )
-                self.operator_identity_authority.verify_primary_device_for_session(
-                    pr.subject, self._verified_bearer_token(headers), proof.get("device_id"),
                 )
             except DeviceAuthorityError as exc:
                 self.store.audit(
@@ -636,16 +631,6 @@ class OmegaService:
                     decision="DENY", reason=exc.code,
                 )
                 raise ApiError(exc.status, exc.code) from None
-            except OperatorIdentityError as exc:
-                self.store.audit(
-                    pr.subject, "OPERATOR_DEVICE_BINDING_DENIED", "task_submission",
-                    decision="DENY", reason=exc.code,
-                )
-                raise ApiError(exc.status, exc.code) from None
-            self.store.audit(
-                pr.subject, "DEVICE_REQUEST_VERIFIED", "task_submission",
-                decision="ALLOW", request_digest=request_digest,
-            )
         request_digest = _digest({
             "goal": goal,
             "capability": cap,
@@ -662,6 +647,23 @@ class OmegaService:
                     raise ApiError(409, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST")
                 self.store.audit(pr.subject, "TASK_IDEMPOTENT_REPLAY", previous["id"])
                 return 200, {**self._view(previous), "idempotent_replay": True}
+        if execution_mode == "queued":
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            try:
+                self.operator_identity_authority.verify_primary_device_for_session(
+                    pr.subject, self._verified_bearer_token(headers), proof.get("device_id"),
+                )
+            except OperatorIdentityError as exc:
+                self.store.audit(
+                    pr.subject, "OPERATOR_DEVICE_BINDING_DENIED", "task_submission",
+                    decision="DENY", reason=exc.code,
+                )
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                pr.subject, "DEVICE_REQUEST_VERIFIED", "task_submission",
+                decision="ALLOW", request_digest=hashlib.sha256(body).hexdigest(),
+            )
         day = datetime.fromtimestamp(self.clock(), timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         if self.store.count_tasks_since(pr.subject, day) >= self.quota:
             self.store.audit(pr.subject, "QUOTA", "daily_task_quota", decision="DENY", reason="QUOTA_EXCEEDED")
