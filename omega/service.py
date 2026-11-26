@@ -645,6 +645,19 @@ class OmegaService:
                 previous_intent = json.loads(previous["intent_json"])
                 if previous_intent.get("request_digest") != request_digest:
                     raise ApiError(409, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST")
+                if execution_mode == "queued":
+                    if self.operator_identity_authority is None:
+                        raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+                    try:
+                        self.operator_identity_authority.verify_primary_device_for_session(
+                            pr.subject, self._verified_bearer_token(headers), proof.get("device_id"),
+                        )
+                    except OperatorIdentityError as exc:
+                        self.store.audit(
+                            pr.subject, "OPERATOR_DEVICE_BINDING_DENIED", "task_submission",
+                            decision="DENY", reason=exc.code,
+                        )
+                        raise ApiError(exc.status, exc.code) from None
                 self.store.audit(pr.subject, "TASK_IDEMPOTENT_REPLAY", previous["id"])
                 return 200, {**self._view(previous), "idempotent_replay": True}
         if execution_mode == "queued":
