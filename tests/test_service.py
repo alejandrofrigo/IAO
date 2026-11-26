@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -12,6 +13,7 @@ from omega.server import build_service
 from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolSpec
 from omega.task_worker import TaskWorker
+from omega.service import POLICY_VERSION
 
 KEY = "unit-test-key-0123456789"
 CORPUS = Path(__file__).resolve().parent.parent / "docs" / "corpus"
@@ -257,6 +259,46 @@ class QueuedTaskApiTests(Base):
             self.svc.store.get_task(response["task_id"], "queued-user")["state"],
             "DENIED",
         )
+
+    def test_worker_independently_rejects_persisted_write_task(self) -> None:
+        self.svc.registry.register(
+            ToolSpec(
+                "test.write", "1", "test.write", "WRITE",
+                1.0, lambda value: value, lambda value: value,
+                lambda output: "PASS",
+            )
+        )
+        intent = {
+            "contract_version": "1.0",
+            "goal": "must not execute",
+            "allowed_capabilities": ["test.write"],
+            "authorized_scopes": ["test.write"],
+            "input": {"value": "x"},
+            "policy_version": POLICY_VERSION,
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+            "budget": {"timeout_seconds": 5},
+        }
+        task, created = self.svc.store.create_task(
+            "persisted-write-task", "queued-user", intent, None
+        )
+        self.assertTrue(created)
+        self.svc.store.set_task_state(task["id"], "AUTHORIZED")
+        self.assertTrue(self.svc.store.queue_task(task["id"]))
+
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="defensive-worker", lease_seconds=30,
+        )
+        self.assertTrue(worker.run_once())
+        result = self.svc.store.get_task(task["id"], "queued-user")
+        self.assertEqual(result["state"], "FAILED")
+        self.assertEqual(
+            json.loads(result["result_json"])["error"],
+            "WORKER_READ_ONLY_ONLY",
+        )
+        self.assertEqual(self.svc.store.tool_executions(task["id"]), [])
 
     def test_queued_mode_rejects_non_string_mode(self) -> None:
         status, payload = self.call(
