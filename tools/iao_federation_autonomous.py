@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
 from omega.federation import Node, verify_identity_challenge
+from omega.federation_transport import fetch_public_json
 import omega.federation_protocols.native  # noqa: F401
 import omega.federation_protocols.nostr   # noqa: F401
 from omega.federation_protocols import probe_any, get as get_adapter
@@ -44,45 +45,78 @@ def audit(event, **fields):
 def discover_signed_directory(url, trusted_pub_hex, timeout=15):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            doc = json.loads(r.read(1_000_000))
-    except Exception as e:
-        audit("discovery_directory_failed", url=url, error=str(e)[:120]); return []
+        doc = fetch_public_json(url, timeout=timeout, max_bytes=1_000_000)
+    except Exception as exc:
+        audit("discovery_directory_failed", error_type=type(exc).__name__)
+        return []
+    if not isinstance(doc, dict):
+        audit("discovery_directory_invalid", reason="JSON_OBJECT_REQUIRED")
+        return []
     sig = doc.pop("sig", None)
-    if not sig:
-        audit("discovery_directory_unsigned", url=url); return []
+    if not isinstance(sig, str) or not sig or len(sig) > 256:
+        audit("discovery_directory_unsigned", reason="SIGNATURE_MISSING")
+        return []
     body = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
     try:
+        signature = base64.b64decode(sig, validate=True)
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pub_hex)).verify(
-            base64.b64decode(sig), body)
+            signature, body
+        )
     except Exception:
-        audit("discovery_directory_bad_signature", url=url); return []
+        audit("discovery_directory_bad_signature")
+        return []
     peers = doc.get("peers", [])
-    if not isinstance(peers, list): return []
+    if not isinstance(peers, list):
+        return []
     out = []
-    for p in peers:
-        if isinstance(p, dict) and p.get("id") and p.get("url"):
-            out.append({"url": p["url"], "id": p["id"],
-                        "capabilities": p.get("capabilities", []),
-                        "source": f"signed_directory:{url}"})
-    audit("discovery_directory_ok", url=url, peers=len(out)); return out
+    for peer in peers[:1000]:
+        if (
+            isinstance(peer, dict)
+            and isinstance(peer.get("id"), str)
+            and isinstance(peer.get("url"), str)
+            and peer["url"].startswith("https://")
+        ):
+            out.append({
+                "url": peer["url"],
+                "id": peer["id"],
+                "capabilities": peer.get("capabilities", []),
+                "source": "signed_directory",
+            })
+    audit("discovery_directory_ok", peers=len(out))
+    return out
+
 
 def discover_feed(url, timeout=10):
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read(500_000))
-    except Exception as e:
-        audit("discovery_feed_failed", url=url, error=str(e)[:120]); return []
-    peers = data if isinstance(data, list) else data.get("peers", [])
+        data = fetch_public_json(url, timeout=timeout, max_bytes=500_000)
+    except Exception as exc:
+        audit("discovery_feed_failed", error_type=type(exc).__name__)
+        return []
+    if isinstance(data, list):
+        peers = data
+    elif isinstance(data, dict):
+        peers = data.get("peers", [])
+    else:
+        return []
+    if not isinstance(peers, list):
+        return []
     out = []
-    for p in peers:
-        if isinstance(p, dict) and p.get("id") and p.get("url"):
-            out.append({"url": p["url"], "id": p["id"],
-                        "capabilities": p.get("capabilities", []),
-                        "source": f"feed:{url}"})
-    audit("discovery_feed_ok", url=url, peers=len(out)); return out
+    for peer in peers[:1000]:
+        if (
+            isinstance(peer, dict)
+            and isinstance(peer.get("id"), str)
+            and isinstance(peer.get("url"), str)
+            and peer["url"].startswith("https://")
+        ):
+            out.append({
+                "url": peer["url"],
+                "id": peer["id"],
+                "capabilities": peer.get("capabilities", []),
+                "source": "public_feed",
+            })
+    audit("discovery_feed_ok", peers=len(out))
+    return out
+
 
 def _validate_local_ipfs_api(value):
     """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
