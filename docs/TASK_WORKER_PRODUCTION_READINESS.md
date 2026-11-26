@@ -15,14 +15,19 @@ rotated, revoked, or mismatched, the worker marks the task failed without
 calling the tool.
 
 Queue leases fence claims and completion. A worker cannot complete another
-worker's claim, and an expired lease cannot be used to complete a task. Startup
-recovery fails interrupted work closed rather than silently replaying it.
+worker's claim, and an expired lease cannot be used to complete a task. Worker startup now reconciles expired `RUNNING` and `VERIFYING` leases and marks
+those tasks `FAILED` with `PROCESS_INTERRUPTED`; live leases are preserved.
+Interrupted work is never silently replayed. This is a fail-closed recovery
+mechanism, not proof of exactly-once tool effects.
 
 ## Required evidence before removing the production block
 
 - [ ] Full Python test matrix passes on supported Python versions.
 - [ ] Browser integration passes on supported Chromium; physical Android
       browser validation is still required and is not implied by CI.
+- [x] Unit test covers an expired `VERIFYING` lease: startup recovery marks it
+      failed and it cannot be claimed again. Full process-kill fault injection
+      across external tool side effects remains outstanding.
 - [ ] Fault-injection tests cover process death before tool invocation,
       during invocation, after invocation, and before result persistence.
 - [ ] Tool execution has an explicit idempotency contract. A timeout or worker
