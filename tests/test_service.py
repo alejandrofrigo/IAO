@@ -443,6 +443,39 @@ class AuthTests(Base):
         self.assertTrue(device_authority.verify_registered_public_key(
             device_public, owner_subject=row["owner_subject"],
         ))
+        login_status, login_challenge = self.call(
+            "POST", "/v1/operator/login/challenge", {}, {},
+        )
+        self.assertEqual(login_status, 200)
+        login_payload = base64.urlsafe_b64decode(
+            login_challenge["signing_payload"]
+            + "=" * (-len(login_challenge["signing_payload"]) % 4)
+        )
+        login_status, login_result = self.call(
+            "POST", "/v1/operator/login/complete", {},
+            {
+                "challenge": login_challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(
+                    root.sign(ROOT_SIGNATURE_DOMAIN + login_payload, ec.ECDSA(hashes.SHA256()))
+                ).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(
+                    device.sign(
+                        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + login_payload,
+                        ec.ECDSA(hashes.SHA256()),
+                    )
+                ).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(login_status, 200)
+        self.assertEqual(login_result["authority"], "OPERATOR_AUTHENTICATED_READ_ONLY")
+        self.assertEqual(login_result["scopes"], [])
+        operator_headers = {"authorization": "Bearer " + login_result["access_token"]}
+        session_status, session_result = self.call(
+            "GET", "/v1/operator/session/status", operator_headers,
+        )
+        self.assertEqual(session_status, 200)
+        self.assertTrue(session_result["associated"])
+        self.assertEqual(session_result["authority"], "IDENTITY_BOUND_READ_ONLY")
         repeated = self.call("POST", "/v1/operator/bootstrap", {}, request_body)
         self.assertEqual((repeated[0], repeated[1]["error"]), (503, "OPERATOR_BOOTSTRAP_DISABLED"))
         audit = json.dumps(self.svc.store._all_events())
@@ -485,7 +518,7 @@ class AuthTests(Base):
         status, result = self.call("POST", "/v1/operator/bootstrap", {}, body)
         self.assertEqual((status, result["error"]), (401, "INVALID_BOOTSTRAP_DEVICE_SIGNATURE"))
         self.assertEqual(self.svc.operator_identity_authority.primary_device_public_key(), None)
-        self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, "")
+        self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
 
     def test_operator_bootstrap_is_disabled_without_device_authority(self) -> None:
         status, result = self.call(
