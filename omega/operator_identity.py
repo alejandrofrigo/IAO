@@ -420,7 +420,10 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("PRIMARY_DEVICE_KEY_MISMATCH", 403)
         return True
 
-    def revoke(self, identity_id: str, signature: bytes, *, expected_key_version: int) -> None:
+    def revoke(
+        self, identity_id: str, signature: bytes, *, expected_key_version: int,
+        device_revocation=None,
+    ) -> None:
         payload = b"revoke-root-v1\n" + identity_id.encode("ascii")
         self.verify_root_signature(
             identity_id, payload, signature,
@@ -430,6 +433,16 @@ class OperatorIdentityAuthority:
         with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
+                if device_revocation is not None:
+                    binding = db.execute(
+                        "SELECT device_public_key_pem FROM primary_device_bindings WHERE identity_id=?",
+                        (identity_id,),
+                    ).fetchone()
+                    if binding is not None:
+                        # Deactivate the device first. If the root transaction
+                        # subsequently fails, the result is fail-closed.
+                        with device_revocation(binding["device_public_key_pem"]):
+                            pass
                 changed = db.execute(
                     """UPDATE operator_identities SET status='REVOKED',
                     revoked_at=?,updated_at=? WHERE identity_id=?
