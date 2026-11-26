@@ -212,13 +212,24 @@
   }
   async function revokeIdentity() {
     const identity = await readIdentity();
-    if (!identity || !identity.privateKey || !identity.identityId || !identity.keyVersion) {
-      throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
+    const sessionToken = typeof window.iaoGetSessionToken === "function"
+      ? window.iaoGetSessionToken() : "";
+    let sessionIdentityId = null;
+    try {
+      const payloadPart = sessionToken.split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+      const claims = JSON.parse(atob(payloadPart + "=".repeat((4 - payloadPart.length % 4) % 4)));
+      const match = typeof claims.sub === "string"
+        ? /^operator:([0-9a-f]{32})$/.exec(claims.sub) : null;
+      sessionIdentityId = match ? match[1] : null;
+    } catch (_) {}
+    const identityId = identity && identity.identityId || sessionIdentityId;
+    if (!identity || !identity.privateKey || !identity.keyVersion || !identityId) {
+      throw new Error("ROOT_IDENTITY_OR_OPERATOR_SESSION_NOT_ENROLLED");
     }
-    if (!window.confirm("Revocar permanentemente la identidad raíz y desactivar el dispositivo primario? Esta acción requiere un nuevo proceso de bootstrap para recuperar el acceso.")) {
+    if (!window.confirm("Revocar permanentemente la identidad raíz y desactivar el dispositivo primario? Esta acción requiere el código de recuperación offline para recuperar el acceso.")) {
       return { cancelled: true };
     }
-    const payload = encoder.encode("revoke-root-v1\n" + identity.identityId);
+    const payload = encoder.encode("revoke-root-v1\n" + identityId);
     const message = new Uint8Array(ROOT_DOMAIN.length + payload.length);
     message.set(ROOT_DOMAIN); message.set(payload, ROOT_DOMAIN.length);
     const raw = new Uint8Array(await crypto.subtle.sign(
