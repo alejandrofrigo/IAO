@@ -219,6 +219,58 @@
     return identity.publicKeyPem;
   }
 
+  async function prepareRecoveryIdentity() {
+    if (!crypto.subtle || !indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
+    const identity = await createIdentity();
+    await dbPut({
+      deviceId: identity.deviceId,
+      privateKey: identity.privateKey,
+      publicKeyPem: identity.publicKeyPem,
+      recoveryPending: true,
+      createdAt: Date.now()
+    });
+    return { publicKeyPem: identity.publicKeyPem };
+  }
+
+  async function recoveryPublicKeyPem() {
+    const identity = await dbGet();
+    if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
+      throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
+    }
+    return identity.publicKeyPem;
+  }
+
+  async function signRecoveryPayload(payloadBase64) {
+    const identity = await dbGet();
+    if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
+      throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
+    }
+    if (typeof payloadBase64 !== "string" || !/^[A-Za-z0-9_-]+$/.test(payloadBase64)) {
+      throw new Error("INVALID_OPERATOR_RECOVERY_PAYLOAD");
+    }
+    const encoded = payloadBase64.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = Uint8Array.from(
+      atob(encoded + "=".repeat((4 - encoded.length % 4) % 4)),
+      c => c.charCodeAt(0)
+    );
+    const domain = new TextEncoder().encode("IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00");
+    const message = new Uint8Array(domain.length + payload.length);
+    message.set(domain); message.set(payload, domain.length);
+    const raw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, identity.privateKey, message
+    ));
+    return b64url(rawEcdsaToDer(raw));
+  }
+
+  async function activateRecoveryIdentity() {
+    const identity = await dbGet();
+    if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
+      throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
+    }
+    await dbPut({ ...identity, recoveryPending: false, enrolledAt: Date.now() });
+    return { activated: true };
+  }
+
   async function signOperatorLoginPayload(payloadBase64) {
     const identity = await dbGet();
     if (!identity || !identity.privateKey || !identity.deviceId) {
@@ -469,6 +521,10 @@
 
   window.IAODeviceAuthority = Object.freeze({
     publicKeyPem,
+    prepareRecoveryIdentity,
+    recoveryPublicKeyPem,
+    signRecoveryPayload,
+    activateRecoveryIdentity,
     signOperatorLoginPayload,
     signedStatus,
     signedTaskHeaders,
