@@ -404,11 +404,22 @@ class OmegaService:
                                    ("capability", isinstance(cap, str) and bool(cap)),
                                    ("input", isinstance(tin, dict))) if not ok]
         expires = datetime.fromtimestamp(self.clock() + self.ttl, timezone.utc).isoformat()
-        intent = {"contract_version": "1.0", "goal": goal if isinstance(goal, str) else None,
-                  "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [],
-                  "request_digest": request_digest, "risk_class": "R0",
-                  "budget": {"max_model_calls": 0, "timeout_seconds": 20}, "termination_condition": "result or terminal error",
-                  "policy_version": POLICY_VERSION, "expires_at": expires}
+        execution_mode = d.get("execution_mode", "sync")
+        if execution_mode not in {"sync", "queued"}:
+            raise ApiError(400, "INVALID_EXECUTION_MODE")
+        intent = {
+            "contract_version": "1.0",
+            "goal": goal if isinstance(goal, str) else None,
+            "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [],
+            "authorized_scopes": sorted(pr.scopes),
+            "input": tin if isinstance(tin, dict) else {},
+            "request_digest": request_digest,
+            "risk_class": "R0",
+            "budget": {"max_model_calls": 0, "timeout_seconds": 20},
+            "termination_condition": "result or terminal error",
+            "policy_version": POLICY_VERSION,
+            "expires_at": expires,
+        }
         tid = str(uuid.uuid4())
         row, created = self.store.create_task(tid, pr.subject, intent, idem)
         if not created:
@@ -443,6 +454,29 @@ class OmegaService:
             self.store.set_task_state(tid, st, res)
             return 403, {"task_id": tid, "state": st, **res}
         to("AUTHORIZED")
+        if execution_mode == "queued":
+            if self.ttl <= 0:
+                to("EXPIRED")
+                result = {"decision": "ALLOW", "error": "LEASE_EXPIRED"}
+                self.store.set_task_state(tid, st, result)
+                return 200, {"task_id": tid, "state": st, **result}
+            st = transition(st, "QUEUED")
+            if not self.store.queue_task(tid):
+                self.store.audit(
+                    pr.subject, "TASK_QUEUE_REJECTED", tid,
+                    decision="FAIL_CLOSED", reason="STATE_CHANGE_CONFLICT",
+                )
+                raise ApiError(409, "TASK_QUEUE_STATE_CONFLICT")
+            self.store.audit(
+                pr.subject, "TASK_STATE", tid,
+                to="QUEUED", execution_mode="queued",
+            )
+            return 202, {
+                "task_id": tid,
+                "state": "QUEUED",
+                "status_url": f"/v1/tasks/{tid}",
+                "execution_mode": "queued",
+            }
         spec = self.registry.get(cap)
         assert spec is not None
         if self.ttl <= 0:
