@@ -535,7 +535,7 @@ class OperatorIdentityAuthority:
             or not isinstance(device_signature, bytes) or not 64 <= len(device_signature) <= 80
         ):
             raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_SIGNATURE", 401)
-        if not isinstance(token_key, str) or len(token_key) < 32:
+        if not isinstance(token_key, str) or not token_key:
             raise OperatorIdentityError("OPERATOR_LOGIN_UNAVAILABLE", 503)
         if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 60 <= ttl_seconds <= 900:
             raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_TTL")
