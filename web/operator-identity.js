@@ -71,10 +71,10 @@
     sequence.set(r, 2); sequence.set(s, 2 + r.length);
     return sequence;
   }
-  async function request(path, method, body) {
+  async function request(path, method, body, omitAuth = false) {
     const headers = {};
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    if (typeof window.iaoGetSessionToken === "function") {
+    if (!omitAuth && typeof window.iaoGetSessionToken === "function") {
       const token = window.iaoGetSessionToken();
       if (token) headers.Authorization = "Bearer " + token;
     }
@@ -140,6 +140,53 @@
       challenge: challenge.challenge, signature: b64url(rawEcdsaToDer(raw))
     });
   }
+  async function login() {
+    if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
+    const identity = await readIdentity();
+    if (!identity || !identity.privateKey || !identity.keyVersion) {
+      throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
+    }
+    if (!window.IAODeviceAuthority ||
+        typeof window.IAODeviceAuthority.signOperatorLoginPayload !== "function") {
+      throw new Error("DEVICE_AUTHORITY_NOT_AVAILABLE");
+    }
+    const challenge = await request("/v1/operator/login/challenge", "POST", {}, true);
+    if (challenge.protocol !== "IAO-OPERATOR-LOGIN-V1" ||
+        typeof challenge.challenge !== "string" ||
+        typeof challenge.signing_payload !== "string") {
+      throw new Error("INVALID_OPERATOR_LOGIN_CHALLENGE");
+    }
+    const encoded = challenge.signing_payload.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = Uint8Array.from(
+      atob(encoded + "=".repeat((4 - encoded.length % 4) % 4)),
+      c => c.charCodeAt(0)
+    );
+    const rootMessage = new Uint8Array(ROOT_DOMAIN.length + payload.length);
+    rootMessage.set(ROOT_DOMAIN);
+    rootMessage.set(payload, ROOT_DOMAIN.length);
+    const rootRaw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, identity.privateKey, rootMessage
+    ));
+    const deviceSignature = await window.IAODeviceAuthority.signOperatorLoginPayload(
+      challenge.signing_payload
+    );
+    const result = await request("/v1/operator/login/complete", "POST", {
+      challenge: challenge.challenge,
+      root_signature: b64url(rawEcdsaToDer(rootRaw)),
+      device_signature: deviceSignature
+    }, true);
+    if (typeof result.access_token !== "string" ||
+        result.authority !== "OPERATOR_AUTHENTICATED_READ_ONLY" ||
+        !Array.isArray(result.scopes) || result.scopes.length !== 0 ||
+        result.expires_in !== 900) {
+      throw new Error("INVALID_OPERATOR_LOGIN_RESPONSE");
+    }
+    if (typeof window.iaoActivateOperatorSession !== "function") {
+      throw new Error("OPERATOR_SESSION_ACTIVATION_UNAVAILABLE");
+    }
+    await window.iaoActivateOperatorSession(result.access_token);
+    return result;
+  }
   async function bindPrimaryDevice(publicKeyPem) {
     const identity = await readIdentity();
     if (!identity || !identity.privateKey || !identity.keyVersion) throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
@@ -179,6 +226,8 @@
     code.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
     const bootstrapButton = document.createElement("button");
     bootstrapButton.type = "button"; bootstrapButton.textContent = "Registrar identidad raíz";
+    const loginButton = document.createElement("button");
+    loginButton.type = "button"; loginButton.textContent = "Iniciar sesión de operador";
     const associateButton = document.createElement("button");
     associateButton.type = "button"; associateButton.textContent = "Asociar sesión autenticada";
     const statusButton = document.createElement("button");
@@ -219,6 +268,10 @@
       if (!secret) throw new Error("OPERATOR_BOOTSTRAP_REQUIRED");
       return bootstrap(secret);
     }, result => "IDENTIDAD RAÍZ REGISTRADA\nAlgoritmo: " + result.algorithm + "\nVersión: " + result.key_version));
+    loginButton.addEventListener("click", () => run(
+      loginButton, login,
+      result => "SESIÓN DE OPERADOR AUTENTICADA\\nAutoridad: " + result.authority + "\\nPermisos: ninguno (solo lectura)"
+    ));
     associateButton.addEventListener("click", () => run(
       associateButton, associateSession,
       result => "ASOCIACIÓN VERIFICADA\nAutoridad: " + result.authority
@@ -232,7 +285,7 @@
       }
       return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
-    section.append(title, description, code, bootstrapButton, associateButton, statusButton, bindDeviceButton, output);
+    section.append(title, description, code, bootstrapButton, loginButton, associateButton, statusButton, bindDeviceButton, output);
     document.body.appendChild(section);
     window.addEventListener("iao-session-changed", refreshSessionGates);
     refreshSessionGates();
@@ -240,7 +293,7 @@
       identity ? (identity.bootstrapPending ? "Clave raíz local conservada; confirma el bootstrap o consulta su estado." : "Clave raíz local disponible en este navegador.") : "No hay identidad raíz registrada en este navegador.", false
     )).catch(error => show("Almacenamiento no disponible: " + error.message, true));
   }
-  window.IAOOperatorIdentity = Object.freeze({ associateSession, bindPrimaryDevice, status });
+  window.IAOOperatorIdentity = Object.freeze({ login, associateSession, bindPrimaryDevice, status });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", panel, { once: true });
   else panel();
 })();
