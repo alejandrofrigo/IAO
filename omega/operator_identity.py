@@ -613,6 +613,33 @@ class OperatorIdentityAuthority:
                 raise
         return {"key_version": row["key_version"]}
 
+    def bind_primary_device_for_session(
+        self, authenticated_subject: Any, authenticated_session_token: Any,
+        device_public_key_pem: Any, root_signature: bytes,
+    ) -> dict[str, int]:
+        """Bind a device only through the exact root-associated bearer session."""
+        subject_digest = self._session_subject_digest(authenticated_subject)
+        session_digest = self._session_credential_digest(authenticated_session_token)
+        with self._database() as db:
+            row = db.execute(
+                """SELECT i.identity_id,i.key_version,i.status,b.subject_digest,
+                b.session_digest,b.key_version AS binding_key_version
+                FROM operator_session_bindings b
+                JOIN operator_identities i ON i.identity_id=b.identity_id
+                WHERE i.status='ACTIVE'"""
+            ).fetchone()
+        if (
+            row is None or row["key_version"] != row["binding_key_version"]
+            or not hmac.compare_digest(row["subject_digest"], subject_digest)
+            or not isinstance(row["session_digest"], str)
+            or not hmac.compare_digest(row["session_digest"], session_digest)
+        ):
+            raise OperatorIdentityError("OPERATOR_SESSION_MISMATCH", 403)
+        return self.bind_primary_device(
+            row["identity_id"], device_public_key_pem, root_signature,
+            expected_key_version=row["key_version"],
+        )
+
     def verify_authenticated_session(
         self, authenticated_subject: Any, authenticated_session_token: Any,
     ) -> bool:
