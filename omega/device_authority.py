@@ -318,6 +318,10 @@ class DeviceAuthority:
                     raise DeviceAuthorityError("DEVICE_KEY_PREVIOUSLY_ENROLLED", 409)
                 for row in active:
                     if row["device_id"] == device_id and row["owner_subject"] == owner_subject:
+                        db.execute(
+                            "DELETE FROM device_challenges WHERE device_id=?",
+                            (device_id,),
+                        )
                         continue
                     db.execute(
                         "UPDATE devices SET active=0 WHERE device_id=?",
