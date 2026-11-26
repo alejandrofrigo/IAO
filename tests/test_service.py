@@ -537,6 +537,64 @@ class QueuedTaskApiTests(Base):
         )
         self.assertFalse(worker.run_once())
 
+    def test_worker_rechecks_primary_device_binding_before_execution(self) -> None:
+        payload = {
+            "goal": "search the local knowledge corpus",
+            "capability": "knowledge.search",
+            "input": {"query": "audit hash chain"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(status, 202)
+        task = self.svc.store.get_task(accepted["task_id"], "queued-user")
+        intent = json.loads(task["intent_json"])
+        self.assertNotIn(self.operator_token, json.dumps(intent))
+        self.assertRegex(intent["operator_session_digest"], r"^[0-9a-f]{64}$")
+        self.assertEqual(intent["operator_device_id"], self.device_id)
+
+        # Simulate revocation after API acceptance but before the worker claims it.
+        with self.svc.operator_identity_authority._database() as db:
+            db.execute("DELETE FROM primary_device_bindings")
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="revocation-check-worker", lease_seconds=30,
+            operator_identity_authority=self.svc.operator_identity_authority,
+        )
+        self.assertTrue(worker.run_once())
+        failed = self.svc.store.get_task(accepted["task_id"], "queued-user")
+        self.assertEqual(failed["state"], "FAILED")
+        self.assertEqual(
+            json.loads(failed["result_json"])["error"],
+            "WORKER_OPERATOR_AUTHORITY_REVOKED",
+        )
+        self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
+
+    def test_worker_fails_closed_without_operator_identity_authority(self) -> None:
+        payload = {
+            "goal": "search the local knowledge corpus",
+            "capability": "knowledge.search",
+            "input": {"query": "audit hash chain"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(status, 202)
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="unbound-worker", lease_seconds=30,
+        )
+        self.assertTrue(worker.run_once())
+        failed = self.svc.store.get_task(accepted["task_id"], "queued-user")
+        self.assertEqual(failed["state"], "FAILED")
+        self.assertEqual(
+            json.loads(failed["result_json"])["error"],
+            "WORKER_OPERATOR_AUTHORITY_UNAVAILABLE",
+        )
+        self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
+
     def test_queued_mode_rejects_non_read_only_capability(self) -> None:
         self.svc.registry.register(
             ToolSpec(
