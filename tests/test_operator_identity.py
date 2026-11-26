@@ -262,7 +262,7 @@ def test_revocation_releases_primary_slot_for_explicit_new_root_recovery(tmp_pat
         expected_key_version=1,
     )
     authority.revoke(
-        old_id, sign(old_root, b"revoke-root-v1\\n" + old_id.encode("ascii")),
+        old_id, sign(old_root, b"revoke-root-v1\n" + old_id.encode("ascii")),
         expected_key_version=1,
     )
     with pytest.raises(OperatorIdentityError, match="PRIMARY_DEVICE_NOT_AUTHORIZED"):
