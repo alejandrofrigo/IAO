@@ -159,7 +159,7 @@ class DeviceAuthority:
             # challenges without completing the signed proof. BEGIN IMMEDIATE
             # makes the per-device cap atomic across server processes.
             db.execute(
-                "DELETE FROM device_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL",
+                "DELETE FROM device_challenges WHERE expires_at <= ?",
                 (now,),
             )
             active_count = db.execute(
