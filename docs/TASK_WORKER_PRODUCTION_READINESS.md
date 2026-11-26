@@ -6,6 +6,14 @@ The task worker is an independent process. The HTTP server does not start it
 implicitly. Its current `main()` refuses to start when `APP_ENV=production`.
 This is an intentional production block, not a deployment instruction.
 
+Queued task execution is restricted to an explicit allowlist containing only
+`knowledge.search`, the deterministic local corpus lookup. The general tool
+registry may expose other read-only capabilities (for example, network fetch
+when an egress allowlist is configured), but those are not queue-executable.
+The API rejects unreviewed tools before enqueueing, and the worker independently
+rechecks the same allowlist before invocation. A read-only label alone is not
+sufficient evidence of safe isolation, bounded execution, or cancellation.
+
 Queued task execution is restricted to registered `READ_ONLY` capabilities.
 Before invoking a tool, the worker validates the persisted policy version,
 expiry, capability authorization, input schema, exact operator-session
@@ -37,6 +45,9 @@ mechanism, not proof of exactly-once tool effects.
 - [ ] Tool execution has an explicit idempotency contract. A timeout or worker
       crash after an external side effect must not trigger blind replay.
 - [ ] Lease renewal and maximum execution duration are bounded and tested.
+- [ ] Tool execution is isolated in a killable process with enforceable CPU,
+      memory, filesystem, and network limits. The current thread-future timeout
+      does not terminate a running Python tool function.
 - [ ] Authorization is revalidated immediately before each externally
       observable side effect, not only when a task is first claimed.
 - [ ] Operator recovery, session expiry, device revocation, and root rotation
