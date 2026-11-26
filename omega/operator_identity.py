@@ -97,6 +97,7 @@ class OperatorIdentityAuthority:
                     challenge_digest TEXT PRIMARY KEY,
                     identity_id TEXT NOT NULL REFERENCES operator_identities(identity_id),
                     subject_digest TEXT NOT NULL,
+                    session_digest TEXT,
                     signing_payload BLOB NOT NULL,
                     key_version INTEGER NOT NULL CHECK(key_version >= 1),
                     expires_at REAL NOT NULL,
@@ -107,10 +108,22 @@ class OperatorIdentityAuthority:
                 CREATE TABLE IF NOT EXISTS operator_session_bindings (
                     identity_id TEXT PRIMARY KEY REFERENCES operator_identities(identity_id),
                     subject_digest TEXT NOT NULL UNIQUE,
+                    session_digest TEXT,
                     key_version INTEGER NOT NULL CHECK(key_version >= 1),
                     bound_at REAL NOT NULL
                 );
                 """
+            )
+            for table in ("operator_session_challenges", "operator_session_bindings"):
+                columns = {
+                    row["name"] for row in db.execute(f"PRAGMA table_info({table})")
+                }
+                if "session_digest" not in columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN session_digest TEXT")
+            db.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS one_operator_session_digest
+                ON operator_session_bindings(session_digest)
+                WHERE session_digest IS NOT NULL"""
             )
         os.chmod(self.database, 0o600)
 
@@ -442,11 +455,24 @@ class OperatorIdentityAuthority:
             self.subject_digest_key, subject.encode("utf-8"), hashlib.sha256
         ).hexdigest()
 
+    def _session_credential_digest(self, token: Any) -> str:
+        if not isinstance(token, str) or not 32 <= len(token) <= 8192:
+            raise OperatorIdentityError("OPERATOR_SESSION_REQUIRED", 403)
+        if not isinstance(self.subject_digest_key, bytes) or len(self.subject_digest_key) < 32:
+            raise OperatorIdentityError("OPERATOR_SESSION_BINDING_UNAVAILABLE", 503)
+        return hmac.new(
+            self.subject_digest_key,
+            b"IAO-OPERATOR-SESSION-TOKEN-V1\\x00" + token.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
     def create_session_challenge(
-        self, authenticated_subject: Any, *, ttl_seconds: int = 90,
+        self, authenticated_subject: Any, authenticated_session_token: Any,
+        *, ttl_seconds: int = 90,
     ) -> dict[str, Any]:
-        """Issue a one-time root-signing challenge for the verified principal."""
+        """Issue a one-time root-signing challenge for one verified bearer session."""
         subject_digest = self._session_subject_digest(authenticated_subject)
+        session_digest = self._session_credential_digest(authenticated_session_token)
         if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 30 <= ttl_seconds <= 180:
             raise OperatorIdentityError("INVALID_SESSION_CHALLENGE_TTL")
         now = time.time()
@@ -473,6 +499,7 @@ class OperatorIdentityAuthority:
                     "protocol": "IAO-OPERATOR-SESSION-BINDING-V1",
                     "purpose": "ASSOCIATE_AUTHENTICATED_SESSION",
                     "subject_digest": subject_digest,
+                    "session_digest": session_digest,
                 }
                 payload = json.dumps(
                     statement, sort_keys=True, separators=(",", ":"),
@@ -480,12 +507,13 @@ class OperatorIdentityAuthority:
                 ).encode("ascii")
                 db.execute(
                     """INSERT INTO operator_session_challenges
-                    (challenge_digest,identity_id,subject_digest,signing_payload,
-                     key_version,expires_at)
-                    VALUES(?,?,?,?,?,?)""",
+                    (challenge_digest,identity_id,subject_digest,session_digest,
+                     signing_payload,key_version,expires_at)
+                    VALUES(?,?,?,?,?,?,?)""",
                     (
                         self._digest(challenge_id), root["identity_id"],
-                        subject_digest, payload, root["key_version"], expires_at,
+                        subject_digest, session_digest, payload,
+                        root["key_version"], expires_at,
                     ),
                 )
                 db.execute("COMMIT")
@@ -501,10 +529,12 @@ class OperatorIdentityAuthority:
         }
 
     def bind_authenticated_session(
-        self, challenge: Any, authenticated_subject: Any, signature: bytes,
+        self, challenge: Any, authenticated_subject: Any,
+        authenticated_session_token: Any, signature: bytes,
     ) -> dict[str, int]:
-        """Atomically consume a session challenge and bind its server principal."""
+        """Atomically consume a challenge bound to one exact bearer session."""
         subject_digest = self._session_subject_digest(authenticated_subject)
+        session_digest = self._session_credential_digest(authenticated_session_token)
         if not isinstance(challenge, str) or not 32 <= len(challenge) <= 128:
             raise OperatorIdentityError("INVALID_SESSION_CHALLENGE")
         if not isinstance(signature, bytes) or not 64 <= len(signature) <= 80:
@@ -514,8 +544,8 @@ class OperatorIdentityAuthority:
             db.execute("BEGIN IMMEDIATE")
             try:
                 row = db.execute(
-                    """SELECT c.identity_id,c.subject_digest,c.signing_payload,
-                    c.key_version,c.expires_at,c.consumed_at,
+                    """SELECT c.identity_id,c.subject_digest,c.session_digest,
+                    c.signing_payload,c.key_version,c.expires_at,c.consumed_at,
                     i.root_public_key_pem,i.key_version AS active_key_version,i.status
                     FROM operator_session_challenges c
                     JOIN operator_identities i ON i.identity_id=c.identity_id
@@ -532,7 +562,11 @@ class OperatorIdentityAuthority:
                     raise OperatorIdentityError("OPERATOR_IDENTITY_NOT_ACTIVE", 403)
                 if row["active_key_version"] != row["key_version"]:
                     raise OperatorIdentityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
-                if not hmac.compare_digest(row["subject_digest"], subject_digest):
+                if (
+                    not hmac.compare_digest(row["subject_digest"], subject_digest)
+                    or not isinstance(row["session_digest"], str)
+                    or not hmac.compare_digest(row["session_digest"], session_digest)
+                ):
                     raise OperatorIdentityError("OPERATOR_SESSION_MISMATCH", 403)
                 try:
                     key = serialization.load_pem_public_key(
@@ -545,8 +579,8 @@ class OperatorIdentityAuthority:
                 except (InvalidSignature, ValueError, TypeError):
                     raise OperatorIdentityError("INVALID_ROOT_SIGNATURE", 401) from None
                 existing = db.execute(
-                    """SELECT subject_digest,key_version FROM operator_session_bindings
-                    WHERE identity_id=?""",
+                    """SELECT subject_digest,session_digest,key_version
+                    FROM operator_session_bindings WHERE identity_id=?""",
                     (row["identity_id"],),
                 ).fetchone()
                 if existing is not None and (
@@ -564,10 +598,14 @@ class OperatorIdentityAuthority:
                     raise OperatorIdentityError("SESSION_CHALLENGE_REPLAYED", 409)
                 db.execute(
                     """INSERT INTO operator_session_bindings
-                    (identity_id,subject_digest,key_version,bound_at)
-                    VALUES(?,?,?,?)
-                    ON CONFLICT(identity_id) DO NOTHING""",
-                    (row["identity_id"], subject_digest, row["key_version"], now),
+                    (identity_id,subject_digest,session_digest,key_version,bound_at)
+                    VALUES(?,?,?,?,?)
+                    ON CONFLICT(identity_id) DO UPDATE SET
+                    session_digest=excluded.session_digest,bound_at=excluded.bound_at""",
+                    (
+                        row["identity_id"], subject_digest, session_digest,
+                        row["key_version"], now,
+                    ),
                 )
                 db.execute("COMMIT")
             except Exception:
@@ -575,16 +613,24 @@ class OperatorIdentityAuthority:
                 raise
         return {"key_version": row["key_version"]}
 
-    def verify_authenticated_session(self, authenticated_subject: Any) -> bool:
-        """Return true only for the current root version and exact session subject."""
+    def verify_authenticated_session(
+        self, authenticated_subject: Any, authenticated_session_token: Any,
+    ) -> bool:
+        """Return true only for the exact currently bound bearer token."""
         subject_digest = self._session_subject_digest(authenticated_subject)
+        session_digest = self._session_credential_digest(authenticated_session_token)
         with self._database() as db:
             row = db.execute(
-                """SELECT b.subject_digest,b.key_version,i.key_version AS active_key_version
+                """SELECT b.subject_digest,b.session_digest,b.key_version,
+                i.key_version AS active_key_version
                 FROM operator_session_bindings b
                 JOIN operator_identities i ON i.identity_id=b.identity_id
                 WHERE i.status='ACTIVE'"""
             ).fetchone()
         if row is None or row["key_version"] != row["active_key_version"]:
             return False
-        return hmac.compare_digest(row["subject_digest"], subject_digest)
+        return (
+            hmac.compare_digest(row["subject_digest"], subject_digest)
+            and isinstance(row["session_digest"], str)
+            and hmac.compare_digest(row["session_digest"], session_digest)
+        )
