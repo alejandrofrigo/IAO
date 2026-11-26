@@ -207,8 +207,8 @@ def _request_json(
     if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
         raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
     if method == "GET":
-        scheme, host, port, target = "https", *_parse_https_url(url)[1:3], _parse_https_url(url)[3]
-        tls_host = _parse_https_url(url)[0]
+        tls_host, host, port, target = _parse_https_url(url)
+        scheme = "https"
     else:
         scheme, host, port, target, tls_host = validate_message_endpoint(url)
         if scheme == "http" and not allow_loopback_http:
@@ -234,8 +234,11 @@ def _request_json(
                 host, address, port, timeout=timeout
             )
         try:
+            host_header = f"[{host}]" if ":" in host else host
+            if port != 443:
+                host_header = f"{host_header}:{port}"
             headers = {
-                "Host": host if port == 443 else f"{host}:{port}",
+                "Host": host_header,
                 "Accept": "application/json",
                 "Connection": "close",
                 "User-Agent": "IAO-federation-transport/1",
