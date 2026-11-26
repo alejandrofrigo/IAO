@@ -135,7 +135,18 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                     "Crear código de recuperación offline (mínimo 32 caracteres)"
                 ).fill("browser-e2e-recovery-" + "r" * 48)
                 panel.get_by_role("button", name="Registrar identidad raíz").click()
-                page.get_by_text("IDENTIDAD RAÍZ REGISTRADA", exact=False).wait_for(timeout=20000)
+                page.wait_for_function(
+                    """() => {
+                      const panel = document.querySelector('#iao-operator-identity-panel pre');
+                      return panel && (
+                        panel.textContent.includes('IDENTIDAD RAÍZ REGISTRADA') ||
+                        panel.textContent.startsWith('ERROR:')
+                      );
+                    }""",
+                    timeout=20000,
+                )
+                bootstrap_output = panel.locator("pre").inner_text()
+                assert "IDENTIDAD RAÍZ REGISTRADA" in bootstrap_output, bootstrap_output
                 local_identity = page.evaluate(
                     """async () => {
                       const databases = await indexedDB.databases();
