@@ -235,7 +235,7 @@ def test_bootstrap_rejects_expired_or_missing_expiry(tmp_path):
     )
     with pytest.raises(OperatorIdentityError, match="OPERATOR_BOOTSTRAP_DISABLED"):
         expired.bootstrap(code, public)
-    no_expiry = OperatorIdentityAuthority(tmp_path / "no-expiry.sqlite3", code, bootstrap_expires_at=time.time() + 600)
+    no_expiry = OperatorIdentityAuthority(tmp_path / "no-expiry.sqlite3", code)
     with pytest.raises(OperatorIdentityError, match="OPERATOR_BOOTSTRAP_DISABLED"):
         no_expiry.bootstrap(code, public)
 
