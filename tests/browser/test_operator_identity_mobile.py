@@ -551,12 +551,26 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                           credentials: 'omit', cache: 'no-store'
                         }
                       );
+                      const taskResponse = await fetch(window.iaoApiUrl('/v1/tasks'), {
+                        method: 'POST',
+                        headers: {
+                          Authorization: 'Bearer ' + token,
+                          'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                          task_type: 'READ_ONLY',
+                          payload: {query: 'revoked-session-must-not-enqueue'}
+                        }),
+                        credentials: 'omit', cache: 'no-store'
+                      });
                       return {
                         rootPresent: Boolean(root),
                         meStatus: meResponse.status,
                         meBody: await meResponse.json(),
                         challengeStatus: challengeResponse.status,
-                        challengeBody: await challengeResponse.json()
+                        challengeBody: await challengeResponse.json(),
+                        taskStatus: taskResponse.status,
+                        taskBody: await taskResponse.json()
                       };
                     }""",
                     revocation_token,
@@ -565,6 +579,8 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 assert revoked_state["meStatus"] == 401, revoked_state
                 assert revoked_state["meBody"]["error"] == "OPERATOR_SESSION_REVOKED", revoked_state
                 assert revoked_state["challengeStatus"] == 401, revoked_state
+                assert revoked_state["taskStatus"] == 401, revoked_state
+                assert revoked_state["taskBody"]["error"] == "OPERATOR_SESSION_REVOKED", revoked_state
                 assert not page_errors, page_errors
                 context.close()
                 browser.close()
