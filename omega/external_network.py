@@ -59,6 +59,16 @@ def _safe_origin(value: Any) -> str | None:
         return None
     try:
         parsed = urlsplit(value)
+        if (parsed.scheme == "http" and parsed.hostname
+                and parsed.hostname.endswith(".onion")
+                and len(parsed.hostname) == 62
+                and all(char in "abcdefghijklmnopqrstuvwxyz234567"
+                        for char in parsed.hostname[:-6])
+                and parsed.port in (None, 80)
+                and not parsed.username and not parsed.password
+                and parsed.path in ("", "/")
+                and not parsed.query and not parsed.fragment):
+            return "http://" + parsed.hostname
         from omega.federation_transport import validate_discovery_url
         validate_discovery_url(value if parsed.path else value + "/")
         if (parsed.query or parsed.fragment or parsed.username or parsed.password

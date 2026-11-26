@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import ipaddress
 import secrets
 import time
 from pathlib import Path
@@ -43,6 +44,13 @@ def _origin(value: Any) -> str:
             or parsed.port not in (None, 443)
             or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
         raise ValueError("INVALID_DISCOVERED_ORIGIN")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+        if not address.is_global:
+            raise ValueError("NON_PUBLIC_DISCOVERED_ADDRESS")
+    except ValueError as exc:
+        if str(exc) == "NON_PUBLIC_DISCOVERED_ADDRESS":
+            raise
     return "https://" + parsed.netloc
 
 

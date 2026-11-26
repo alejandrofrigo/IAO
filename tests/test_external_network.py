@@ -232,11 +232,14 @@ def test_discovery_never_restores_privileged_or_unknown_capabilities(tmp_path):
     assert saved["private_data_access"] is False
 
 
-def test_external_worker_invokes_federation_autojoin_after_discovery(monkeypatch, tmp_path):
-    import omega.federation_autonomous as federation
-    from omega.external_network import ExternalNetwork
-    calls = []
-    monkeypatch.setattr(federation, "run_discovered_cycle",
-                        lambda node, state, registry: calls.append((node, state, registry)) or {"status": "COMPLETED"})
-    # The production worker integration is exercised through its public call contract.
-    assert callable(federation.run_discovered_cycle)
+def test_v3_onion_peers_are_kept_in_unverified_inventory():
+    host = "a" * 56 + ".onion"
+    item = _candidate({
+        "id": "0123456789abcdef",
+        "url": "http://" + host,
+        "capabilities": ["knowledge.search"],
+    }, "tor_onion_directories")
+    assert item is not None
+    assert item["origin"] == "http://" + host
+    assert item["status"] == "DISCOVERED_UNVERIFIED"
+    assert item["identity_verified"] is False
