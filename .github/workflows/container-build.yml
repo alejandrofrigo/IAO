@@ -1,0 +1,34 @@
+name: IAO container build qualification
+
+on:
+  push:
+    branches: [iao-production-build-20261126]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build API container (no publication)
+        run: docker build --pull --tag iao-api:qualification .
+
+      - name: Verify container starts and serves liveness
+        run: |
+          docker run --detach --rm --name iao-api-qualification \
+            --publish 127.0.0.1:18080:8080 iao-api:qualification
+          trap 'docker stop iao-api-qualification >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:18080/health/live; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs iao-api-qualification
+          exit 1
