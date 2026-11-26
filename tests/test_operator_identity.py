@@ -1108,3 +1108,69 @@ def test_recovery_challenge_is_single_use_across_independent_authority_instances
     assert active[0]["public_key_pem"] == new_device_public
     assert active[0]["owner_subject"] == owner
 
+def test_recovery_rolls_back_identity_when_device_authority_fails_before_commit(tmp_path):
+    bootstrap = "device-failure-bootstrap-" + "b" * 40
+    recovery = "device-failure-recovery-" + "r" * 48
+    rotated = "device-failure-rotated-" + "n" * 48
+    authority = OperatorIdentityAuthority(
+        tmp_path / "device-failure-identity.sqlite3", bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=b"device-failure-digest-key-" + b"k" * 32,
+    )
+    old_root, old_root_public = keypair()
+    new_root, new_root_public = keypair()
+    new_device, new_device_public = keypair()
+    identity = authority.bootstrap(
+        bootstrap, old_root_public, recovery_code=recovery,
+    )
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, new_root_public, new_device_public, rotated,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = new_root.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    device_signature = new_device.sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+
+    def unavailable_device_authority(*args):
+        raise RuntimeError("injected_device_authority_failure")
+
+    with pytest.raises(RuntimeError, match="injected_device_authority_failure"):
+        authority.complete_operator_recovery(
+            challenge["challenge"], root_signature, device_signature,
+            device_replacement=unavailable_device_authority,
+        )
+
+    assert authority.verify_root_signature(
+        identity["identity_id"], b"old-root-still-active",
+        sign(old_root, b"old-root-still-active"), expected_key_version=1,
+    )
+    assert authority.primary_device_public_key() is None
+    with authority._database() as db:
+        row = db.execute(
+            "SELECT key_version,recovery_code_digest FROM operator_identities"
+        ).fetchone()
+        consumed = db.execute(
+            "SELECT consumed_at FROM operator_recovery_challenges WHERE challenge_digest=?",
+            (authority._digest(challenge["challenge"]),),
+        ).fetchone()
+    assert row["key_version"] == 1
+    assert row["recovery_code_digest"] == authority._recovery_digest(recovery)
+    assert consumed["consumed_at"] is None
+
+    result = authority.complete_operator_recovery(
+        challenge["challenge"], root_signature, device_signature,
+        device_replacement=lambda public, subject, old=None: None,
+    )
+    assert result["key_version"] == 2
+    assert authority.verify_root_signature(
+        identity["identity_id"], b"new-root-active",
+        sign(new_root, b"new-root-active"), expected_key_version=2,
+    )
+
