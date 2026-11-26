@@ -692,6 +692,12 @@ class OmegaService:
             "authorized_scopes": sorted(pr.scopes),
             "input": tin if isinstance(tin, dict) else {},
             "request_digest": request_digest,
+            "operator_session_digest": (
+                self.operator_identity_authority.session_credential_digest(
+                    self._verified_bearer_token(headers)
+                ) if execution_mode == "queued" else None
+            ),
+            "operator_device_id": proof.get("device_id") if execution_mode == "queued" else None,
             "risk_class": "R0",
             "budget": {"max_model_calls": 0, "timeout_seconds": 20},
             "termination_condition": "result or terminal error",
