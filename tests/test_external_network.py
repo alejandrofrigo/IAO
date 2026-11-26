@@ -150,7 +150,6 @@ def test_unverified_candidates_become_stale_and_are_pruned(tmp_path, monkeypatch
     from datetime import datetime, timedelta, timezone
 
     network = ExternalNetwork(tmp_path, [Source([])])
-    network.state_dir.mkdir(parents=True)
     old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
     ancient = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
     stale = _candidate(record(), "unit")
@@ -175,7 +174,6 @@ def test_verified_candidates_are_not_pruned_by_inventory_retention(tmp_path):
     from datetime import datetime, timedelta, timezone
 
     network = ExternalNetwork(tmp_path, [Source([])])
-    network.state_dir.mkdir(parents=True)
     ancient = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
     item = _candidate(record(), "unit")
     item.update({
@@ -200,7 +198,6 @@ def test_rediscovery_reactivates_stale_unverified_candidate(tmp_path):
         "status": "STALE_UNVERIFIED",
     })
     network = ExternalNetwork(tmp_path, [Source([record()])])
-    network.state_dir.mkdir(parents=True)
     (tmp_path / "registry.json").write_text(json.dumps({
         "schema": 1, "candidates": {item["candidate_id"]: item}, "p2p_peers": {},
     }))
@@ -221,7 +218,6 @@ def test_discovery_never_restores_privileged_or_unknown_capabilities(tmp_path):
         "private_data_access": True,
     })
     network = ExternalNetwork(tmp_path, [Source([record()])])
-    network.state_dir.mkdir(parents=True)
     (tmp_path / "registry.json").write_text(json.dumps({
         "schema": 1, "candidates": {item["candidate_id"]: item}, "p2p_peers": {},
     }))
