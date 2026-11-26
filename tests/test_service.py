@@ -503,7 +503,7 @@ class AuthTests(Base):
         self.assertTrue(session_result["associated"])
         self.assertEqual(session_result["authority"], "IDENTITY_BOUND_READ_ONLY")
         repeated = self.call("POST", "/v1/operator/bootstrap", {}, request_body)
-        self.assertEqual((repeated[0], repeated[1]["error"]), (503, "OPERATOR_BOOTSTRAP_DISABLED"))
+        self.assertEqual((repeated[0], repeated[1]["error"]), (409, "PRIMARY_DEVICE_ALREADY_ENROLLED"))
         audit = json.dumps(self.svc.store._all_events())
         for secret in (code, recovery_code, root_public, device_public):
             self.assertNotIn(secret, audit)
@@ -543,7 +543,8 @@ class AuthTests(Base):
         }
         status, result = self.call("POST", "/v1/operator/bootstrap", {}, body)
         self.assertEqual((status, result["error"]), (401, "INVALID_BOOTSTRAP_DEVICE_SIGNATURE"))
-        self.assertEqual(self.svc.operator_identity_authority.primary_device_public_key(), None)
+        with self.assertRaisesRegex(OperatorIdentityError, "PRIMARY_DEVICE_NOT_AUTHORIZED"):
+            self.svc.operator_identity_authority.primary_device_public_key()
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
         body["device_signature"] = base64.urlsafe_b64encode(
             device.sign(
@@ -554,7 +555,8 @@ class AuthTests(Base):
         body["root_signature"] = base64.urlsafe_b64encode(b"x" * 70).decode().rstrip("=")
         status, result = self.call("POST", "/v1/operator/bootstrap", {}, body)
         self.assertEqual((status, result["error"]), (401, "INVALID_OPERATOR_BOOTSTRAP_SIGNATURE"))
-        self.assertEqual(self.svc.operator_identity_authority.primary_device_public_key(), None)
+        with self.assertRaisesRegex(OperatorIdentityError, "PRIMARY_DEVICE_NOT_AUTHORIZED"):
+            self.svc.operator_identity_authority.primary_device_public_key()
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
 
     def test_operator_bootstrap_rejects_reused_root_device_key(self) -> None:
@@ -596,7 +598,8 @@ class AuthTests(Base):
             (400, "OPERATOR_BOOTSTRAP_KEYS_MUST_BE_DISTINCT"),
         )
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
-        self.assertIsNone(self.svc.operator_identity_authority.primary_device_public_key())
+        with self.assertRaisesRegex(OperatorIdentityError, "PRIMARY_DEVICE_NOT_AUTHORIZED"):
+            self.svc.operator_identity_authority.primary_device_public_key()
 
     def test_operator_bootstrap_does_not_consume_code_when_primary_slot_is_taken(self) -> None:
         code = "occupied-slot-bootstrap-" + "q" * 48
@@ -650,9 +653,11 @@ class AuthTests(Base):
         status, result = self.call("POST", "/v1/operator/bootstrap", {}, body)
         self.assertEqual((status, result["error"]), (409, "PRIMARY_DEVICE_ALREADY_ENROLLED"))
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
-        self.assertIsNone(self.svc.operator_identity_authority.primary_device_public_key())
+        with self.assertRaisesRegex(OperatorIdentityError, "PRIMARY_DEVICE_NOT_AUTHORIZED"):
+            self.svc.operator_identity_authority.primary_device_public_key()
 
     def test_operator_bootstrap_is_disabled_without_device_authority(self) -> None:
+        self.svc.device_authority = None
         status, result = self.call(
             "POST", "/v1/operator/bootstrap", {},
             {"code": "unconfigured-bootstrap-" + "x" * 40,
