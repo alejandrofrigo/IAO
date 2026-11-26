@@ -143,6 +143,32 @@
       public_key_sha256: deviceId,
       role: "PRIMARY"
     }));
+    const reconciliation = await request("/v1/operator/bootstrap/status", "POST", {
+      root_public_key_pem: stored.publicKeyPem,
+      device_public_key_pem: devicePublicKeyPem
+    }, true);
+    if (reconciliation.committed === true) {
+      if (reconciliation.authority !== "OPERATOR_BOOTSTRAPPED_READ_ONLY" ||
+          !Number.isInteger(reconciliation.key_version) || reconciliation.key_version < 1) {
+        throw new Error("INVALID_OPERATOR_BOOTSTRAP_STATUS");
+      }
+      await window.IAODeviceAuthority.activateRecoveryIdentity(devicePublicKeyPem);
+      await writeIdentity({
+        privateKey: stored.privateKey,
+        publicKeyPem: stored.publicKeyPem,
+        keyVersion: reconciliation.key_version,
+        createdAt: Date.now(),
+        bootstrapPending: false
+      });
+      return {
+        status: "ROOT_AND_DEVICE_REGISTERED",
+        authority: reconciliation.authority,
+        device_registered: true,
+        key_version: reconciliation.key_version,
+        recoveryCode,
+        reconciled: true
+      };
+    }
     const rootMessage = new Uint8Array(ROOT_DOMAIN.length + bindingPayload.length);
     rootMessage.set(ROOT_DOMAIN);
     rootMessage.set(bindingPayload, ROOT_DOMAIN.length);
