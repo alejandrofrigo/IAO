@@ -35,6 +35,7 @@ class FedBase(unittest.TestCase):
         self.b.enroll(self.a.contract_for_self(["knowledge.search"]), granted_capabilities=["knowledge.search"])   # B grants A inbound access
         self.sb = FedServer(self.b).start()
         self.servers = [self.sb]
+        self.a.bind_peer_endpoint(self.b.node_id, self.sb.url)
 
     def tearDown(self) -> None:
         for s in self.servers:
@@ -269,6 +270,7 @@ class PartitionAndHostilePeerTests(FedBase):
         evil = Ed25519PrivateKey.generate()
         s = self._hostile(lambda req: _sign(evil, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
                                                     "in_reply_to": req["nonce"], "result": {"items": [{"fake": 1}]}, "verification": "PASS"}))
+        self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual((r["ok"], r["error"]), (False, "BAD_RESPONSE_SIGNATURE"))
 
@@ -278,12 +280,28 @@ class PartitionAndHostilePeerTests(FedBase):
         captured = _sign(self.b.key, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
                                        "in_reply_to": "old-nonce", "result": {"items": []}, "verification": "PASS"})
         s = self._hostile(lambda req: captured)
+        self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual(r["error"], "REPLAYED_OR_MISROUTED_RESPONSE")
 
     def test_garbage_and_oversized_responses_handled(self) -> None:
-        r = self.a.send(self.b.node_id, self._hostile(lambda req: {"x": "not an envelope"}).url, "knowledge.search", Q)
+        hostile = self._hostile(lambda req: {"x": "not an envelope"})
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        r = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
         self.assertFalse(r["ok"])
+
+    def test_send_requires_a_pinned_peer_endpoint(self) -> None:
+        endpoint = self.a.peers[self.b.node_id].pop("endpoint")
+        try:
+            result = self.a.send(
+                self.b.node_id, self.sb.url, "knowledge.search", Q
+            )
+            self.assertEqual(
+                (result["ok"], result["error"]),
+                (False, "ENDPOINT_NOT_PINNED"),
+            )
+        finally:
+            self.a.peers[self.b.node_id]["endpoint"] = endpoint
 
     def test_send_rejects_non_loopback_http_and_wrong_endpoint_paths(self) -> None:
         for endpoint in (
