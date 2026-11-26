@@ -210,6 +210,9 @@ class OmegaService:
                     device_encoded + "=" * (-len(device_encoded) % 4),
                     altchars=b"-_", validate=True,
                 )
+                self.device_authority.verify_bootstrap_device_signature(
+                    device_public_key, device_signature,
+                )
                 identity = self.operator_identity_authority.bootstrap(
                     code, root_public_key, recovery_code=recovery_code,
                 )
