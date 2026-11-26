@@ -58,7 +58,7 @@ def _safe_origin(value: Any) -> str | None:
     try:
         parsed = urlsplit(value)
         from omega.federation_transport import validate_discovery_url
-        validate_discovery_url(value)
+        validate_discovery_url(value if parsed.path else value + "/")
         if (parsed.query or parsed.fragment or parsed.username or parsed.password
                 or parsed.path not in ("", "/")):
             return None
