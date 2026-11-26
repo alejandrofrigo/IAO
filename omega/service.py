@@ -296,6 +296,48 @@ class OmegaService:
             )
             return 200, challenge
 
+        if method == "POST" and p == "/v1/operator/device/bind":
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_DEVICE_BINDING_UNAVAILABLE")
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+            data = self._json(body)
+            public_key = data.get("public_key_pem")
+            encoded = data.get("signature")
+            if (
+                not isinstance(public_key, str) or not 1 <= len(public_key) <= 4096
+                or not isinstance(encoded, str) or not 80 <= len(encoded) <= 120
+                or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded)
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_DEVICE_BINDING")
+            try:
+                self.device_authority.verify_registered_public_key(
+                    public_key, owner_subject=pr.subject,
+                )
+                signature = base64.b64decode(
+                    encoded + "=" * (-len(encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                result = self.operator_identity_authority.bind_primary_device_for_session(
+                    pr.subject, self._verified_bearer_token(headers),
+                    public_key, signature,
+                )
+            except (binascii.Error, ValueError):
+                raise ApiError(400, "INVALID_OPERATOR_DEVICE_BINDING") from None
+            except DeviceAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_device", "OPERATOR_PRIMARY_DEVICE_BOUND",
+                "primary_device", decision="ALLOW",
+                key_version=result["key_version"],
+            )
+            return 200, {
+                "authority": "PRIMARY_DEVICE_BOUND_READ_ONLY",
+                "key_version": result["key_version"],
+            }
+
         if method == "POST" and p == "/v1/operator/session/challenge":
             if self.operator_identity_authority is None:
                 raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
