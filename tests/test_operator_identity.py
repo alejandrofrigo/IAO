@@ -28,6 +28,13 @@ def sign(private, payload):
     return private.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
 
 
+def test_operator_identity_refuses_corrupt_sqlite_before_initialization(tmp_path):
+    database = tmp_path / "corrupt.sqlite3"
+    database.write_bytes(b"not a valid sqlite database")
+    with pytest.raises(RuntimeError, match="OPERATOR_IDENTITY_DATABASE_INTEGRITY_FAILED"):
+        OperatorIdentityAuthority(database)
+
+
 def test_bootstrap_is_one_time_and_persists_across_restart(tmp_path):
     code = "bootstrap-secret-" + "x" * 40
     private, public = keypair()

@@ -63,6 +63,15 @@ class OperatorIdentityAuthority:
             os.fchmod(fd, 0o600)
         finally:
             os.close(fd)
+        # Validate the existing SQLite file before schema migration or writes.
+        # Corrupt/non-database files must fail closed with a stable, non-sensitive error.
+        try:
+            with sqlite3.connect(self.database, timeout=10) as integrity_db:
+                integrity_result = integrity_db.execute("PRAGMA quick_check").fetchone()
+            if integrity_result != ("ok",):
+                raise RuntimeError("OPERATOR_IDENTITY_DATABASE_INTEGRITY_FAILED")
+        except sqlite3.DatabaseError:
+            raise RuntimeError("OPERATOR_IDENTITY_DATABASE_INTEGRITY_FAILED") from None
         self.bootstrap_code = bootstrap_code
         self.bootstrap_expires_at = bootstrap_expires_at
         if isinstance(subject_digest_key, str):
@@ -165,8 +174,10 @@ class OperatorIdentityAuthority:
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.database, timeout=10, isolation_level=None)
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA busy_timeout=10000")
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA synchronous=FULL")
         return db
 
     @contextmanager

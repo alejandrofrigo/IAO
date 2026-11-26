@@ -11,6 +11,13 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from omega.device_authority import DeviceAuthority, DeviceAuthorityError
 
 
+def test_device_authority_refuses_corrupt_sqlite_before_initialization(tmp_path):
+    database = tmp_path / "corrupt.sqlite3"
+    database.write_bytes(b"not a valid sqlite database")
+    with pytest.raises(RuntimeError, match="DEVICE_AUTHORITY_DATABASE_INTEGRITY_FAILED"):
+        DeviceAuthority(database, enrollment_code="")
+
+
 def _enrolled_authority(tmp_path):
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_pem = private_key.public_key().public_bytes(
