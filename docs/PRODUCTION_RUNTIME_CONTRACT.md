@@ -61,14 +61,19 @@ to audit events.
 
 The device key is enrolled through `POST /v1/device/enroll`, which is disabled
 unless the operator explicitly sets `IAO_DEVICE_ENROLLMENT_ENABLED=1` and
-provides `IAO_DEVICE_ENROLLMENT_CODE`. The deployment operator must ensure
-TLS at the public edge before enabling enrollment. The code is consumed once;
-it is never written to audit events. The authenticated browser session is used
-to request challenges, and the browser signs queued task bodies locally. The queued
-worker and API continue to enforce `READ_ONLY` capabilities. This integration
-does **not** grant write, execution, deployment, credential or administrative
-authority. Production worker startup remains blocked pending full production
-identity integration and end-to-end validation.
+provides `IAO_DEVICE_ENROLLMENT_CODE`. Enrollment also requires an authenticated
+browser session. The endpoint returns only the algorithm; the browser derives
+the public-key fingerprint locally and does not display it. The deployment
+operator must ensure TLS at the public edge before enabling enrollment. The code
+is consumed once and is never written to audit events. The authenticated browser
+session is used to request challenges, and the browser signs queued task bodies
+locally. The queued worker and API continue to enforce `READ_ONLY` capabilities.
+This integration does **not** grant write, execution, deployment, credential or
+administrative authority. The current public-session identity is an expiring
+guest identity, not a durable operator account; this change therefore does not
+claim a persistent account-to-device binding. Production worker startup remains
+blocked pending durable operator identity, complete device lifecycle controls,
+and end-to-end validation.
 
 ## Health semantics
 
