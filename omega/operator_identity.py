@@ -242,6 +242,17 @@ class OperatorIdentityAuthority:
                     "SELECT 1 FROM operator_identities WHERE status='ACTIVE'"
                 ).fetchone():
                     raise OperatorIdentityError("OPERATOR_ROOT_ALREADY_ENROLLED", 409)
+                if recovery_digest is not None and (
+                    db.execute(
+                        "SELECT 1 FROM consumed_bootstrap_codes WHERE code_digest=?",
+                        (recovery_digest,),
+                    ).fetchone()
+                    or db.execute(
+                        "SELECT 1 FROM operator_identities WHERE recovery_code_digest=?",
+                        (recovery_digest,),
+                    ).fetchone()
+                ):
+                    raise OperatorIdentityError("OPERATOR_RECOVERY_CODE_ALREADY_USED", 409)
                 db.execute(
                     "INSERT INTO consumed_bootstrap_codes(code_digest,consumed_at) VALUES(?,?)",
                     (code_digest, now),
@@ -299,6 +310,17 @@ class OperatorIdentityAuthority:
                 ).fetchone()
                 if row is None or row["status"] not in ("ACTIVE", "REVOKED"):
                     raise OperatorIdentityError("INVALID_OPERATOR_RECOVERY_CODE", 403)
+                if (
+                    db.execute(
+                        "SELECT 1 FROM consumed_bootstrap_codes WHERE code_digest=?",
+                        (new_recovery_digest,),
+                    ).fetchone()
+                    or db.execute(
+                        "SELECT 1 FROM operator_identities WHERE recovery_code_digest=?",
+                        (new_recovery_digest,),
+                    ).fetchone()
+                ):
+                    raise OperatorIdentityError("OPERATOR_RECOVERY_CODE_ALREADY_USED", 409)
                 if db.execute(
                     "SELECT 1 FROM operator_identities WHERE status='ACTIVE' AND identity_id<>?",
                     (row["identity_id"],),
