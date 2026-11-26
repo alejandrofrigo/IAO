@@ -575,7 +575,7 @@ class AuthTests(Base):
             ).decode().rstrip("="),
             "device_signature": base64.urlsafe_b64encode(
                 device.sign(
-                    b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + payload,
+                    b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\x00" + payload,
                     ec.ECDSA(hashes.SHA256()),
                 )
             ).decode().rstrip("="),
