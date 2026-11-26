@@ -89,8 +89,8 @@ def test_root_rotation_requires_old_key_and_invalidates_old_key(tmp_path):
     ).decode("ascii")
     import hashlib
     payload = (
-        b"rotate-root-v1\\n" + identity_id.encode("ascii") + b"\\n"
-        + b"2\\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
+        b"rotate-root-v1\n" + identity_id.encode("ascii") + b"\n"
+        + b"2\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
     )
     assert authority.rotate_root(identity_id, new_public, sign(old_private, payload)) == {
         "key_version": next_version
@@ -114,7 +114,7 @@ def test_revocation_is_persistent_and_fail_closed(tmp_path):
     enrolled = authority.bootstrap(code, public)
     identity_id = enrolled["identity_id"]
     authority.revoke(
-        identity_id, sign(private, b"revoke-root-v1\\n" + identity_id.encode("ascii")),
+        identity_id, sign(private, b"revoke-root-v1\n" + identity_id.encode("ascii")),
         expected_key_version=1,
     )
     restarted = OperatorIdentityAuthority(db, code)
@@ -137,3 +137,86 @@ def test_disabled_bootstrap_and_oversized_payload_fail_closed(tmp_path):
             enrolled["identity_id"], b"x" * 8193, b"x" * 70,
             expected_key_version=1,
         )
+
+
+
+def test_root_signature_binds_exact_primary_device_key_once(tmp_path):
+    code = "bootstrap-secret-" + "x" * 40
+    root_private, root_public = keypair()
+    _, device_public = keypair()
+    _, attacker_public = keypair()
+    authority = OperatorIdentityAuthority(tmp_path / "identity.sqlite3", code)
+    identity = authority.bootstrap(code, root_public)
+    device_id, payload = authority.device_binding_payload(
+        device_public, key_version=1
+    )
+    assert device_id
+    signature = sign(root_private, payload)
+    assert authority.bind_primary_device(
+        identity["identity_id"], device_public, signature,
+        expected_key_version=1,
+    ) == {"key_version": 1}
+    assert authority.verify_primary_device(identity["identity_id"], device_public)
+    with pytest.raises(OperatorIdentityError, match="PRIMARY_DEVICE_KEY_MISMATCH"):
+        authority.verify_primary_device(identity["identity_id"], attacker_public)
+
+
+def test_primary_device_binding_rejects_wrong_root_signature_and_duplicate(tmp_path):
+    code = "bootstrap-secret-" + "x" * 40
+    root_private, root_public = keypair()
+    wrong_private, _ = keypair()
+    _, device_public = keypair()
+    _, other_device_public = keypair()
+    authority = OperatorIdentityAuthority(tmp_path / "identity.sqlite3", code)
+    identity = authority.bootstrap(code, root_public)
+    _, payload = authority.device_binding_payload(device_public, key_version=1)
+    with pytest.raises(OperatorIdentityError, match="INVALID_ROOT_SIGNATURE"):
+        authority.bind_primary_device(
+            identity["identity_id"], device_public, sign(wrong_private, payload),
+            expected_key_version=1,
+        )
+    authority.bind_primary_device(
+        identity["identity_id"], device_public, sign(root_private, payload),
+        expected_key_version=1,
+    )
+    _, other_payload = authority.device_binding_payload(other_device_public, key_version=1)
+    with pytest.raises(OperatorIdentityError, match="PRIMARY_DEVICE_ALREADY_BOUND"):
+        authority.bind_primary_device(
+            identity["identity_id"], other_device_public,
+            sign(root_private, other_payload), expected_key_version=1,
+        )
+
+
+def test_root_rotation_invalidates_old_device_binding_until_rebound(tmp_path):
+    import hashlib
+    code = "bootstrap-secret-" + "x" * 40
+    root_private, root_public = keypair()
+    new_root_private, new_root_public = keypair()
+    _, device_public = keypair()
+    authority = OperatorIdentityAuthority(tmp_path / "identity.sqlite3", code)
+    identity = authority.bootstrap(code, root_public)
+    identity_id = identity["identity_id"]
+    _, device_payload = authority.device_binding_payload(device_public, key_version=1)
+    authority.bind_primary_device(
+        identity_id, device_public, sign(root_private, device_payload),
+        expected_key_version=1,
+    )
+    canonical_new = serialization.load_pem_public_key(new_root_public.encode()).public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    rotate_payload = (
+        b"rotate-root-v1\n" + identity_id.encode("ascii") + b"\n"
+        + b"2\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
+    )
+    authority.rotate_root(
+        identity_id, new_root_public, sign(root_private, rotate_payload)
+    )
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_ROOT_KEY_VERSION_MISMATCH"):
+        authority.verify_primary_device(identity_id, device_public)
+    _, rebound_payload = authority.device_binding_payload(device_public, key_version=2)
+    authority.bind_primary_device(
+        identity_id, device_public, sign(new_root_private, rebound_payload),
+        expected_key_version=2,
+    )
+    assert authority.verify_primary_device(identity_id, device_public)
