@@ -29,7 +29,7 @@ def _apply_child_limits(timeout_seconds: float) -> None:
     try:
         import resource
 
-        cpu = max(1, int(timeout_seconds) + 1)
+        cpu = max(5, int(timeout_seconds) + 1)
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
         resource.setrlimit(
             resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE)
