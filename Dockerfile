@@ -14,6 +14,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY apps ./apps
 COPY omega ./omega
+COPY docs/corpus ./knowledge
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 \
