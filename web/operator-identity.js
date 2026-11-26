@@ -300,7 +300,7 @@
       root_signature: b64url(rawEcdsaToDer(rootRaw)),
       device_signature: deviceSignature
     });
-    await window.IAODeviceAuthority.activateRecoveryIdentity();
+    await window.IAODeviceAuthority.activateRecoveryIdentity(devicePublicKeyPem);
     await writeIdentity({
       privateKey: stored.recoveryPendingPrivateKey,
       publicKeyPem: stored.recoveryPendingPublicKeyPem,
