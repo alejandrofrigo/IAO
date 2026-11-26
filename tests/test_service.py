@@ -135,6 +135,25 @@ class PolicyToolTests(Base):
         c = self.task("bob", "knowledge.search", **{"idempotency-key": "k1"})[1]
         self.assertNotEqual(c["task_id"], a["task_id"])
 
+    def test_idempotency_key_cannot_switch_execution_mode(self) -> None:
+        headers = {**self.tok("alice"), "idempotency-key": "mode-bound"}
+        payload = {
+            "goal": "g",
+            "capability": "knowledge.search",
+            "input": {"query": "audit"},
+        }
+        self.assertEqual(
+            self.call("POST", "/v1/tasks", headers, payload)[0], 200
+        )
+        queued_retry = {**payload, "execution_mode": "queued"}
+        status, response = self.call(
+            "POST", "/v1/tasks", headers, queued_retry
+        )
+        self.assertEqual(
+            (status, response["error"]),
+            (409, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST"),
+        )
+
     def test_idempotency_key_rejects_different_payload(self) -> None:
         headers = {**self.tok("alice"), "idempotency-key": "same-key"}
         first = self.call("POST", "/v1/tasks", headers, {
