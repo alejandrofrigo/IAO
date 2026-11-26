@@ -525,6 +525,7 @@ class QueuedTaskApiTests(Base):
         worker = TaskWorker(
             self.svc.store, self.svc.registry,
             worker_id="test-worker", lease_seconds=30,
+            operator_identity_authority=self.svc.operator_identity_authority,
         )
         self.assertTrue(worker.run_once())
         completed = self.svc.store.get_task(accepted["task_id"], "queued-user")
