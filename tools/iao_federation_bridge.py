@@ -2,6 +2,7 @@
 """Puente fail-closed entre candidatos verificados y Node de IAO."""
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -9,6 +10,9 @@ from urllib.parse import urlsplit
 
 from omega.federation import Node
 from omega.federation_assimilation import CandidateRegistry
+from omega.store import Store
+from omega.tools.knowledge_search import KnowledgeCorpus
+from omega.tools.registry import ToolRegistry, ToolSpec
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / ".state/federation-candidates.json"
@@ -24,10 +28,35 @@ def emit(event, **data):
     print(json.dumps(row, ensure_ascii=False))
 
 def load_node():
-    return Node.from_persistent_identity(
-        identity_dir=IDENTITY,
-        peer_store_path=PEERS,
-    )
+    """Build the federation node with the same durable store and read-only tool as the API."""
+    state = Path(os.environ.get("OMEGA_STATE_DIR", str(ROOT / ".state")))
+    audit_key_env = os.environ.get("AUDIT_HMAC_KEY", "")
+    if audit_key_env:
+        audit_key = audit_key_env.encode()
+    else:
+        key_path = Path.home() / ".config" / "iao" / "audit-hmac-key"
+        if not key_path.is_file():
+            raise RuntimeError("PERSISTENT_AUDIT_KEY_UNAVAILABLE")
+        audit_key = key_path.read_text(encoding="utf-8").strip().encode()
+    if len(audit_key) < 32:
+        raise RuntimeError("PERSISTENT_AUDIT_KEY_INVALID")
+
+    store = Store(state / "omega.db", audit_key=audit_key)
+    corpus = KnowledgeCorpus(Path(os.environ.get(
+        "OMEGA_CORPUS_DIR", str(ROOT / "docs" / "corpus")
+    )))
+    registry = ToolRegistry()
+    registry.register(ToolSpec(
+        "knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
+        corpus.validate_input, corpus.run, corpus.verify,
+    ))
+    try:
+        return Node.from_persistent_identity(
+            store, registry, identity_dir=IDENTITY, peer_store_path=PEERS
+        )
+    except Exception:
+        store.close()
+        raise
 
 def endpoint_ok(value):
     if not isinstance(value, str) or len(value) > 2048:
