@@ -21,7 +21,7 @@ def _enrolled_authority(tmp_path):
     authority = DeviceAuthority(
         tmp_path / "device-authority.sqlite3", enrollment_code=code
     )
-    enrolled = authority.enroll(code, public_pem)
+    enrolled = authority.enroll(code, public_pem, owner_subject="operator")
     return authority, private_key, enrolled["device_id"]
 
 
@@ -47,49 +47,49 @@ def _signed_status(private_key, device_id, nonce, timestamp=None):
 
 def test_signed_device_status_proof_is_read_only_and_consumes_challenge(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
-    challenge = authority.challenge(device_id)
+    challenge = authority.challenge(device_id, owner_subject="operator")
     proof = _signed_status(private_key, device_id, challenge["nonce"])
 
-    result = authority.verify_status(proof)
+    result = authority.verify_status(proof, owner_subject="operator")
 
     assert result == {
         "action": "status",
         "authority": "READ_ONLY_DEVICE_VERIFIED",
     }
     with pytest.raises(DeviceAuthorityError, match="CHALLENGE_EXPIRED_OR_REPLAYED"):
-        authority.verify_status(proof)
+        authority.verify_status(proof, owner_subject="operator")
 
 
 def test_device_status_proof_rejects_modified_signature(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
-    challenge = authority.challenge(device_id)
+    challenge = authority.challenge(device_id, owner_subject="operator")
     proof = _signed_status(private_key, device_id, challenge["nonce"])
     first = "A" if proof["signature"][0] != "A" else "B"
     proof["signature"] = first + proof["signature"][1:]
 
     with pytest.raises(DeviceAuthorityError, match="INVALID_DEVICE_SIGNATURE"):
-        authority.verify_status(proof)
+        authority.verify_status(proof, owner_subject="operator")
 
 
 def test_device_authority_rejects_non_status_action(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
-    challenge = authority.challenge(device_id)
+    challenge = authority.challenge(device_id, owner_subject="operator")
     proof = _signed_status(private_key, device_id, challenge["nonce"])
     proof["action"] = "task.submit"
 
     with pytest.raises(DeviceAuthorityError, match="INVALID_REQUEST"):
-        authority.verify_status(proof)
+        authority.verify_status(proof, owner_subject="operator")
 
 
 def test_device_authority_rejects_expired_timestamp(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
-    challenge = authority.challenge(device_id)
+    challenge = authority.challenge(device_id, owner_subject="operator")
     proof = _signed_status(
         private_key, device_id, challenge["nonce"], timestamp=int(time.time()) - 120
     )
 
     with pytest.raises(DeviceAuthorityError, match="DEVICE_TIMESTAMP_EXPIRED"):
-        authority.verify_status(proof)
+        authority.verify_status(proof, owner_subject="operator")
 
 
 
@@ -110,19 +110,19 @@ def _signed_request(private_key, device_id, nonce, method, path, request_digest)
 
 def test_signed_request_is_bound_to_method_path_and_exact_digest(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
-    challenge = authority.challenge(device_id)
+    challenge = authority.challenge(device_id, owner_subject="operator")
     digest = hashlib.sha256(b'{"capability":"knowledge.search","input":{"query":"x"}}').hexdigest()
     proof = _signed_request(
         private_key, device_id, challenge["nonce"], "POST", "/v1/tasks", digest
     )
 
     assert authority.verify_request(
-        proof, method="POST", path="/v1/tasks", request_digest=digest
+        proof, method="POST", path="/v1/tasks", request_digest=digest, owner_subject="operator"
     ) == {"authority": "DEVICE_REQUEST_VERIFIED"}
 
     with pytest.raises(DeviceAuthorityError, match="INVALID_REQUEST"):
         authority.verify_request(
-            proof, method="POST", path="/v1/tasks", request_digest="0" * 64
+            proof, method="POST", path="/v1/tasks", request_digest="0" * 64, owner_subject="operator"
         )
 
 
@@ -138,7 +138,7 @@ def test_signed_request_rejects_method_path_or_body_substitution(
     tmp_path, method, path, digest
 ):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
-    challenge = authority.challenge(device_id)
+    challenge = authority.challenge(device_id, owner_subject="operator")
     original_digest = hashlib.sha256(b"body").hexdigest()
     proof = _signed_request(
         private_key, device_id, challenge["nonce"], "POST", "/v1/tasks",
@@ -148,13 +148,13 @@ def test_signed_request_rejects_method_path_or_body_substitution(
     substituted = {**proof, "request_digest": digest}
     with pytest.raises(DeviceAuthorityError, match="INVALID_DEVICE_SIGNATURE"):
         authority.verify_request(
-            substituted, method=method, path=path, request_digest=digest
+            substituted, method=method, path=path, request_digest=digest, owner_subject="operator"
         )
 
 
 def test_signed_request_rejects_digest_field_mismatch_and_replay(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
-    challenge = authority.challenge(device_id)
+    challenge = authority.challenge(device_id, owner_subject="operator")
     digest = hashlib.sha256(b"body").hexdigest()
     proof = _signed_request(
         private_key, device_id, challenge["nonce"], "POST", "/v1/tasks", digest
@@ -162,12 +162,12 @@ def test_signed_request_rejects_digest_field_mismatch_and_replay(tmp_path):
     altered = {**proof, "request_digest": "0" * 64}
     with pytest.raises(DeviceAuthorityError, match="INVALID_REQUEST"):
         authority.verify_request(
-            altered, method="POST", path="/v1/tasks", request_digest=digest
+            altered, method="POST", path="/v1/tasks", request_digest=digest, owner_subject="operator"
         )
     authority.verify_request(
-        proof, method="POST", path="/v1/tasks", request_digest=digest
+        proof, method="POST", path="/v1/tasks", request_digest=digest, owner_subject="operator"
     )
     with pytest.raises(DeviceAuthorityError, match="CHALLENGE_EXPIRED_OR_REPLAYED"):
         authority.verify_request(
-            proof, method="POST", path="/v1/tasks", request_digest=digest
+            proof, method="POST", path="/v1/tasks", request_digest=digest, owner_subject="operator"
         )
