@@ -17,6 +17,7 @@ from omega.tools.registry import ToolSpec
 from omega.task_worker import TaskWorker
 from omega.service import POLICY_VERSION
 from omega.device_authority import DeviceAuthority
+from omega.operator_identity import ROOT_SIGNATURE_DOMAIN
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -55,6 +56,72 @@ class Base(unittest.TestCase):
 
 
 class AuthTests(Base):
+    def test_root_signed_session_binding_api_is_scoped_and_read_only(self) -> None:
+        authority = self.svc.operator_identity_authority
+        self.assertIsNotNone(authority)
+        root = ec.generate_private_key(ec.SECP256R1())
+        public = root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        identity = authority.bootstrap(
+            "session-api-bootstrap-" + "z" * 40,
+            public,
+        )
+        headers_a = self.tok("authenticated-session-A")
+        headers_b = self.tok("authenticated-session-B")
+
+        guest = self.call("POST", "/v1/public/session", {}, {})
+        guest_headers = {"authorization": "Bearer " + guest[1]["access_token"]}
+        self.assertEqual(
+            self.call("POST", "/v1/operator/session/challenge", guest_headers, {})[0],
+            403,
+        )
+
+        status, challenge = self.call(
+            "POST", "/v1/operator/session/challenge", headers_a, {}
+        )
+        self.assertEqual(status, 200)
+        self.assertNotIn(identity["identity_id"], json.dumps(challenge))
+        payload = base64.urlsafe_b64decode(
+            challenge["signing_payload"]
+            + "=" * (-len(challenge["signing_payload"]) % 4)
+        )
+        signature = root.sign(
+            ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+        )
+        encoded = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+        body = {"challenge": challenge["challenge"], "signature": encoded}
+
+        wrong_session = self.call(
+            "POST", "/v1/operator/session/bind", headers_b, body
+        )
+        self.assertEqual(
+            (wrong_session[0], wrong_session[1]["error"]),
+            (403, "OPERATOR_SESSION_MISMATCH"),
+        )
+        bound = self.call("POST", "/v1/operator/session/bind", headers_a, body)
+        self.assertEqual(bound[0], 200)
+        self.assertEqual(bound[1]["authority"], "IDENTITY_BOUND_READ_ONLY")
+        self.assertNotIn("identity_id", bound[1])
+        self.assertEqual(
+            self.call("GET", "/v1/operator/session/status", headers_a)[1]["associated"],
+            True,
+        )
+        self.assertEqual(
+            self.call("GET", "/v1/operator/session/status", headers_b)[1]["associated"],
+            False,
+        )
+        replay = self.call("POST", "/v1/operator/session/bind", headers_a, body)
+        self.assertEqual((replay[0], replay[1]["error"]), (409, "SESSION_CHALLENGE_REPLAYED"))
+        self.assertEqual(bound[1]["authority"], "IDENTITY_BOUND_READ_ONLY")
+
+        audit = json.dumps(self.svc.store._all_events())
+        self.assertNotIn(identity["identity_id"], audit)
+        self.assertNotIn(challenge["challenge"], audit)
+        self.assertNotIn(encoded, audit)
+
+
     def test_AUTH01_no_session_401(self) -> None:
         s, p = self.call("GET", "/v1/me")
         self.assertEqual((s, p["error"]), (401, "AUTHENTICATION_REQUIRED"))
