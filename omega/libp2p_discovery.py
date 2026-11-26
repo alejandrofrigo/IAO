@@ -30,7 +30,9 @@ DISCOVERY_TIMEOUT = 30.0
 def _secure_identity_file(path: str | Path) -> None:
     """Enforce private permissions without following a symlink."""
     target = Path(path)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("P2P_NOFOLLOW_UNSUPPORTED")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
     try:
         fd = os.open(target, flags)
     except OSError as exc:
