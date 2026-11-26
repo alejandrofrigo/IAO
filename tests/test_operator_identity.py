@@ -1,4 +1,6 @@
 """Tests for the isolated durable operator root-key registry."""
+import time
+
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -27,7 +29,7 @@ def test_bootstrap_is_one_time_and_persists_across_restart(tmp_path):
     code = "bootstrap-secret-" + "x" * 40
     private, public = keypair()
     db = tmp_path / "identity.sqlite3"
-    authority = OperatorIdentityAuthority(db, code)
+    authority = OperatorIdentityAuthority(db, code, bootstrap_expires_at=time.time() + 600)
     enrolled = authority.bootstrap(code, public)
     assert enrolled["key_version"] == 1
     assert authority.verify_root_signature(
@@ -42,7 +44,7 @@ def test_bootstrap_is_one_time_and_persists_across_restart(tmp_path):
 def test_bootstrap_rejects_invalid_secret_and_non_p256_key(tmp_path):
     code = "bootstrap-secret-" + "x" * 40
     _, public = keypair()
-    authority = OperatorIdentityAuthority(tmp_path / "identity.sqlite3", code)
+    authority = OperatorIdentityAuthority(tmp_path / "identity.sqlite3", code, bootstrap_expires_at=time.time() + 600)
     with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_BOOTSTRAP"):
         authority.bootstrap("wrong-" + "y" * 40, public)
     rsa = __import__("cryptography.hazmat.primitives.asymmetric.rsa", fromlist=["rsa"]).generate_private_key(
@@ -64,7 +66,8 @@ def test_only_one_active_root_and_signature_is_domain_separated(tmp_path):
     enrolled = authority.bootstrap(code, public)
     second_code = "another-bootstrap-" + "z" * 40
     second_authority = OperatorIdentityAuthority(
-        tmp_path / "identity.sqlite3", second_code
+        tmp_path / "identity.sqlite3", second_code,
+        bootstrap_expires_at=time.time() + 600,
     )
     with pytest.raises(OperatorIdentityError, match="OPERATOR_ROOT_ALREADY_ENROLLED"):
         second_authority.bootstrap(second_code, other_public)
@@ -130,7 +133,7 @@ def test_disabled_bootstrap_and_oversized_payload_fail_closed(tmp_path):
     disabled = OperatorIdentityAuthority(tmp_path / "disabled.sqlite3")
     with pytest.raises(OperatorIdentityError, match="OPERATOR_BOOTSTRAP_DISABLED"):
         disabled.bootstrap("x" * 40, public)
-    enabled = OperatorIdentityAuthority(tmp_path / "enabled.sqlite3", "x" * 40)
+    enabled = OperatorIdentityAuthority(tmp_path / "enabled.sqlite3", "x" * 40, bootstrap_expires_at=time.time() + 600)
     enrolled = enabled.bootstrap("x" * 40, public)
     with pytest.raises(OperatorIdentityError, match="INVALID_ROOT_SIGNED_PAYLOAD"):
         enabled.verify_root_signature(
@@ -220,3 +223,18 @@ def test_root_rotation_invalidates_old_device_binding_until_rebound(tmp_path):
         expected_key_version=2,
     )
     assert authority.verify_primary_device(identity_id, device_public)
+
+
+
+def test_bootstrap_rejects_expired_or_missing_expiry(tmp_path):
+    code = "bootstrap-secret-" + "x" * 40
+    _, public = keypair()
+    expired = OperatorIdentityAuthority(
+        tmp_path / "expired.sqlite3", code,
+        bootstrap_expires_at=time.time() - 1,
+    )
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_BOOTSTRAP_DISABLED"):
+        expired.bootstrap(code, public)
+    no_expiry = OperatorIdentityAuthority(tmp_path / "no-expiry.sqlite3", code)
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_BOOTSTRAP_DISABLED"):
+        no_expiry.bootstrap(code, public)
