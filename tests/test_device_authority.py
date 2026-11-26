@@ -223,3 +223,49 @@ def test_operator_owner_binding_is_atomic_and_rejects_old_owner(tmp_path):
     )
     with pytest.raises(DeviceAuthorityError, match="DEVICE_KEY_NOT_ENROLLED_FOR_OWNER"):
         authority.verify_registered_public_key(pem, owner_subject="operator")
+
+
+def test_recovery_replaces_only_same_operator_device_and_invalidates_pending_proofs(tmp_path):
+    owner = "operator:" + "a" * 32
+    code = "recovery-enrollment-secret-" + "e" * 40
+    authority = DeviceAuthority(
+        tmp_path / "recovery-device.sqlite3", enrollment_code=code
+    )
+    old_private = ec.generate_private_key(ec.SECP256R1())
+    old_public = old_private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    enrolled = authority.enroll(code, old_public, owner_subject=owner)
+    challenge = authority.challenge(enrolled["device_id"], owner_subject=owner)
+
+    new_private = ec.generate_private_key(ec.SECP256R1())
+    new_public = new_private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    result = authority.replace_active_device_for_recovery(
+        new_public, owner_subject=owner,
+    )
+    assert result["device_id"] != enrolled["device_id"]
+    assert authority.verify_registered_public_key(new_public, owner_subject=owner)
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_KEY_NOT_ACTIVE"):
+        authority.verify_active_public_key(old_public)
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_CHALLENGE_NOT_FOUND"):
+        authority.verify_request(
+            _signed_status(old_private, enrolled["device_id"], challenge["nonce"])
+        )
+
+
+def test_recovery_cannot_replace_an_unrelated_active_device(tmp_path):
+    authority, _, device_id = _enrolled_authority(tmp_path)
+    new_private = ec.generate_private_key(ec.SECP256R1())
+    new_public = new_private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    with pytest.raises(DeviceAuthorityError, match="UNRELATED_ACTIVE_DEVICE_BLOCKS_RECOVERY"):
+        authority.replace_active_device_for_recovery(
+            new_public, owner_subject="operator:" + "b" * 32,
+        )
+    assert authority.active_device_count() == 1
