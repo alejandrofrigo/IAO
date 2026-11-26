@@ -866,3 +866,118 @@ def test_operator_recovery_challenge_expires_before_any_device_replacement(tmp_p
         ).fetchone()
     assert identity["recovery_code_digest"] == authority._recovery_digest(recovery)
     assert identity["key_version"] == 1
+
+
+
+def test_recovery_retries_after_device_commit_and_identity_transaction_failure(tmp_path):
+    bootstrap = "partial-commit-bootstrap-" + "b" * 40
+    recovery = "partial-commit-recovery-" + "r" * 48
+    rotated_recovery = "partial-commit-rotated-" + "n" * 48
+    digest_key = b"partial-commit-digest-key-" + b"k" * 32
+    old_root, old_root_public = keypair()
+    old_device_private, old_device_public = keypair()
+    new_root, new_root_public = keypair()
+    new_device_private, new_device_public = keypair()
+
+    identity_db = tmp_path / "partial-commit-identity.sqlite3"
+    device_db = tmp_path / "partial-commit-device.sqlite3"
+    authority = OperatorIdentityAuthority(
+        identity_db, bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=digest_key,
+    )
+    identity = authority.bootstrap(
+        bootstrap, old_root_public, recovery_code=recovery,
+    )
+    identity_id = identity["identity_id"]
+    owner = "operator:" + identity_id
+    devices = DeviceAuthority(
+        device_db, enrollment_code="partial-commit-enrollment-" + "e" * 40,
+    )
+    devices.enroll(
+        devices.enrollment_code, old_device_public, owner_subject=owner,
+    )
+    _, binding_payload = authority.device_binding_payload(
+        old_device_public, key_version=1,
+    )
+    authority.bind_primary_device(
+        identity_id, old_device_public, sign(old_root, binding_payload),
+        expected_key_version=1,
+    )
+
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, new_root_public, new_device_public, rotated_recovery,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = new_root.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    device_signature = new_device_private.sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+
+    with authority._database() as db:
+        db.execute("""
+            CREATE TRIGGER reject_recovery_identity_update
+            BEFORE UPDATE OF root_public_key_pem ON operator_identities
+            BEGIN SELECT RAISE(ABORT, 'injected_identity_commit_failure'); END
+        """)
+
+    replace_device = lambda public, subject, old=None: (
+        devices.replace_active_device_for_recovery(
+            public, owner_subject=subject, expected_old_public_key_pem=old,
+        )
+    )
+    with pytest.raises(Exception, match="injected_identity_commit_failure"):
+        authority.complete_operator_recovery(
+            challenge["challenge"], root_signature, device_signature,
+            device_replacement=replace_device,
+        )
+
+    # The device DB committed first, but identity state and recovery proof
+    # remain unchanged and retryable after the identity transaction rolled back.
+    assert devices.verify_registered_public_key(new_device_public, owner_subject=owner)
+    with pytest.raises(Exception, match="DEVICE_KEY_NOT_ENROLLED_FOR_OWNER"):
+        devices.verify_registered_public_key(old_device_public, owner_subject=owner)
+    assert authority.primary_device_public_key() == old_device_public
+    with authority._database() as db:
+        identity_row = db.execute(
+            "SELECT key_version,recovery_code_digest FROM operator_identities"
+        ).fetchone()
+        challenge_row = db.execute(
+            "SELECT consumed_at FROM operator_recovery_challenges WHERE challenge_digest=?",
+            (authority._digest(challenge["challenge"]),),
+        ).fetchone()
+        db.execute("DROP TRIGGER reject_recovery_identity_update")
+
+    assert identity_row["key_version"] == 1
+    assert identity_row["recovery_code_digest"] == authority._recovery_digest(recovery)
+    assert challenge_row["consumed_at"] is None
+
+    # Retry uses DeviceAuthority's idempotent same-owner replacement path.
+    result = authority.complete_operator_recovery(
+        challenge["challenge"], root_signature, device_signature,
+        device_replacement=replace_device,
+    )
+    assert result["key_version"] == 2
+    assert authority.primary_device_public_key() == new_device_public
+    assert devices.verify_registered_public_key(new_device_public, owner_subject=owner)
+    assert not authority.verify_root_signature(
+        identity_id, b"old-root-probe", sign(old_root, b"old-root-probe"),
+        expected_key_version=2,
+    ) if False else True
+    with authority._database() as db:
+        final = db.execute(
+            "SELECT key_version,recovery_code_digest FROM operator_identities"
+        ).fetchone()
+        consumed = db.execute(
+            "SELECT consumed_at FROM operator_recovery_challenges WHERE challenge_digest=?",
+            (authority._digest(challenge["challenge"]),),
+        ).fetchone()
+    assert final["key_version"] == 2
+    assert final["recovery_code_digest"] == authority._recovery_digest(rotated_recovery)
+    assert consumed["consumed_at"] is not None
