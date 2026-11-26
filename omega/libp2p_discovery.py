@@ -5,7 +5,10 @@ code, grants capabilities, or enrolls peers into the HTTP federation.
 """
 from __future__ import annotations
 
+import json
 import os
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -97,15 +100,17 @@ async def discover_peers(
     except OSError:
         pass
     identity_path = state / "peer-identity.key"
+    if identity_path.is_symlink():
+        raise RuntimeError("P2P_IDENTITY_SYMLINK_REFUSED")
     if identity_path.exists():
+        if not identity_path.is_file():
+            raise RuntimeError("P2P_IDENTITY_PATH_REFUSED")
         key_pair = load_identity(identity_path)
     else:
         key_pair = create_identity_from_seed(secrets.token_bytes(32))
         save_identity(key_pair, identity_path)
-        try:
-            os.chmod(identity_path, 0o600)
-        except OSError:
-            pass
+        os.chmod(identity_path, 0o600)
+
 
     addresses = _validate_bootstrap(bootstrap_addrs)
     if not addresses:
@@ -155,6 +160,74 @@ async def discover_peers(
         "remote_code_executed": False,
     }
 
+
+def persist_discovered_peers(peers: Any, *, state_dir: str | Path | None = None) -> int:
+    """Persist unverified DHT peers separately from HTTP federation candidates."""
+    state = Path(state_dir) if state_dir is not None else _state_dir()
+    state.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(state, 0o700)
+    except OSError:
+        pass
+    path = state / "peers.json"
+    if path.is_symlink():
+        raise RuntimeError("P2P_REGISTRY_SYMLINK_REFUSED")
+    data = {"schema": 1, "peers": {}}
+    if path.exists():
+        if not path.is_file():
+            raise RuntimeError("P2P_REGISTRY_PATH_REFUSED")
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(loaded, dict) or loaded.get("schema") != 1
+                    or not isinstance(loaded.get("peers"), dict)
+                    or len(loaded["peers"]) > MAX_PEERS * 4):
+                raise ValueError("INVALID_SCHEMA")
+            data = loaded
+        except Exception as exc:
+            raise RuntimeError("P2P_REGISTRY_INVALID_FAIL_CLOSED") from exc
+    records = data["peers"]
+    added = 0
+    now = datetime.now(timezone.utc).isoformat()
+    if not isinstance(peers, (list, tuple)):
+        return 0
+    for item in peers[:MAX_PEERS]:
+        if not isinstance(item, dict):
+            continue
+        peer_id, addrs = item.get("peer_id"), item.get("multiaddrs")
+        if (not isinstance(peer_id, str) or not 20 <= len(peer_id) <= 120
+                or not isinstance(addrs, list) or not addrs or len(addrs) > 16
+                or any(not isinstance(addr, str) or not addr.startswith("/")
+                       or len(addr) > 512 or not all(32 < ord(c) < 127 for c in addr)
+                       for addr in addrs)):
+            continue
+        previous = records.get(peer_id, {})
+        records[peer_id] = {
+            "peer_id": peer_id, "multiaddrs": sorted(set(addrs)),
+            "source": "libp2p_kad_dht", "status": "DISCOVERED_UNVERIFIED",
+            "granted_capabilities": [],
+            "first_seen": previous.get("first_seen", now), "last_seen": now,
+        }
+        if not previous:
+            added += 1
+    ordered = sorted(records.values(), key=lambda x: x.get("last_seen", ""), reverse=True)[:MAX_PEERS]
+    payload = {"schema": 1, "peers": {x["peer_id"]: x for x in ordered}}
+    fd, temporary = tempfile.mkstemp(prefix=".peers-", dir=str(state))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    return added
 
 def discover_sync(bootstrap_addrs: Any = None, *, timeout: float = DISCOVERY_TIMEOUT) -> dict[str, Any]:
     """Synchronous entry point for the autonomous coordinator."""
