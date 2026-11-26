@@ -51,30 +51,117 @@ class FederationEndpointSafetyTests(unittest.TestCase):
             ):
                 registry.authorize(item["candidate_id"])  # modo autónomo
 
-    def test_autonomous_authorization_registers_audit_label(self):
-        """La autorización autónoma se etiqueta como IAO_AUTONOMOUS_POLICY_V1."""
+    def test_autonomous_authorization_rejects_forged_evidence(self):
+        """Un hash declarado no sustituye la prueba criptográfica original."""
         with tempfile.TemporaryDirectory() as td:
             registry = CandidateRegistry(Path(td) / "candidates.json")
             item = registry.discover(
                 "https://federation.example.org/fed/v1/message",
                 "unit-test",
             )["candidate"]
-            # Forzar estado AUTHORIZATION_PENDING con evidencia sintética
-            # solo para verificar la etiqueta de auditoría.
             with registry._lock:
                 data = registry._load()
-                cand = next(x for x in data["candidates"]
-                            if x["candidate_id"] == item["candidate_id"])
+                cand = next(
+                    x for x in data["candidates"]
+                    if x["candidate_id"] == item["candidate_id"]
+                )
                 cand["status"] = "AUTHORIZATION_PENDING"
                 cand["node_id"] = "0123456789abcdef"
                 cand["verification_evidence"] = {
                     "evidence_sha256": "0" * 64,
-                    "transport": {"https_verified": True},
+                    "transport": {"https_verified": True, "redirected": False},
+                }
+                cand["authorization_policy"] = {
+                    "id": "IAO_PINNED_IDENTITY_VERIFICATION_V1",
+                    "decision": "PENDING_OPERATOR_APPROVAL",
+                    "evidence_sha256": "0" * 64,
                 }
                 registry._save(data)
-            authorized = registry.authorize(item["candidate_id"])
-            self.assertTrue(authorized["authorized"])
-            self.assertEqual(authorized["authorized_by"], "IAO_AUTONOMOUS_POLICY_V1")
+            with self.assertRaisesRegex(
+                AssimilationError, "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
+            ):
+                registry.authorize(item["candidate_id"])
+            self.assertFalse(registry.get(item["candidate_id"])["authorized"])
+
+    def test_operator_approval_cannot_bypass_missing_transport_attestation(self):
+        with tempfile.TemporaryDirectory() as td:
+            registry = CandidateRegistry(Path(td) / "candidates.json")
+            item = registry.discover(
+                "https://federation.example.org/fed/v1/message",
+                "unit-test",
+            )["candidate"]
+            with registry._lock:
+                data = registry._load()
+                candidate = data["candidates"][0]
+                candidate["status"] = "AUTHORIZATION_PENDING"
+                candidate["node_id"] = "0123456789abcdef"
+                registry._save(data)
+            with self.assertRaisesRegex(
+                AssimilationError, "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
+            ):
+                registry.authorize(item["candidate_id"], operator_id="local-operator")
+            self.assertFalse(registry.get(item["candidate_id"])["authorized"])
+
+    def test_valid_signed_identity_does_not_bypass_untrusted_transport_gate(self):
+        """La revalidación usa la firma Ed25519, nonce y nodo esperado."""
+        import hashlib
+        import time
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from omega.federation import _sign
+
+        key = Ed25519PrivateKey.generate()
+        public_raw = key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+        node_id = hashlib.sha256(public_raw).hexdigest()[:16]
+        requester_id = "a" * 16
+        nonce = "b" * 64
+        request_ts = time.time()
+        identity = {
+            "protocol": "iao-federation",
+            "version": 1,
+            "node_id": node_id,
+            "public_key": public_raw.hex(),
+        }
+        response = _sign(key, {
+            "v": 1,
+            "protocol": "iao-federation",
+            "from": node_id,
+            "to": requester_id,
+            "nonce": nonce,
+            "request_ts": float(request_ts),
+            "ts": float(request_ts),
+        })
+        evidence = {
+            "identity": identity,
+            "response": response,
+            "requester_id": requester_id,
+            "nonce": nonce,
+            "request_ts": request_ts,
+            "transport": {"https_verified": True, "redirected": False},
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            registry = CandidateRegistry(Path(td) / "candidates.json")
+            item = registry.discover(
+                "https://federation.example.org/fed/v1/message",
+                "unit-test",
+            )["candidate"]
+            # Una firma Ed25519 válida no convierte dos booleanos JSON en
+            # evidencia TLS: el adaptador de transporte confiable aún no existe.
+            with self.assertRaisesRegex(
+                AssimilationError, "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
+            ):
+                registry.record_verified_identity(
+                    item["candidate_id"],
+                    expected_node_id=node_id,
+                    evidence=evidence,
+                )
+            self.assertEqual(
+                registry.get(item["candidate_id"])["status"], "DISCOVERED"
+            )
+            self.assertFalse(registry.get(item["candidate_id"])["authorized"])
 
 
 

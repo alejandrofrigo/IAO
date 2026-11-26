@@ -1,4 +1,5 @@
 """Stdlib HTTP runtime for IAO. Refuses to start in production with dev auth."""
+import hashlib
 import json
 import os
 import signal
@@ -10,6 +11,9 @@ from pathlib import Path
 from omega.env_loader import load_env_files
 from omega.config import load_settings
 from omega.service import MAX_BODY, OmegaService
+from omega.device_authority import DeviceAuthority
+from omega.operator_identity import OperatorIdentityAuthority
+from omega.identity_rollback_anchor import IdentityRollbackAnchor, capture_identity_state
 from omega.store import Store
 from omega.federation import MAX_MSG, Node
 from omega.federation_identity import load_or_create_key
@@ -53,6 +57,65 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         kw["model_adapter"] = RouterModelAdapter()
     else:
         kw.setdefault("model_adapter", adapter_from_env(dict(os.environ)))
+    kw.setdefault(
+        "device_authority",
+        DeviceAuthority(
+            state_dir / "device-authority.sqlite3",
+            enrollment_code=os.environ.get("IAO_DEVICE_ENROLLMENT_CODE", ""),
+        ),
+    )
+    bootstrap_expiry_raw = os.environ.get(
+        "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT", ""
+    ).strip()
+    try:
+        bootstrap_expiry = float(bootstrap_expiry_raw) if bootstrap_expiry_raw else None
+    except ValueError:
+        bootstrap_expiry = None
+    bootstrap_code = os.environ.pop("IAO_OPERATOR_BOOTSTRAP_CODE", "")
+    operator_identity_authority = OperatorIdentityAuthority(
+        state_dir / "operator-identity.sqlite3",
+        bootstrap_code=bootstrap_code,
+        bootstrap_expires_at=bootstrap_expiry,
+        subject_digest_key=hashlib.sha256(
+            b"IAO-OPERATOR-SUBJECT-HMAC-V1\x00" + token_key.encode("utf-8")
+        ).digest(),
+    )
+    bootstrap_code = ""
+    kw.setdefault("operator_identity_authority", operator_identity_authority)
+    if kw.pop("identity_rollback_anchor_enabled", False):
+        trust_dir = Path(os.environ.get(
+            "IAO_IDENTITY_ROLLBACK_DIR",
+            str(Path.home() / ".config" / "iao" / "identity-trust"),
+        )).expanduser()
+        anchor = IdentityRollbackAnchor(
+            trust_dir / "identity.anchor",
+            trust_dir / "identity.key",
+        )
+        device_authority = kw["device_authority"]
+        state_supplier = lambda: capture_identity_state(
+            operator_identity_authority.database,
+            device_authority.database,  # type: ignore[union-attr]
+        )
+        current_state = state_supplier()
+        anchor_file = trust_dir / "identity.anchor"
+        key_file = trust_dir / "identity.key"
+        if not anchor_file.exists() and not anchor_file.is_symlink() and not key_file.exists() and not key_file.is_symlink():
+            empty_state = (
+                current_state["active_root_count"] == 0
+                and current_state["active_device_count"] == 0
+                and current_state["revoked_root_count"] == 0
+                and current_state["inactive_device_count"] == 0
+                and current_state["root_fingerprint"] is None
+                and current_state["primary_device_fingerprint"] is None
+                and current_state["root_key_version"] == 0
+            )
+            if not empty_state:
+                raise RuntimeError("IDENTITY_ROLLBACK_ANCHOR_MISSING_FOR_EXISTING_IDENTITY")
+            anchor.initialize(current_state)
+        else:
+            anchor.verify(current_state)
+        kw["identity_rollback_anchor"] = anchor
+        kw["identity_state_supplier"] = state_supplier
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
 
@@ -96,6 +159,38 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
                 self._send_fed_json(200, fed_node.contract_for_self(sorted(fed_node.served)))
+                return
+
+            if route == "/fed/v1/publication":
+                if self.command != "GET":
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    return
+                if fed_node is None:
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                # Public federation participation is opt-in per installation.
+                # A discovery listing or reachable endpoint alone is not consent.
+                origin = os.environ.get("IAO_FEDERATION_PUBLIC_ORIGIN", "").strip().rstrip("/")
+                if os.environ.get("IAO_FEDERATION_PUBLIC_PEERING", "").lower() != "true" or not origin:
+                    self._send_fed_json(404, {"error": "PUBLIC_PEERING_NOT_OFFERED"})
+                    return
+                try:
+                    from urllib.parse import urlsplit
+                    parsed = urlsplit(origin)
+                    if (parsed.scheme != "https" or not parsed.hostname
+                            or parsed.username or parsed.password
+                            or parsed.port not in (None, 443)
+                            or parsed.path or parsed.query or parsed.fragment):
+                        raise ValueError("INVALID_PUBLIC_ORIGIN")
+                    publication = fed_node.identity_publication(
+                        origin + "/fed/v1/message",
+                        capabilities=sorted(fed_node.served),
+                        consent=True,
+                    )
+                except Exception:
+                    self._send_fed_json(503, {"error": "PUBLIC_PEERING_CONFIG_INVALID"})
+                    return
+                self._send_fed_json(200, publication)
                 return
 
             if route == "/fed/v1/identity":
@@ -197,7 +292,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     origin.rstrip("/") not in allowed
                     or requested_method not in {"POST", "GET"}
                     or not requested_headers.issubset(
-                        {"authorization", "content-type"}
+                        {"authorization", "content-type", "x-iao-device-proof"}
                     )
                 ):
                     self.send_response(403)
@@ -209,7 +304,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self.send_response(204)
                 self._cors_headers()
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-IAO-Device-Proof")
                 self.send_header("Access-Control-Max-Age", "600")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -266,8 +361,11 @@ def main() -> None:
     if len(key) < 16:
         sys.exit("OMEGA_DEV_TOKEN_KEY (>=16 chars) required")
     state = Path(os.environ.get("OMEGA_STATE_DIR", ".state"))
-    svc = build_service(state, key, Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
-                        rate_limit_per_min=int(os.environ.get("OMEGA_RATE_LIMIT", "120")))
+    svc = build_service(
+        state, key, Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
+        rate_limit_per_min=int(os.environ.get("OMEGA_RATE_LIMIT", "120")),
+        identity_rollback_anchor_enabled=True,
+    )
     fed_key = load_or_create_key(state / "federation-node-ed25519.key")
     fed_ledger = FederationLedger(
         state / "federation-audit.jsonl",
@@ -286,6 +384,8 @@ def main() -> None:
     start_federation_autojoin(fed_node, state)
     from omega.federation_discovery import start_federation_discovery
     start_federation_discovery(state)
+    from omega.external_network import start_external_network
+    start_external_network(state / "external-network", fed_node=fed_node)
     httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
     (state / "server.pid").write_text(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())

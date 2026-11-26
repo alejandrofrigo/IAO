@@ -106,7 +106,7 @@ def _filter_authorizations(events: list[dict]) -> list[dict]:
         if not isinstance(ev, dict): continue
         if ev.get("kind") != 1: continue
         content = ev.get("content", "")
-        if not isinstance(content, str) or marker not in content: continue
+        if not isinstance(content, str) or not content.startswith(marker): continue
         tags = ev.get("tags", [])
         if not any(isinstance(t, list) and len(t) >= 2 and t[0] == "t" and t[1] == AUTHORIZE_TAG
                    for t in tags):
@@ -151,34 +151,13 @@ class NostrBridge(ProtocolAdapter):
         return {"endpoint": addr, "protocol": "nostr", "kind": "relay"}
 
     def to_participation_contract(self, candidate: dict) -> dict | None:
-        """Traduce un candidato Nostr (evento de autorizacion) a ParticipationContract.
+        """Un relay/evento Nostr es un canal de descubrimiento, no un nodo IAO.
 
-        El peer_id se deriva de la pubkey Nostr (sha256 truncado a 16 hex).
-        La pubkey del contrato es la clave Ed25519 del bridge (delegada).
+        No se inventa un endpoint .local ni se delega la identidad del bridge
+        a un autor Nostr. El enrolamiento requiere un servicio IAO separado,
+        con endpoint HTTPS propio y challenge Ed25519 verificable.
         """
-        ev = candidate.get("nostr_event")
-        if not isinstance(ev, dict):
-            return None
-        nostr_pubkey = ev.get("pubkey")
-        if not isinstance(nostr_pubkey, str) or len(nostr_pubkey) != 64:
-            return None
-        key = _ensure_bridge_key()
-        bridge_pub_raw = key.public_key().public_bytes_raw()
-        # El peer_id DEBE derivarse de la pubkey Ed25519 del bridge,
-        # porque Node.enroll valida peer_id == node_id_of(pubkey).
-        import hashlib
-        peer_id = hashlib.sha256(bridge_pub_raw).hexdigest()[:16]
-        pub_b64 = __import__("base64").b64encode(bridge_pub_raw).decode()
-        return {
-            "peer_id": peer_id,
-            "pubkey": pub_b64,
-            "capabilities": ["knowledge.search"],
-            "lease_expires_at": time.time() + 3600,
-            "rate_limit_per_min": 30,
-            "endpoint": "https://nostr.bridge.local/fed/v1/message",
-            # Metadata de trazabilidad (no se valida por Node):
-            "nostr_pubkey": nostr_pubkey,
-        }
+        return None
 
 
 def build_candidates_from_events(events: list[dict], relays: list[str]) -> list[dict]:

@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
 from omega.federation import Node, verify_identity_challenge
+from omega.federation_transport import fetch_public_json
 import omega.federation_protocols.native  # noqa: F401
 import omega.federation_protocols.nostr   # noqa: F401
 from omega.federation_protocols import probe_any, get as get_adapter
@@ -44,66 +45,188 @@ def audit(event, **fields):
 def discover_signed_directory(url, trusted_pub_hex, timeout=15):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            doc = json.loads(r.read(1_000_000))
-    except Exception as e:
-        audit("discovery_directory_failed", url=url, error=str(e)[:120]); return []
+        doc = fetch_public_json(url, timeout=timeout, max_bytes=1_000_000)
+    except Exception as exc:
+        audit("discovery_directory_failed", error_type=type(exc).__name__)
+        return []
+    if not isinstance(doc, dict):
+        audit("discovery_directory_invalid", reason="JSON_OBJECT_REQUIRED")
+        return []
     sig = doc.pop("sig", None)
-    if not sig:
-        audit("discovery_directory_unsigned", url=url); return []
+    if not isinstance(sig, str) or not sig or len(sig) > 256:
+        audit("discovery_directory_unsigned", reason="SIGNATURE_MISSING")
+        return []
     body = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
     try:
+        signature = base64.b64decode(sig, validate=True)
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pub_hex)).verify(
-            base64.b64decode(sig), body)
+            signature, body
+        )
     except Exception:
-        audit("discovery_directory_bad_signature", url=url); return []
+        audit("discovery_directory_bad_signature")
+        return []
     peers = doc.get("peers", [])
-    if not isinstance(peers, list): return []
+    if not isinstance(peers, list):
+        return []
     out = []
-    for p in peers:
-        if isinstance(p, dict) and p.get("id") and p.get("url"):
-            out.append({"url": p["url"], "id": p["id"],
-                        "capabilities": p.get("capabilities", []),
-                        "source": f"signed_directory:{url}"})
-    audit("discovery_directory_ok", url=url, peers=len(out)); return out
+    for peer in peers[:1000]:
+        if (
+            isinstance(peer, dict)
+            and isinstance(peer.get("id"), str)
+            and isinstance(peer.get("url"), str)
+            and peer["url"].startswith("https://")
+        ):
+            out.append({
+                "url": peer["url"],
+                "id": peer["id"],
+                "capabilities": peer.get("capabilities", []),
+                "source": "signed_directory",
+            })
+    audit("discovery_directory_ok", peers=len(out))
+    return out
+
 
 def discover_feed(url, timeout=10):
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read(500_000))
-    except Exception as e:
-        audit("discovery_feed_failed", url=url, error=str(e)[:120]); return []
-    peers = data if isinstance(data, list) else data.get("peers", [])
-    out = []
-    for p in peers:
-        if isinstance(p, dict) and p.get("id") and p.get("url"):
-            out.append({"url": p["url"], "id": p["id"],
-                        "capabilities": p.get("capabilities", []),
-                        "source": f"feed:{url}"})
-    audit("discovery_feed_ok", url=url, peers=len(out)); return out
-
-def discover_dht(ipfs_api):
-    try:
-        req = urllib.request.Request(f"{ipfs_api}/api/v0/swarm/peers", method="POST",
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read(500_000))
-    except Exception:
+        data = fetch_public_json(url, timeout=timeout, max_bytes=500_000)
+    except Exception as exc:
+        audit("discovery_feed_failed", error_type=type(exc).__name__)
+        return []
+    if isinstance(data, list):
+        peers = data
+    elif isinstance(data, dict):
+        peers = data.get("peers", [])
+    else:
+        return []
+    if not isinstance(peers, list):
         return []
     out = []
-    for p in data.get("Peers", []):
-        addr = p.get("Addr", "")
-        parts = addr.split("/")
-        host = port = None
-        for i, x in enumerate(parts):
-            if x == "ip4" and i+1 < len(parts): host = parts[i+1]
-            if x == "tcp" and i+1 < len(parts): port = parts[i+1]
-        if host and port:
-            out.append({"url": f"https://{host}:{port}", "id": None,
-                        "capabilities": [], "source": "dht"})
+    for peer in peers[:1000]:
+        if (
+            isinstance(peer, dict)
+            and isinstance(peer.get("id"), str)
+            and isinstance(peer.get("url"), str)
+            and peer["url"].startswith("https://")
+        ):
+            out.append({
+                "url": peer["url"],
+                "id": peer["id"],
+                "capabilities": peer.get("capabilities", []),
+                "source": "public_feed",
+            })
+    audit("discovery_feed_ok", peers=len(out))
     return out
+
+
+def _validate_local_ipfs_api(value):
+    """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower()
+        return (
+            parsed.scheme == "http"
+            and host in {"127.0.0.1", "localhost", "::1"}
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.path in ("", "/")
+            and not parsed.query
+            and not parsed.fragment
+            and parsed.port in (None, 5001)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _parse_ipfs_peer(peer):
+    """Retain the real libp2p peer ID and multiaddr; never invent an HTTPS URL."""
+    if not isinstance(peer, dict):
+        return None
+    peer_id = peer.get("Peer")
+    multiaddr = peer.get("Addr")
+    if (
+        not isinstance(peer_id, str)
+        or not 20 <= len(peer_id) <= 100
+        or not all(ch.isalnum() for ch in peer_id)
+        or not isinstance(multiaddr, str)
+        or not multiaddr.startswith("/")
+        or len(multiaddr) > 512
+        or any(ord(ch) < 33 or ord(ch) > 126 for ch in multiaddr)
+    ):
+        return None
+    return {
+        "peer_id": peer_id,
+        "multiaddr": multiaddr,
+        "source": "ipfs_swarm_peer",
+        "status": "DISCOVERED_UNVERIFIED",
+        "granted_capabilities": [],
+    }
+
+
+def discover_dht(ipfs_api):
+    if not _validate_local_ipfs_api(ipfs_api):
+        audit("dht_discovery_rejected", reason="LOCAL_IPFS_API_REQUIRED")
+        return []
+    try:
+        req = urllib.request.Request(
+            f"{ipfs_api.rstrip('/')}/api/v0/swarm/peers",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read(500_000))
+    except Exception as exc:
+        audit("dht_discovery_unavailable", error_type=type(exc).__name__)
+        return []
+    peers = data.get("Peers", []) if isinstance(data, dict) else []
+    if not isinstance(peers, list):
+        return []
+    out = []
+    seen = set()
+    for peer in peers[:500]:
+        item = _parse_ipfs_peer(peer)
+        if item and item["peer_id"] not in seen:
+            seen.add(item["peer_id"])
+            out.append(item)
+    audit("ipfs_swarm_peers_discovered", count=len(out))
+    return out
+
+def merge_p2p_candidates(candidates):
+    """Persist discovered libp2p addresses separately from HTTP federation nodes."""
+    path = STATE / "iao-p2p-candidates.json"
+    data = load(path, {"schema": 1, "peers": {}})
+    peers = data.get("peers", {})
+    if not isinstance(peers, dict):
+        peers = {}
+    added = 0
+    now = utc()
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("source") != "ipfs_swarm_peer":
+            continue
+        peer_id = candidate.get("peer_id")
+        multiaddr = candidate.get("multiaddr")
+        if not isinstance(peer_id, str) or not isinstance(multiaddr, str):
+            continue
+        existing = peers.get(peer_id, {})
+        peers[peer_id] = {
+            "peer_id": peer_id,
+            "multiaddr": multiaddr,
+            "source": "ipfs_swarm_peer",
+            "status": "DISCOVERED_UNVERIFIED",
+            "granted_capabilities": [],
+            "first_seen": existing.get("first_seen", now),
+            "last_seen": now,
+        }
+        if not existing:
+            added += 1
+    # Bounded registry: preserve most recently seen entries.
+    ordered = sorted(
+        peers.values(), key=lambda item: item.get("last_seen", ""), reverse=True
+    )[:1000]
+    data["peers"] = {item["peer_id"]: item for item in ordered}
+    save(path, data)
+    return added
+
 
 def run_discovery():
     sources = load(SOURCES, {})
@@ -143,7 +266,16 @@ def merge_candidates_into_nodes(candidates):
     ids = {n.get("id") for n in cfg.get("nodes", []) if n.get("id")}
     added = 0
     for c in candidates:
-        if not c.get("id") or c["id"] in ids: continue
+        # Solo endpoints IAO HTTPS con ID verificable entran en el pipeline HTTP.
+        # Peers libp2p y anuncios Nostr permanecen en sus registros de descubrimiento.
+        if (
+            not isinstance(c, dict)
+            or not isinstance(c.get("url"), str)
+            or not c.get("url", "").startswith("https://")
+            or not c.get("id")
+            or c["id"] in ids
+        ):
+            continue
         cfg["nodes"].append({"url": c["url"], "id": c["id"],
             "authorized": False,
             "capabilities": c.get("capabilities", []),
@@ -215,6 +347,11 @@ def make_node(policy):
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
+def _remote_handshake_allowed(url):
+    """Only loopback may be probed until trusted public transport is integrated."""
+    return _peer_is_loopback(url)
+
+
 def _peer_is_loopback(url):
     from urllib.parse import urlsplit
     try:
@@ -224,6 +361,21 @@ def _peer_is_loopback(url):
     return host in _LOOPBACK_HOSTS
 
 def enroll_if_consented(node, protocol, candidate, verified, item, policy):
+    # La firma Ed25519 prueba identidad, no autenticación del canal. El probe
+    # actual no aporta una atestación mTLS ligada a la conexión ni bloquea de
+    # forma segura redirects/DNS rebinding. Por eso no se enrolan peers remotos
+    # hasta integrar un transporte confiable; el descubrimiento sigue permitido.
+    candidate_url = candidate.get("endpoint") if isinstance(candidate, dict) else None
+    if candidate_url is None and isinstance(item, dict):
+        candidate_url = item.get("url")
+    if not _peer_is_loopback(candidate_url or ""):
+        return {
+            "status": "BLOCKED_TRUSTED_TRANSPORT_NOT_INTEGRATED",
+            "peer_id": (verified or {}).get("peer_id"),
+            "peer_url": str(candidate_url or "")[:200],
+            "enrollment_performed": False,
+            "capabilities_granted": [],
+        }
     # Salvaguarda por-peer: si mTLS está desactivado (solo permitido en
     # entornos de integración), rechazar cualquier peer que no sea loopback.
     # En producción require_mutual_tls debe ser True.
@@ -363,7 +515,23 @@ def run_cycle(dry_run=False, discover=True):
     if discover:
         candidates = run_discovery()
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
+        discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
         discovery_summary["candidates_discovered"] = len(candidates)
+        try:
+            from omega.libp2p_discovery import discover_sync
+            p2p = discover_sync()
+            discovery_summary["libp2p"] = {
+                "status": p2p.get("status"),
+                "connected_bootstrappers": p2p.get("connected_bootstrappers", 0),
+                "routing_peers_discovered": p2p.get("routing_peers_discovered", 0),
+                "persisted_new_peers": p2p.get("persisted_new_peers", 0),
+                "enrollment_performed": False,
+                "capabilities_granted": [],
+            }
+            audit("libp2p_dht_discovery_cycle", **discovery_summary["libp2p"])
+        except Exception as exc:
+            discovery_summary["libp2p"] = {"status": "UNAVAILABLE", "error_type": type(exc).__name__}
+            audit("libp2p_dht_discovery_unavailable", error_type=type(exc).__name__)
     items = [n for n in load(NODES, {"nodes": []}).get("nodes", []) if isinstance(n, dict)]
     node = make_node(policy) if not dry_run else None
     results = []
@@ -392,6 +560,15 @@ def run_cycle(dry_run=False, discover=True):
             verified = {"ok": True, "peer_id": contract["peer_id"], "verified": True}
             results.append({"addr": addr, "protocol": "nostr",
                             **enroll_if_consented(node, "nostr", candidate, verified, item, policy)})
+            continue
+        if not _remote_handshake_allowed(addr):
+            results.append({
+                "addr": addr,
+                "status": "BLOCKED_TRUSTED_TRANSPORT_NOT_INTEGRATED",
+                "handshake_performed": False,
+                "enrollment_performed": False,
+                "capabilities_granted": [],
+            })
             continue
         probed = probe_and_verify(addr)
         if not probed:

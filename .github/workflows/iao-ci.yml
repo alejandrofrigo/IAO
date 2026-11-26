@@ -17,5 +17,7 @@ jobs:
           python-version: '3.13'
       - name: Compile project
         run: python -m compileall -q omega tools
+      - name: Install declared runtime dependencies
+        run: python -m pip install -e ".[dev]"
       - name: Run standard-library tests
         run: python -m unittest discover -v

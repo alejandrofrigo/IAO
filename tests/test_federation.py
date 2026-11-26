@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -27,6 +28,8 @@ def mk(tmp: str, name: str, clock) -> Node:  # type: ignore[no-untyped-def]
 
 class FedBase(unittest.TestCase):
     def setUp(self) -> None:
+        self._old_loopback_http = os.environ.get("IAO_ALLOW_LOOPBACK_HTTP")
+        os.environ["IAO_ALLOW_LOOPBACK_HTTP"] = "1"
         self.t = [1_000_000.0]
         self.clock = lambda: self.t[0]
         self.tmp = tempfile.TemporaryDirectory()
@@ -35,6 +38,7 @@ class FedBase(unittest.TestCase):
         self.b.enroll(self.a.contract_for_self(["knowledge.search"]), granted_capabilities=["knowledge.search"])   # B grants A inbound access
         self.sb = FedServer(self.b).start()
         self.servers = [self.sb]
+        self.a.bind_peer_endpoint(self.b.node_id, self.sb.url)
 
     def tearDown(self) -> None:
         for s in self.servers:
@@ -45,6 +49,10 @@ class FedBase(unittest.TestCase):
         for n in (self.a, self.b):
             n.store.close()
         self.tmp.cleanup()
+        if self._old_loopback_http is None:
+            os.environ.pop("IAO_ALLOW_LOOPBACK_HTTP", None)
+        else:
+            os.environ["IAO_ALLOW_LOOPBACK_HTTP"] = self._old_loopback_http
 
     def raw(self, env: dict, key=None) -> tuple[int, dict]:  # type: ignore[type-arg,no-untyped-def]
         return self.b.handle(json.dumps(_sign(key or self.a.key, env)).encode())
@@ -248,6 +256,7 @@ class PartitionAndHostilePeerTests(FedBase):
                 data = json.dumps(build(req)).encode()
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(data)))
+                self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -268,6 +277,7 @@ class PartitionAndHostilePeerTests(FedBase):
         evil = Ed25519PrivateKey.generate()
         s = self._hostile(lambda req: _sign(evil, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
                                                     "in_reply_to": req["nonce"], "result": {"items": [{"fake": 1}]}, "verification": "PASS"}))
+        self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual((r["ok"], r["error"]), (False, "BAD_RESPONSE_SIGNATURE"))
 
@@ -277,12 +287,57 @@ class PartitionAndHostilePeerTests(FedBase):
         captured = _sign(self.b.key, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
                                        "in_reply_to": "old-nonce", "result": {"items": []}, "verification": "PASS"})
         s = self._hostile(lambda req: captured)
+        self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual(r["error"], "REPLAYED_OR_MISROUTED_RESPONSE")
 
     def test_garbage_and_oversized_responses_handled(self) -> None:
-        r = self.a.send(self.b.node_id, self._hostile(lambda req: {"x": "not an envelope"}).url, "knowledge.search", Q)
+        hostile = self._hostile(lambda req: {"x": "not an envelope"})
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        r = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
         self.assertFalse(r["ok"])
+
+    def test_loopback_http_requires_explicit_integration_flag(self) -> None:
+        os.environ.pop("IAO_ALLOW_LOOPBACK_HTTP", None)
+        try:
+            result = self.a.send(
+                self.b.node_id, self.sb.url, "knowledge.search", Q
+            )
+            self.assertEqual(
+                (result["ok"], result["error"]),
+                (False, "LOOPBACK_HTTP_DISABLED"),
+            )
+        finally:
+            os.environ["IAO_ALLOW_LOOPBACK_HTTP"] = "1"
+
+    def test_send_requires_a_pinned_peer_endpoint(self) -> None:
+        endpoint = self.a.peers[self.b.node_id].pop("endpoint")
+        try:
+            result = self.a.send(
+                self.b.node_id, self.sb.url, "knowledge.search", Q
+            )
+            self.assertEqual(
+                (result["ok"], result["error"]),
+                (False, "ENDPOINT_NOT_PINNED"),
+            )
+        finally:
+            self.a.peers[self.b.node_id]["endpoint"] = endpoint
+
+    def test_send_rejects_non_loopback_http_and_wrong_endpoint_paths(self) -> None:
+        for endpoint in (
+            "http://192.168.1.10:8080/fed/v1/message",
+            "http://example.org:8080/fed/v1/message",
+            "http://127.0.0.1:8080/admin",
+            "https://example.org/fed/v1/message?redirect=1",
+        ):
+            result = self.a.send(
+                self.b.node_id, endpoint, "knowledge.search", Q
+            )
+            self.assertEqual(
+                (result["ok"], result["error"]),
+                (False, "INVALID_ENDPOINT"),
+                endpoint,
+            )
 
     def test_cannot_send_to_unenrolled_or_revoked_peer(self) -> None:
         self.assertEqual(self.a.send("0" * 16, self.sb.url, "knowledge.search", Q)["error"], "UNKNOWN_PEER")

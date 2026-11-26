@@ -3,6 +3,12 @@ from dataclasses import dataclass
 from typing import Any
 
 
+# Queue execution is deliberately narrower than the general tool registry.
+# Only the deterministic local corpus lookup is approved until each additional
+# tool has an isolated execution and cancellation contract.
+QUEUED_TOOL_ALLOWLIST = frozenset({"knowledge.search"})
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str

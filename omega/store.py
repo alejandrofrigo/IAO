@@ -2,6 +2,7 @@
 All reads of user data take the owner as a mandatory parameter (tenant isolation)."""
 import json
 import hashlib
+import os
 import sqlite3
 import threading
 import uuid
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS message(
 CREATE TABLE IF NOT EXISTS task(
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL, intent_json TEXT NOT NULL,
   result_json TEXT, idem_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  lease_owner TEXT, lease_until TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
   UNIQUE(owner, idem_key));
 CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner, created_at);
 CREATE TABLE IF NOT EXISTS tool_execution(
@@ -44,16 +46,59 @@ def now_iso() -> str:
 
 class Store:
     def __init__(self, path: str | Path, audit_key: bytes | None = None) -> None:
-        self.path = str(path)
         self.audit_key = audit_key
         self.lock = threading.RLock()
+        if str(path) == ":memory:":
+            self.path = ":memory:"
+        else:
+            db_path = Path(path)
+            db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if db_path.parent.is_symlink() or db_path.is_symlink():
+                raise RuntimeError("DATABASE_SYMLINK_REFUSED")
+            if db_path.exists() and not db_path.is_file():
+                raise RuntimeError("DATABASE_PATH_NOT_REGULAR_FILE")
+            # Chat content, task payloads and audit records are sensitive.
+            # Keep the state directory private and refuse symlinked DB files.
+            os.chmod(db_path.parent, 0o700)
+            flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(str(db_path), flags, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            finally:
+                os.close(fd)
+            self.path = str(db_path)
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        if self.path != ":memory:":
+            os.chmod(self.path, 0o600)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA secure_delete=ON")  # overwrite freed pages: operational deletion must be physical
         self.db.executescript(SCHEMA)
+        self._ensure_task_queue_columns()
         self._initialize_audit_v2()
+
+    def _ensure_task_queue_columns(self) -> None:
+        """Additive migration for leases; safe for existing SQLite state files."""
+        with self.lock:
+            columns = {
+                row["name"]
+                for row in self.db.execute("PRAGMA table_info(task)").fetchall()
+            }
+            additions = {
+                "lease_owner": "TEXT",
+                "lease_until": "TEXT",
+                "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, declaration in additions.items():
+                if name not in columns:
+                    self.db.execute(
+                        f"ALTER TABLE task ADD COLUMN {name} {declaration}"
+                    )
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_task_queue "
+                "ON task(state, created_at, id)"
+            )
 
     def close(self) -> None:
         self.db.close()
@@ -302,6 +347,141 @@ class Store:
                 row = self.db.execute("SELECT * FROM task WHERE owner=? AND idem_key=?", (owner, idem)).fetchone()
         return dict(row), created
 
+    def get_task_by_idempotency(self, owner: str, idem: str) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT * FROM task WHERE owner=? AND idem_key=?",
+                (owner, idem),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def queue_task(self, task_id: str) -> bool:
+        """Move an authorized task into the durable queue exactly once."""
+        with self.lock:
+            changed = self.db.execute(
+                "UPDATE task SET state='QUEUED', updated_at=? "
+                "WHERE id=? AND state='AUTHORIZED'",
+                (now_iso(), task_id),
+            ).rowcount
+        return changed == 1
+
+    def claim_next_task(
+        self, worker_id: str, lease_seconds: int = 30, *, now: str | None = None
+    ) -> dict[str, Any] | None:
+        """Atomically claim the oldest queued task; expired RUNNING tasks are never replayed."""
+        if not isinstance(worker_id, str) or not 1 <= len(worker_id) <= 128:
+            raise ValueError("INVALID_WORKER_ID")
+        if isinstance(lease_seconds, bool) or not 1 <= lease_seconds <= 3600:
+            raise ValueError("INVALID_LEASE_SECONDS")
+        claimed_at = datetime.fromisoformat(now) if now else datetime.now(timezone.utc)
+        if claimed_at.tzinfo is None:
+            raise ValueError("CLAIM_TIME_MUST_BE_TIMEZONE_AWARE")
+        lease_until = (claimed_at.timestamp() + lease_seconds)
+        lease_until_iso = datetime.fromtimestamp(lease_until, timezone.utc).isoformat()
+        claimed_at_iso = claimed_at.astimezone(timezone.utc).isoformat()
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.db.execute(
+                    "SELECT id FROM task WHERE state='QUEUED' "
+                    "ORDER BY created_at, id LIMIT 1"
+                ).fetchone()
+                if row is None:
+                    self.db.execute("COMMIT")
+                    return None
+                changed = self.db.execute(
+                    "UPDATE task SET state='RUNNING', lease_owner=?, lease_until=?, "
+                    "attempt_count=attempt_count+1, updated_at=? "
+                    "WHERE id=? AND state='QUEUED'",
+                    (worker_id, lease_until_iso, claimed_at_iso, row["id"]),
+                ).rowcount
+                if changed != 1:
+                    self.db.execute("ROLLBACK")
+                    return None
+                claimed = self.db.execute(
+                    "SELECT * FROM task WHERE id=?", (row["id"],)
+                ).fetchone()
+                self.db.execute("COMMIT")
+                return dict(claimed)
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+
+    def update_claimed_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        state: str,
+        result: dict[str, Any] | None = None,
+        *,
+        release: bool = False,
+    ) -> bool:
+        """Fenced task update: only the current lease holder may change its task."""
+        if state not in {"VERIFYING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"}:
+            raise ValueError("INVALID_CLAIMED_TASK_STATE")
+        if release and state == "VERIFYING":
+            raise ValueError("VERIFYING_CANNOT_RELEASE_LEASE")
+        with self.lock:
+            now = now_iso()
+            if result is None:
+                changed = self.db.execute(
+                    "UPDATE task SET state=?, updated_at=?, "
+                    "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
+                    "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
+                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
+                    "AND lease_owner=? AND lease_until>?",
+                    (state, now, int(release), int(release), task_id, worker_id, now),
+                ).rowcount
+            else:
+                changed = self.db.execute(
+                    "UPDATE task SET state=?, result_json=?, updated_at=?, "
+                    "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
+                    "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
+                    "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
+                    "AND lease_owner=? AND lease_until>?",
+                    (state, json.dumps(result, sort_keys=True), now,
+                     int(release), int(release), task_id, worker_id, now),
+                ).rowcount
+        return changed == 1
+
+    def recover_interrupted_tasks(
+        self, *, now: str | None = None
+    ) -> list[dict[str, str]]:
+        """Fail closed interrupted RUNNING/VERIFYING tasks; preserve live leases and never replay."""
+        current = datetime.fromisoformat(now) if now else datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("RECOVERY_TIME_MUST_BE_TIMEZONE_AWARE")
+        current_iso = current.astimezone(timezone.utc).isoformat()
+        recovered: list[dict[str, str]] = []
+        result = json.dumps(
+            {"decision": "INTERRUPTED", "error": "PROCESS_INTERRUPTED"},
+            sort_keys=True,
+        )
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self.db.execute(
+                    "SELECT id, owner FROM task "
+                    "WHERE state IN ('RUNNING','VERIFYING') "
+                    "AND (lease_until IS NULL OR lease_until<=?)",
+                    (current_iso,),
+                ).fetchall()
+                for row in rows:
+                    changed = self.db.execute(
+                        "UPDATE task SET state='FAILED', result_json=?, updated_at=?, "
+                        "lease_owner=NULL, lease_until=NULL "
+                        "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
+                        "AND (lease_until IS NULL OR lease_until<=?)",
+                        (result, current_iso, row["id"], current_iso),
+                    ).rowcount
+                    if changed == 1:
+                        recovered.append({"id": row["id"], "owner": row["owner"]})
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+        return recovered
+
     def get_task(self, task_id: str, owner: str) -> dict[str, Any] | None:
         with self.lock:
             r = self.db.execute("SELECT * FROM task WHERE id=? AND owner=?", (task_id, owner)).fetchone()
@@ -309,11 +489,29 @@ class Store:
 
     def set_task_state(self, task_id: str, state: str, result: dict[str, Any] | None = None) -> None:
         with self.lock:
-            if result is None:
-                self.db.execute("UPDATE task SET state=?, updated_at=? WHERE id=?", (state, now_iso(), task_id))
+            if state == "RUNNING":
+                if result is None:
+                    self.db.execute(
+                        "UPDATE task SET state=?, updated_at=? WHERE id=?",
+                        (state, now_iso(), task_id),
+                    )
+                else:
+                    self.db.execute(
+                        "UPDATE task SET state=?, result_json=?, updated_at=? WHERE id=?",
+                        (state, json.dumps(result, sort_keys=True), now_iso(), task_id),
+                    )
+            elif result is None:
+                self.db.execute(
+                    "UPDATE task SET state=?, updated_at=?, lease_owner=NULL, lease_until=NULL "
+                    "WHERE id=?",
+                    (state, now_iso(), task_id),
+                )
             else:
-                self.db.execute("UPDATE task SET state=?, result_json=?, updated_at=? WHERE id=?",
-                                (state, json.dumps(result, sort_keys=True), now_iso(), task_id))
+                self.db.execute(
+                    "UPDATE task SET state=?, result_json=?, updated_at=?, "
+                    "lease_owner=NULL, lease_until=NULL WHERE id=?",
+                    (state, json.dumps(result, sort_keys=True), now_iso(), task_id),
+                )
 
     def count_tasks_since(self, owner: str, since_iso: str) -> int:
         with self.lock:

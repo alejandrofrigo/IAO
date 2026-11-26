@@ -23,6 +23,9 @@ def probe_https(
     t0 = time.monotonic()
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        # Prefer IPv4 for localhost when a service is bound to 127.0.0.1;
+        # retain IPv6 resolution as fallback for dual-stack deployments.
+        infos.sort(key=lambda item: item[0] != socket.AF_INET)
         addr = infos[0][4][0]
         r["dns"] = "OK"
         r["address"] = addr

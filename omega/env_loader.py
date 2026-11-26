@@ -27,7 +27,7 @@ _ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 def _strip_comments(line: str) -> str:
-    """Remove a trailing comment starting with an *unescaped* ``#``.
+    r"""Remove a trailing comment starting with an *unescaped* ``#``.
 
     The function walks the string character‑by‑character so that escaped hash
     symbols (``\#``) are preserved as part of the value.

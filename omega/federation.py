@@ -12,8 +12,6 @@ import math
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
-import urllib.error
-import urllib.request
 from collections import defaultdict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +26,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from omega.audit import canonical_json
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
+from omega.federation_transport import (
+    FederationTransportError,
+    post_federation_json,
+    validate_message_endpoint,
+)
 
 MAX_MSG = 32 * 1024
 _EXEC = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fed")
@@ -320,7 +323,8 @@ class Node:
 
     def identity_publication(self, endpoint: str, *,
                               capabilities: list[str] | None = None,
-                              lease_seconds: int = 3600) -> dict[str, Any]:
+                              lease_seconds: int = 3600,
+                              consent: bool = False) -> dict[str, Any]:
         """Firmado, publicable en /.well-known/iao-federation.json.
 
         Incluye identidad, endpoint público, capabilities, y una firma
@@ -336,6 +340,7 @@ class Node:
             "public_key": self.pub.hex(),
             "endpoint": endpoint,
             "capabilities": sorted(capabilities or sorted(self.served)),
+            "consent": consent is True,
             "lease_expires_at": float(self.clock() + lease_seconds),
             "issued_at": float(self.clock()),
         }
@@ -452,6 +457,42 @@ class Node:
                     pass
                 raise
 
+    def bind_peer_endpoint(self, peer_id: str, endpoint: str) -> None:
+        """Pin the sole outbound URL for an enrolled peer; changes are audited."""
+        try:
+            endpoint_scheme = validate_message_endpoint(endpoint)[0]
+        except FederationTransportError as exc:
+            raise ValueError("INVALID_PEER_ENDPOINT") from exc
+        if (
+            endpoint_scheme == "http"
+            and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") != "1"
+        ):
+            raise ValueError("LOOPBACK_HTTP_DISABLED")
+        with self._lock:
+            peer = self.peers.get(peer_id)
+            if peer is None or peer.get("revoked"):
+                raise ValueError("UNKNOWN_PEER")
+            previous = peer.get("endpoint")
+            peer["endpoint"] = endpoint
+            try:
+                self._save_persistent_peers()
+                self.audit_fn(
+                    "operator",
+                    "PEER_ENDPOINT_PINNED",
+                    peer_id,
+                    endpoint_sha256=hashlib.sha256(endpoint.encode("utf-8")).hexdigest(),
+                )
+            except Exception:
+                if previous is None:
+                    peer.pop("endpoint", None)
+                else:
+                    peer["endpoint"] = previous
+                try:
+                    self._save_persistent_peers()
+                except Exception:
+                    pass
+                raise
+
     def revoke(self, peer_id: str) -> None:
         with self._lock:
             previous = self.peers.get(peer_id)
@@ -548,8 +589,19 @@ class Node:
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
         if capability not in c["capabilities"] or capability not in self.served:
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
+        try:
+            endpoint_scheme = validate_message_endpoint(url)[0]
+        except FederationTransportError:
+            return {"ok": False, "error": "INVALID_ENDPOINT"}
+        if (
+            endpoint_scheme == "http"
+            and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") != "1"
+        ):
+            return {"ok": False, "error": "LOOPBACK_HTTP_DISABLED"}
         saved_endpoint = c.get("endpoint")
-        if saved_endpoint is not None and url != saved_endpoint:
+        if not isinstance(saved_endpoint, str) or not saved_endpoint:
+            return {"ok": False, "error": "ENDPOINT_NOT_PINNED"}
+        if url != saved_endpoint:
             return {"ok": False, "error": "ENDPOINT_MISMATCH"}
         nonce = os.urandom(16).hex()
         env = _sign(self.key, {"v": 1, "from": self.node_id, "to": peer_id, "ts": self.clock(), "nonce": nonce,
@@ -567,34 +619,48 @@ class Node:
         return ctx
 
     def _post(self, c: dict[str, Any], url: str, env: dict[str, Any], nonce: str, timeout: float) -> dict[str, Any]:
-        req = urllib.request.Request(url, method="POST", data=json.dumps(env).encode(), headers={"Content-Type": "application/json"})
         try:
-            ctx = self._ssl_context()
-            if ctx is not None and url.startswith("https://"):
-                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-                    data = r.read(MAX_MSG * 8)
-            else:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
-                    data = r.read(MAX_MSG * 8)
-        except urllib.error.HTTPError as e:
-            try:
-                err = json.loads(e.read(4096)).get("error", "HTTP_ERROR")
-            except ValueError:
-                err = "HTTP_ERROR"
-            return {"ok": False, "status": e.code, "error": err}
-        except (urllib.error.URLError, OSError, TimeoutError):
-            return {"ok": False, "error": "PEER_UNREACHABLE"}   # partition: no state change, safe to retry
-        try:
-            resp = json.loads(data)
-        except ValueError:
+            status, resp = post_federation_json(
+                url, env, timeout=timeout, max_bytes=MAX_MSG * 8
+            )
+        except FederationTransportError as exc:
+            if exc.code in {
+                "HTTPS_REQUEST_FAILED",
+                "DNS_RESOLUTION_FAILED",
+                "DNS_NO_ADDRESSES",
+                "LOOPBACK_RESOLUTION_FAILED",
+            }:
+                return {"ok": False, "error": "PEER_UNREACHABLE"}
+            return {"ok": False, "error": "TRANSPORT_BLOCKED"}
+
+        if status != 200:
+            error = resp.get("error", "HTTP_ERROR") if isinstance(resp, dict) else "HTTP_ERROR"
+            return {"ok": False, "status": status, "error": error}
+        if not isinstance(resp, dict):
             return {"ok": False, "error": "BAD_RESPONSE"}
         if not _verify(c["pub"], resp):
             return {"ok": False, "error": "BAD_RESPONSE_SIGNATURE"}
-        if resp.get("to") != self.node_id or resp.get("from") != c["peer_id"] or resp.get("in_reply_to") != nonce:
+        if "result" not in resp:
+            return {"ok": False, "error": "BAD_RESPONSE"}
+        if (
+            resp.get("to") != self.node_id
+            or resp.get("from") != c["peer_id"]
+            or resp.get("in_reply_to") != nonce
+        ):
             return {"ok": False, "error": "REPLAYED_OR_MISROUTED_RESPONSE"}
-        if abs(self.clock() - float(resp.get("ts", 0))) > self.skew:
+        try:
+            response_ts = float(resp.get("ts", 0))
+        except (TypeError, ValueError):
             return {"ok": False, "error": "CLOCK_SKEW"}
-        return {"ok": True, "verification": resp.get("verification"), "result": resp["result"], "untrusted": True}
+        if not math.isfinite(response_ts) or abs(self.clock() - response_ts) > self.skew:
+            return {"ok": False, "error": "CLOCK_SKEW"}
+        return {
+            "ok": True,
+            "verification": resp.get("verification"),
+            "result": resp["result"],
+            "untrusted": True,
+        }
+
     @classmethod
     def from_persistent_identity(cls, store, registry, *, identity_dir=None, **kwargs):
         """Crea un nodo federado con la identidad Ed25519 persistente de esta instalación."""

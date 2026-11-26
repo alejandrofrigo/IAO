@@ -1,0 +1,52 @@
+name: IAO container build qualification
+
+on:
+  push:
+    branches: [iao-production-build-20261126]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api-contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project and test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Lint production integration files
+        run: python -m ruff check apps/api/main.py omega/device_authority.py omega/service.py tests/test_production_api.py tests/test_device_authority_permissions.py
+      - name: Run production API contract tests
+        run: python -m pytest -q tests/test_production_api.py
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build API container (no publication)
+        run: docker build --pull --tag iao-api:qualification .
+
+      - name: Verify container starts and serves liveness
+        run: |
+          docker run --detach --rm --name iao-api-qualification \
+            --publish 127.0.0.1:18080:8080 iao-api:qualification
+          trap 'docker stop iao-api-qualification >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:18080/health/live; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:18080/health/live
+          docker exec iao-api-qualification python -c "from pathlib import Path; p=Path('/app/knowledge'); files=sorted(p.glob('*.txt')); assert len(files) >= 1, 'production knowledge corpus missing'; assert (p/'omega-overview.txt').is_file(), 'required corpus document missing'; print('knowledge_corpus_files=' + str(len(files)))"
+          docker logs iao-api-qualification

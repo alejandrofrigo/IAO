@@ -8,6 +8,8 @@ Verified state lives in `artifacts/` (status.json, runtime-report.json, test-res
     python3 tools/run_runtime.py             # start + attack over HTTP + crash/recover + backup/restore
     python3 tools/verify.py                  # unit/security tests + hashed manifest + network probe
 
+See [ChatGPT × IAO: collaboration of construction](docs/CHATGPT_IAO_COLLABORATION.md) for the engineering attribution, collaboration boundaries and target architecture.
+
 ## Status honesty
 Dev bearer tokens are NOT OIDC (production start is refused). SQLite is the dev backend; PostgreSQL,
 FastAPI app (apps/api), pydantic contracts, Docker, CI, a real model adapter and all external

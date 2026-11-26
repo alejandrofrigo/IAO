@@ -303,185 +303,24 @@ class CandidateRegistry:
         expected_node_id: str,
         evidence: dict[str, Any],
     ) -> dict[str, Any]:
-        """Verify pinned Ed25519 identity and apply autonomous policy v1."""
-        import time
-        import json
-        import hashlib
-
-        policy_id = "IAO_PINNED_IDENTITY_VERIFICATION_V1"
-
-        if not isinstance(evidence, dict):
-            raise AssimilationError("INVALID_VERIFICATION_EVIDENCE")
-
-        required = {
-            "identity", "response", "requester_id",
-            "nonce", "request_ts", "transport",
-        }
-        if not required.issubset(evidence):
-            raise AssimilationError("INCOMPLETE_VERIFICATION_EVIDENCE")
-
-        identity = evidence["identity"]
-        response = evidence["response"]
-        transport = evidence["transport"]
-
-        if not isinstance(identity, dict) or not isinstance(response, dict):
-            raise AssimilationError("INVALID_SIGNED_IDENTITY")
-        if identity.get("protocol") != "iao-federation" or identity.get("version") != 1:
-            raise AssimilationError("UNSUPPORTED_FEDERATION_PROTOCOL")
-        if identity.get("node_id") != expected_node_id:
-            raise AssimilationError("EXPECTED_IDENTITY_MISMATCH")
-        if not isinstance(expected_node_id, str) or not _ID_RE.fullmatch(expected_node_id):
-            raise AssimilationError("INVALID_EXPECTED_NODE_ID")
-
-        if not isinstance(transport, dict):
-            raise AssimilationError("INVALID_TRANSPORT_EVIDENCE")
-        if transport.get("https_verified") is not True:
-            raise AssimilationError("HTTPS_VERIFICATION_REQUIRED")
-        if transport.get("redirected") is not False:
-            raise AssimilationError("REDIRECT_REFUSED")
-
-        requester_id = evidence["requester_id"]
-        nonce = evidence["nonce"]
-        request_ts = evidence["request_ts"]
-
-        if not isinstance(requester_id, str) or not re.fullmatch(r"[0-9a-f]{16}", requester_id):
-            raise AssimilationError("INVALID_REQUESTER_ID")
-        if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{64}", nonce):
-            raise AssimilationError("INVALID_CHALLENGE_NONCE")
-        if isinstance(request_ts, bool) or not isinstance(request_ts, (int, float)):
-            raise AssimilationError("INVALID_CHALLENGE_TIMESTAMP")
-
-        # Re-verificación independiente: una respuesta declarativa no basta.
-        try:
-            from tools.iao_federation_binding import verify_binding
-
-            checked = verify_binding(
-                identity,
-                response,
-                expected_node_id=expected_node_id,
-                requester_id=requester_id,
-                nonce=nonce,
-                request_ts=float(request_ts),
-                now=time.time(),
-                skew=60.0,
-            )
-        except Exception as exc:
-            raise AssimilationError("CRYPTOGRAPHIC_RECHECK_FAILED") from exc
-
-        if not checked.get("ok"):
-            raise AssimilationError("CRYPTOGRAPHIC_RECHECK_REJECTED")
-
-        try:
-            encoded = json.dumps(
-                evidence, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        except Exception as exc:
-            raise AssimilationError("EVIDENCE_NOT_SERIALIZABLE") from exc
-
-        if len(encoded) > 65536:
-            raise AssimilationError("EVIDENCE_TOO_LARGE")
-
-        evidence_hash = hashlib.sha256(encoded).hexdigest()
-
-        with self._lock:
-            data = self._load() if self.path.exists() else self._empty()
-            item = next(
-                (x for x in data["candidates"] if x["candidate_id"] == cid),
-                None,
-            )
-            if item is None:
-                raise AssimilationError("CANDIDATE_NOT_FOUND")
-            if item.get("authorized"):
-                raise AssimilationError("CANDIDATE_ALREADY_AUTHORIZED")
-            if item["status"] not in {
-                "DISCOVERED", "PRECHECKED", "TLS_VERIFIED", "PROTOCOL_VERIFIED"
-            }:
-                raise AssimilationError("CANDIDATE_STATE_NOT_ELIGIBLE")
-
-            now = __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat()
-
-            # La prueba criptográfica verifica identidad; no concede confianza.
-            stages = (
-                "TLS_VERIFIED",
-                "PROTOCOL_VERIFIED",
-                "IDENTITY_VERIFIED",
-                "AUTHORIZATION_PENDING",
-            )
-            for state in stages:
-                item["status"] = state
-                item["updated_at"] = now
-                item["history"].append({
-                    "status": state,
-                    "at": now,
-                    "policy": policy_id,
-                    "evidence_sha256": evidence_hash,
-                })
-
-            item["node_id"] = expected_node_id
-            item["authorized"] = False
-            item["authorized_by"] = None
-            item["reason"] = "IDENTITY_VERIFIED_OPERATOR_APPROVAL_REQUIRED"
-            item["authorization_policy"] = {
-                "id": policy_id,
-                "decision": "PENDING_OPERATOR_APPROVAL",
-                "checks": {
-                    "operator_pinned_identity": True,
-                    "https_verified": True,
-                    "redirect_refused": True,
-                    "protocol_supported": True,
-                    "ed25519_signature_valid": True,
-                    "challenge_valid": True,
-                },
-                "evidence_sha256": evidence_hash,
-                "decided_at": now,
-            }
-            item["verification_evidence"] = {
-                "identity": identity,
-                "response": response,
-                "requester_id": requester_id,
-                "nonce": nonce,
-                "request_ts": float(request_ts),
-                "transport": transport,
-                "evidence_sha256": evidence_hash,
-                "verified_at": now,
-            }
-
-            self._save(data)
-            return dict(item)
+        """Fail closed until evidence is bound to a trusted live TLS transport."""
+        raise AssimilationError("TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED")
 
     def authorize(self, cid: str, operator_id: str | None = None) -> dict[str, Any]:
-        """Autoriza un candidato verificado para enrolamiento.
-
-        Modo autónomo (operator_id=None):
-        - Requiere que el candidato esté en AUTHORIZATION_PENDING
-        - Requiere identidad criptográfica verificada (node_id presente)
-        - Requiere verification_evidence íntegro
-        - Concede automáticamente solo capacidades READ_ONLY declaradas
-        - Registra authorized_by=IAO_AUTONOMOUS_POLICY_V1 en auditoría
-        - Fail-closed ante cualquier ambigüedad
-
-        Modo operador (operator_id=str):
-        - Mantiene el comportamiento manual previo para compatibilidad.
-        """
-        autonomous = operator_id is None
-        if autonomous:
-            operator_label = "IAO_AUTONOMOUS_POLICY_V1"
-        else:
-            if (
-                not isinstance(operator_id, str)
-                or not operator_id.strip()
-                or len(operator_id) > 120
-                or any(ord(c) < 32 for c in operator_id)
-            ):
-                raise AssimilationError("INVALID_OPERATOR_ID")
-            operator_label = operator_id.strip()
+        """Keep all enrollment paths closed until trusted transport is integrated."""
+        if operator_id is not None and (
+            not isinstance(operator_id, str)
+            or not operator_id.strip()
+            or len(operator_id) > 120
+            or any(ord(char) < 32 for char in operator_id)
+        ):
+            raise AssimilationError("INVALID_OPERATOR_ID")
 
         with self._lock:
             data = self._load() if self.path.exists() else self._empty()
             item = next(
-                (x for x in data["candidates"] if x["candidate_id"] == cid),
+                (candidate for candidate in data["candidates"]
+                 if candidate["candidate_id"] == cid),
                 None,
             )
             if item is None:
@@ -491,28 +330,5 @@ class CandidateRegistry:
             if not item.get("node_id"):
                 raise AssimilationError("VERIFIED_NODE_ID_REQUIRED")
 
-            if autonomous:
-                evidence = item.get("verification_evidence")
-                if not isinstance(evidence, dict):
-                    raise AssimilationError("VERIFICATION_EVIDENCE_REQUIRED")
-                if not evidence.get("evidence_sha256"):
-                    raise AssimilationError("VERIFICATION_EVIDENCE_INCOMPLETE")
-                transport = evidence.get("transport")
-                if not isinstance(transport, dict) or transport.get("https_verified") is not True:
-                    raise AssimilationError("HTTPS_VERIFICATION_REQUIRED")
-
-            now = __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat()
-            item["authorized"] = True
-            item["authorized_by"] = operator_label
-            item["authorized_at"] = now
-            item["updated_at"] = now
-            item["history"].append({
-                "status": "AUTHORIZED",
-                "at": now,
-                "authorized_by": operator_label,
-                "mode": "AUTONOMOUS" if autonomous else "OPERATOR",
-            })
-            self._save(data)
-            return dict(item)
+            # Manual approval cannot bypass the missing transport attestation.
+            raise AssimilationError("TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED")
