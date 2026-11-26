@@ -1,8 +1,8 @@
 """Single-device, challenge-bound ECDSA authority for the public IAO client.
 
 Enrollment is disabled unless an operator supplies a one-time secret through
-IAO_DEVICE_ENROLLMENT_CODE. The server stores only the public key. This module
-currently verifies READ-ONLY status proofs; it does not grant command execution.
+IAO_DEVICE_ENROLLMENT_CODE. The server stores only the public key. Request
+proof verification authenticates exact requests but grants no capability.
 """
 from __future__ import annotations
 
