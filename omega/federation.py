@@ -455,6 +455,37 @@ class Node:
                     pass
                 raise
 
+    def bind_peer_endpoint(self, peer_id: str, endpoint: str) -> None:
+        """Pin the sole outbound URL for an enrolled peer; changes are audited."""
+        try:
+            validate_message_endpoint(endpoint)
+        except FederationTransportError as exc:
+            raise ValueError("INVALID_PEER_ENDPOINT") from exc
+        with self._lock:
+            peer = self.peers.get(peer_id)
+            if peer is None or peer.get("revoked"):
+                raise ValueError("UNKNOWN_PEER")
+            previous = peer.get("endpoint")
+            peer["endpoint"] = endpoint
+            try:
+                self._save_persistent_peers()
+                self.audit_fn(
+                    "operator",
+                    "PEER_ENDPOINT_PINNED",
+                    peer_id,
+                    endpoint_sha256=hashlib.sha256(endpoint.encode("utf-8")).hexdigest(),
+                )
+            except Exception:
+                if previous is None:
+                    peer.pop("endpoint", None)
+                else:
+                    peer["endpoint"] = previous
+                try:
+                    self._save_persistent_peers()
+                except Exception:
+                    pass
+                raise
+
     def revoke(self, peer_id: str) -> None:
         with self._lock:
             previous = self.peers.get(peer_id)
@@ -556,7 +587,9 @@ class Node:
         except FederationTransportError:
             return {"ok": False, "error": "INVALID_ENDPOINT"}
         saved_endpoint = c.get("endpoint")
-        if saved_endpoint is not None and url != saved_endpoint:
+        if not isinstance(saved_endpoint, str) or not saved_endpoint:
+            return {"ok": False, "error": "ENDPOINT_NOT_PINNED"}
+        if url != saved_endpoint:
             return {"ok": False, "error": "ENDPOINT_MISMATCH"}
         nonce = os.urandom(16).hex()
         env = _sign(self.key, {"v": 1, "from": self.node_id, "to": peer_id, "ts": self.clock(), "nonce": nonce,
