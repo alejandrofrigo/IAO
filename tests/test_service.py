@@ -57,6 +57,83 @@ class Base(unittest.TestCase):
 
 
 
+    def test_offline_recovery_api_replaces_root_device_and_invalidates_old_challenges(self) -> None:
+        bootstrap = "api-recovery-bootstrap-" + "b" * 48
+        recovery = "api-offline-recovery-" + "r" * 48
+        old_root = ec.generate_private_key(ec.SECP256R1())
+        old_public = old_root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        authority = OperatorIdentityAuthority(
+            self.state / "api-recovery-identity.sqlite3", bootstrap,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"api-recovery-session-key").digest(),
+        )
+        authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
+        self.svc.operator_identity_authority = authority
+
+        new_root = ec.generate_private_key(ec.SECP256R1())
+        new_root_public = new_root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        new_device = ec.generate_private_key(ec.SECP256R1())
+        new_device_public = new_device.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        status, challenge = self.call(
+            "POST", "/v1/operator/recovery/challenge", {},
+            {
+                "recovery_code": recovery,
+                "new_root_public_key_pem": new_root_public,
+                "new_device_public_key_pem": new_device_public,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(challenge["protocol"], "IAO-OPERATOR-RECOVERY-V1")
+        payload = base64.urlsafe_b64decode(
+            challenge["signing_payload"]
+            + "=" * (-len(challenge["signing_payload"]) % 4)
+        )
+        root_signature = new_root.sign(
+            b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        device_signature = new_device.sign(
+            b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        status, result = self.call(
+            "POST", "/v1/operator/recovery/complete", {},
+            {
+                "challenge": challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(root_signature).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(device_signature).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["authority"], "OPERATOR_RECOVERED_READ_ONLY")
+        self.assertEqual(result["key_version"], 2)
+        self.assertTrue(self.svc.device_authority.verify_registered_public_key(
+            new_device_public, owner_subject="operator:" + authority.primary_device_public_key()[:0] + "x" * 32
+        ) is False)
+        with self.assertRaisesRegex(OperatorIdentityError, "INVALID_OPERATOR_RECOVERY_CODE"):
+            authority.create_operator_recovery_challenge(
+                recovery, new_root_public, new_device_public,
+            )
+        replay = self.call(
+            "POST", "/v1/operator/recovery/complete", {},
+            {
+                "challenge": challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(root_signature).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(device_signature).decode().rstrip("="),
+            },
+        )
+        self.assertEqual((replay[0], replay[1]["error"]), (409, "OPERATOR_RECOVERY_REPLAYED"))
+
+
 class AuthTests(Base):
     def test_root_signed_revocation_deactivates_device_and_session(self) -> None:
         bootstrap_code = "operator-revoke-bootstrap-" + "r" * 40
@@ -249,6 +326,7 @@ class AuthTests(Base):
 
     def test_operator_bootstrap_endpoint_consumes_out_of_band_capability_once(self) -> None:
         code = "out-of-band-bootstrap-" + "q" * 48
+        recovery_code = "offline-recovery-bootstrap-" + "v" * 48
         self.svc.store.close()
         with patch.dict(os.environ, {
             "IAO_OPERATOR_BOOTSTRAP_CODE": code,
@@ -263,7 +341,7 @@ class AuthTests(Base):
         ).decode("ascii")
         status, result = self.call(
             "POST", "/v1/operator/bootstrap", {},
-            {"code": code, "root_public_key_pem": public},
+            {"code": code, "recovery_code": recovery_code, "root_public_key_pem": public},
         )
         self.assertEqual(status, 201)
         self.assertEqual(result["status"], "ROOT_REGISTERED")
@@ -280,6 +358,7 @@ class AuthTests(Base):
         )
         audit = json.dumps(self.svc.store._all_events())
         self.assertNotIn(code, audit)
+        self.assertNotIn(recovery_code, audit)
         self.assertNotIn(public, audit)
 
     def test_operator_bootstrap_is_disabled_without_out_of_band_configuration(self) -> None:
