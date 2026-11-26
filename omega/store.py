@@ -447,7 +447,7 @@ class Store:
     def recover_interrupted_tasks(
         self, *, now: str | None = None
     ) -> list[dict[str, str]]:
-        """Fail closed interrupted RUNNING tasks; preserve live worker leases and never replay."""
+        """Fail closed interrupted RUNNING/VERIFYING tasks; preserve live leases and never replay."""
         current = datetime.fromisoformat(now) if now else datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("RECOVERY_TIME_MUST_BE_TIMEZONE_AWARE")
@@ -461,7 +461,8 @@ class Store:
             self.db.execute("BEGIN IMMEDIATE")
             try:
                 rows = self.db.execute(
-                    "SELECT id, owner FROM task WHERE state='RUNNING' "
+                    "SELECT id, owner FROM task "
+                    "WHERE state IN ('RUNNING','VERIFYING') "
                     "AND (lease_until IS NULL OR lease_until<=?)",
                     (current_iso,),
                 ).fetchall()
@@ -469,7 +470,7 @@ class Store:
                     changed = self.db.execute(
                         "UPDATE task SET state='FAILED', result_json=?, updated_at=?, "
                         "lease_owner=NULL, lease_until=NULL "
-                        "WHERE id=? AND state='RUNNING' "
+                        "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
                         "AND (lease_until IS NULL OR lease_until<=?)",
                         (result, current_iso, row["id"], current_iso),
                     ).rowcount
