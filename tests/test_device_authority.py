@@ -173,6 +173,53 @@ def test_signed_request_rejects_digest_field_mismatch_and_replay(tmp_path):
         )
 
 
+
+def test_device_request_nonce_is_single_use_across_independent_authorities(tmp_path):
+    """Independent API workers cannot accept the same signed device proof twice."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    authority, private_key, device_id = _enrolled_authority(tmp_path)
+    challenge = authority.challenge(device_id, owner_subject="operator")
+    body = b'{"capability":"knowledge.search","input":{"query":"race"}}'
+    digest = hashlib.sha256(body).hexdigest()
+    proof = _signed_request(
+        private_key, device_id, challenge["nonce"], "POST", "/v1/tasks", digest,
+    )
+    workers = [
+        authority,
+        DeviceAuthority(
+            tmp_path / "device-authority.sqlite3", enrollment_code="",
+        ),
+    ]
+    gate = Barrier(2)
+
+    def attempt(worker):
+        gate.wait(timeout=10)
+        try:
+            result = worker.verify_request(
+                proof, method="POST", path="/v1/tasks",
+                request_digest=digest, owner_subject="operator",
+            )
+            return ("accepted", result["authority"])
+        except DeviceAuthorityError as exc:
+            return ("rejected", exc.code)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, workers))
+
+    assert sorted(outcomes) == [
+        ("accepted", "DEVICE_REQUEST_VERIFIED"),
+        ("rejected", "CHALLENGE_EXPIRED_OR_REPLAYED"),
+    ]
+    with authority._database() as db:
+        row = db.execute(
+            "SELECT consumed_at FROM device_challenges WHERE nonce=?",
+            (challenge["nonce"],),
+        ).fetchone()
+    assert row is not None and row["consumed_at"] is not None
+
+
 def test_device_proofs_are_bound_to_the_enrolling_operator(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
 
