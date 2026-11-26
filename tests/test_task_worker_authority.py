@@ -47,6 +47,12 @@ class _RevokedAuthority:
         raise RuntimeError("authority revoked")
 
 
+
+def _inline_tool_executor(run, verify, payload, _timeout):
+    output = run(payload)
+    return output, verify(output)
+
+
 def _worker(authority):
     calls = []
     registry = ToolRegistry()
@@ -74,6 +80,7 @@ def _worker(authority):
     return TaskWorker(
         store, registry, worker_id="authority-test-worker",
         operator_identity_authority=authority,
+        tool_executor=_inline_tool_executor,
     ), store, calls
 
 
@@ -126,6 +133,7 @@ def test_interruption_after_tool_invocation_is_not_replayed(tmp_path, monkeypatc
     worker = TaskWorker(
         store, registry, worker_id="fault-injection-worker",
         operator_identity_authority=ActiveAuthority(),
+        tool_executor=_inline_tool_executor,
     )
     try:
         with pytest.raises(SimulatedProcessInterruption):
