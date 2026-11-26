@@ -517,7 +517,10 @@
       button.disabled = true;
       try { show(success(await action()), false); }
       catch (error) { show("ERROR: " + error.message, true); }
-      finally { await refreshSessionGates(); }
+      finally {
+        button.disabled = false;
+        await refreshSessionGates();
+      }
     }
     generateBootstrapRecoveryButton.addEventListener("click", () => {
       bootstrapRecoveryCode.value = generateOfflineRecoveryCode();
