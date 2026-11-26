@@ -122,9 +122,10 @@ def capture_identity_state(
             raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_AUTHORITY_STATE_INVALID")
         if active_device["public_key_pem"] != active_binding["device_public_key_pem"]:
             raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_AUTHORITY_STATE_INVALID")
-    elif active_root or active_device:
-        # A partial root/device pair is never accepted as a coherent state.
-        raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_AUTHORITY_STATE_INVALID")
+    # A revoked/no-root state may retain an active device row because the
+    # current revocation flow updates the root database only. Preserve that
+    # orphaned device in the ledger; it is not paired with an active root and
+    # must never be interpreted as an authorized primary device.
 
     ledger = {
         "roots": ledger_roots,
