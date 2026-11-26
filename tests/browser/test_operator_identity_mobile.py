@@ -123,26 +123,36 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 panel.get_by_role("button", name="Registrar identidad raíz").click()
                 page.get_by_text("IDENTIDAD RAÍZ REGISTRADA", exact=False).wait_for(timeout=20000)
                 local_identity = page.evaluate(
-                    """async () => new Promise((resolve, reject) => {
+                    """async () => {
+                      const databases = await indexedDB.databases();
                       const request = indexedDB.open('iao-operator-root', 1);
-                      request.onerror = () => reject(request.error);
-                      request.onsuccess = () => {
-                        const db = request.result;
-                        const tx = db.transaction('identity', 'readonly');
-                        const get = tx.objectStore('identity').get('root');
-                        get.onsuccess = () => {
-                          const value = get.result;
-                          resolve({
-                            present: Boolean(value),
-                            keyVersion: value && value.keyVersion,
-                            privateKey: Boolean(value && value.privateKey),
-                            extractable: value && value.privateKey ? value.privateKey.extractable : null
-                          });
-                        };
-                        tx.onerror = () => reject(tx.error);
-                        tx.oncomplete = () => db.close();
+                      const db = await new Promise((resolve, reject) => {
+                        request.onerror = () => reject(request.error);
+                        request.onsuccess = () => resolve(request.result);
+                      });
+                      const stores = Array.from(db.objectStoreNames);
+                      const tx = db.transaction('identity', 'readonly');
+                      const store = tx.objectStore('identity');
+                      const keys = await new Promise((resolve, reject) => {
+                        const get = store.getAllKeys();
+                        get.onerror = () => reject(get.error);
+                        get.onsuccess = () => resolve(get.result);
+                      });
+                      const value = await new Promise((resolve, reject) => {
+                        const get = store.get('root');
+                        get.onerror = () => reject(get.error);
+                        get.onsuccess = () => resolve(get.result || null);
+                      });
+                      db.close();
+                      return {
+                        databases: databases.map(item => ({name: item.name, version: item.version})),
+                        stores, keys,
+                        present: Boolean(value),
+                        keyVersion: value && value.keyVersion,
+                        privateKey: Boolean(value && value.privateKey),
+                        extractable: value && value.privateKey ? value.privateKey.extractable : null
                       };
-                    })"""
+                    }"""
                 )
                 assert local_identity["present"], local_identity
                 assert local_identity["keyVersion"] == 1, local_identity
