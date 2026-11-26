@@ -11,6 +11,7 @@ from omega.auth import issue_token
 from omega.server import build_service
 from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolSpec
+from omega.task_worker import TaskWorker
 
 KEY = "unit-test-key-0123456789"
 CORPUS = Path(__file__).resolve().parent.parent / "docs" / "corpus"
@@ -174,6 +175,54 @@ class PolicyToolTests(Base):
     def test_invalid_json_and_oversize(self) -> None:
         self.assertEqual(self.svc.handle("POST", "/v1/tasks", self.tok("alice"), b"{bad")[0], 400)
         self.assertEqual(self.svc.handle("POST", "/v1/tasks", self.tok("alice"), b"x" * 70000)[0], 413)
+
+
+class QueuedTaskApiTests(Base):
+    def test_queued_task_returns_202_and_worker_completes_it(self) -> None:
+        status, accepted = self.call(
+            "POST",
+            "/v1/tasks",
+            self.tok("queued-user"),
+            {
+                "goal": "search the local knowledge corpus",
+                "capability": "knowledge.search",
+                "input": {"query": "audit hash chain"},
+                "execution_mode": "queued",
+            },
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(accepted["state"], "QUEUED")
+        self.assertTrue(accepted["status_url"].endswith(accepted["task_id"]))
+        queued = self.svc.store.get_task(accepted["task_id"], "queued-user")
+        intent = json.loads(queued["intent_json"])
+        self.assertEqual(intent["input"], {"query": "audit hash chain"})
+        self.assertIn("knowledge.search", intent["authorized_scopes"])
+
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="test-worker", lease_seconds=30,
+        )
+        self.assertTrue(worker.run_once())
+        completed = self.svc.store.get_task(accepted["task_id"], "queued-user")
+        self.assertEqual(completed["state"], "SUCCEEDED")
+        self.assertIsNone(completed["lease_owner"])
+        self.assertEqual(
+            [item["status"] for item in self.svc.store.tool_executions(accepted["task_id"])],
+            ["SUCCEEDED"],
+        )
+        self.assertFalse(worker.run_once())
+
+    def test_queued_mode_rejects_non_string_mode(self) -> None:
+        status, payload = self.call(
+            "POST", "/v1/tasks", self.tok("queued-user"),
+            {
+                "goal": "x",
+                "capability": "knowledge.search",
+                "input": {"query": "audit"},
+                "execution_mode": [],
+            },
+        )
+        self.assertEqual((status, payload["error"]), (400, "INVALID_EXECUTION_MODE"))
 
 
 class LimitsAndIntegrityTests(Base):
