@@ -221,3 +221,16 @@ def test_federation_handshake_enforces_bounded_content_length(monkeypatch, tmp_p
                                  headers={"Transfer-Encoding": "chunked"})
     assert missing_length.status_code == 400
     assert missing_length.json()["error"] == "INVALID_TRANSFER_ENCODING"
+
+
+def test_federation_initialization_failure_does_not_take_down_local_api(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+
+    def unavailable(_service):
+        raise RuntimeError("simulated federation outage")
+
+    monkeypatch.setattr(main, "_ensure_federation", unavailable)
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert (tmp_path / "state" / "omega.db").is_file()
