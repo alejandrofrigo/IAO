@@ -132,3 +132,48 @@ def test_external_federation_handshake_is_blocked_until_transport_adapter():
     assert _remote_handshake_allowed("https://localhost/fed/v1/message")
     assert not _remote_handshake_allowed("https://peer.example.org/fed/v1/message")
     assert not _remote_handshake_allowed("https://10.1.2.3/fed/v1/message")
+
+
+def test_libp2p_identity_creation_is_atomic_and_private(tmp_path):
+    import stat
+    from omega.libp2p_discovery import _load_or_create_identity
+
+    identity_path = tmp_path / "peer-identity.key"
+    created = []
+
+    def create(seed):
+        created.append(seed)
+        return b"new-key-material"
+
+    def save(key, path):
+        path.write_bytes(key)
+
+    def load(path):
+        return path.read_bytes()
+
+    result = _load_or_create_identity(identity_path, create, load, save)
+    assert result == b"new-key-material"
+    assert identity_path.read_bytes() == b"new-key-material"
+    assert stat.S_IMODE(identity_path.stat().st_mode) == 0o600
+    assert len(created) == 1
+    assert not list(tmp_path.glob(".peer-identity-*.tmp"))
+
+
+def test_libp2p_identity_race_loads_existing_key_instead_of_overwriting(tmp_path):
+    from omega.libp2p_discovery import _load_or_create_identity
+
+    identity_path = tmp_path / "peer-identity.key"
+
+    def create(seed):
+        return b"losing-key"
+
+    def save(key, path):
+        path.write_bytes(key)
+        identity_path.write_bytes(b"winning-key")
+
+    def load(path):
+        return path.read_bytes()
+
+    result = _load_or_create_identity(identity_path, create, load, save)
+    assert result == b"winning-key"
+    assert identity_path.read_bytes() == b"winning-key"
