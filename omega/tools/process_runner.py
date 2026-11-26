@@ -121,7 +121,10 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
             raise ToolProcessError("INVALID_TOOL_OUTPUT")
         return output, message["verdict"]
     except (EOFError, OSError, json.JSONDecodeError) as exc:
-        raise ToolProcessError("TOOL_PROCESS_CRASHED") from exc
+        process.join(timeout=0.2)
+        raise ToolProcessError(
+            f"TOOL_PROCESS_CRASHED_EXIT_{process.exitcode}"
+        ) from exc
     finally:
         receive_conn.close()
         if process.is_alive():
