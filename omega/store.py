@@ -2,6 +2,7 @@
 All reads of user data take the owner as a mandatory parameter (tenant isolation)."""
 import json
 import hashlib
+import os
 import sqlite3
 import threading
 import uuid
@@ -44,10 +45,30 @@ def now_iso() -> str:
 
 class Store:
     def __init__(self, path: str | Path, audit_key: bytes | None = None) -> None:
-        self.path = str(path)
         self.audit_key = audit_key
         self.lock = threading.RLock()
+        if str(path) == ":memory:":
+            self.path = ":memory:"
+        else:
+            db_path = Path(path)
+            db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if db_path.parent.is_symlink() or db_path.is_symlink():
+                raise RuntimeError("DATABASE_SYMLINK_REFUSED")
+            if db_path.exists() and not db_path.is_file():
+                raise RuntimeError("DATABASE_PATH_NOT_REGULAR_FILE")
+            # Chat content, task payloads and audit records are sensitive.
+            # Keep the state directory private and refuse symlinked DB files.
+            os.chmod(db_path.parent, 0o700)
+            flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(str(db_path), flags, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            finally:
+                os.close(fd)
+            self.path = str(db_path)
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        if self.path != ":memory:":
+            os.chmod(self.path, 0o600)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
