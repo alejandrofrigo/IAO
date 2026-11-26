@@ -462,7 +462,7 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("OPERATOR_SESSION_BINDING_UNAVAILABLE", 503)
         return hmac.new(
             self.subject_digest_key,
-            b"IAO-OPERATOR-SESSION-TOKEN-V1\\x00" + token.encode("utf-8"),
+            b"IAO-OPERATOR-SESSION-TOKEN-V1\x00" + token.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
 
