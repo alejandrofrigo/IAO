@@ -1,6 +1,5 @@
 """End-to-end API adapter tests against a real temporary SQLite store."""
-import json
-
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
