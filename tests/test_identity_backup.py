@@ -28,7 +28,8 @@ def _pair(tmp_path):
     device_db = tmp_path / "device.sqlite3"
     identity = OperatorIdentityAuthority(
         identity_db, "unused-bootstrap-secret-" + "x" * 40,
-        bootstrap_expires_at=time.time() + 600,\n        subject_digest_key=b"identity-backup-test-hmac-key-" + b"k" * 32,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=b"identity-backup-test-hmac-key-" + b"k" * 32,
     )
     device = DeviceAuthority(device_db, enrollment_code="device-enrollment-secret-" + "d" * 40)
     enrolled = identity.bootstrap(
