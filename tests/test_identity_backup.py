@@ -27,7 +27,9 @@ def _pair(tmp_path):
     identity_db = tmp_path / "identity.sqlite3"
     device_db = tmp_path / "device.sqlite3"
     identity = OperatorIdentityAuthority(
-        identity_db, "unused-bootstrap-secret-" + "x" * 40,\n        bootstrap_expires_at=time.time() + 600,\n    )
+        identity_db, "unused-bootstrap-secret-" + "x" * 40,
+        bootstrap_expires_at=time.time() + 600,
+    )
     device = DeviceAuthority(device_db, enrollment_code="device-enrollment-secret-" + "d" * 40)
     enrolled = identity.bootstrap(
         "unused-bootstrap-secret-" + "x" * 40, root_public,
@@ -79,7 +81,8 @@ def test_backup_does_not_restore_revoked_state_or_replace_live_databases(tmp_pat
     with sqlite3.connect(identity_db) as db:
         row = db.execute("SELECT identity_id FROM operator_identities WHERE status='ACTIVE'").fetchone()
     identity_id = row[0]
-    payload = b"revoke-root-v1\n" + identity_id.encode("ascii")
+    payload = b"revoke-root-v1
+" + identity_id.encode("ascii")
     signature = root_private.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
     identity.revoke(identity_id, signature, expected_key_version=1)
     with pytest.raises(IdentityBackupError, match="IDENTITY_BACKUP_DESTINATION_EXISTS"):
