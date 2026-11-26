@@ -16,6 +16,7 @@ from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolSpec
 from omega.task_worker import TaskWorker
 from omega.service import POLICY_VERSION
+from omega.device_authority import DeviceAuthority
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -301,6 +302,61 @@ class QueuedTaskApiTests(Base):
         )
 
  
+    def test_device_enrollment_and_status_api_are_gated_and_read_only(self) -> None:
+        code = "one-time-api-enrollment-secret-long-enough"
+        self.svc.device_authority = DeviceAuthority(
+            self.state / "api-device-authority.sqlite3",
+            enrollment_code=code,
+        )
+        with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "0"}):
+            denied = self.call(
+                "POST", "/v1/device/enroll", {},
+                {"code": code, "public_key_pem": "invalid"},
+            )
+        self.assertEqual((denied[0], denied[1]["error"]), (403, "DEVICE_ENROLLMENT_DISABLED"))
+
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "1"}):
+            status, enrolled = self.call(
+                "POST", "/v1/device/enroll", {},
+                {"code": code, "public_key_pem": public_pem},
+            )
+        self.assertEqual(status, 201)
+        self.assertEqual(enrolled["algorithm"], "ECDSA-P256-SHA256")
+
+        status, challenge = self.call(
+            "POST", "/v1/device/challenge", self.tok("device-owner"),
+            {"device_id": enrolled["device_id"]},
+        )
+        self.assertEqual(status, 200)
+        timestamp = int(time.time())
+        canonical = json.dumps(
+            {"action": "status"}, separators=(",", ":"), ensure_ascii=False
+        )
+        digest = hashlib.sha256(canonical.encode()).hexdigest()
+        signed = "\\n".join([
+            "POST", "/v1/device/command", str(timestamp),
+            challenge["nonce"], digest,
+        ]).encode()
+        signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
+        proof = {
+            "device_id": enrolled["device_id"],
+            "nonce": challenge["nonce"],
+            "timestamp": timestamp,
+            "action": "status",
+            "signature": base64.urlsafe_b64encode(signature).decode().rstrip("="),
+        }
+        status, result = self.call("POST", "/v1/device/command", {}, proof)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["authority"], "READ_ONLY_DEVICE_VERIFIED")
+        audit = json.dumps(self.svc.store._all_events())
+        self.assertNotIn(code, audit)
+        self.assertNotIn(enrolled["device_id"], audit)
+
     def test_queued_submission_requires_primary_device_proof(self) -> None:
         payload = {
             "goal": "search",
