@@ -12,6 +12,7 @@ dependencies = [
   "pydantic==2.10.6",
   "pydantic-settings==2.7.1",
   "psycopg[binary]==3.2.4",
+  "cryptography==44.0.0",
 ]
 
 [project.optional-dependencies]
