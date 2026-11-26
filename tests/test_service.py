@@ -109,7 +109,8 @@ class Base(unittest.TestCase):
             b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + payload,
             ec.ECDSA(hashes.SHA256()),
         )
-        encoded = lambda value: base64.urlsafe_b64encode(value).decode().rstrip("=")
+        def encoded(value: bytes) -> str:
+            return base64.urlsafe_b64encode(value).decode().rstrip("=")
         status, result = self.call(
             "POST", "/v1/operator/login/complete", {},
             {
