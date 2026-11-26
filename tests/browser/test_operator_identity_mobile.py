@@ -169,7 +169,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                       };
                     }"""
                 )
-                assert local_identity["present"], local_identity
+                assert local_identity["present"], f"IndexedDB state: {local_identity}"
                 assert local_identity["keyVersion"] == 1, local_identity
                 assert local_identity["privateKey"], local_identity
                 assert local_identity["extractable"] is False, local_identity
