@@ -29,7 +29,7 @@ def _apply_child_limits(timeout_seconds: float) -> None:
     try:
         import resource
 
-        cpu = max(5, int(timeout_seconds) + 1)
+        cpu = max(1, int(timeout_seconds) + 1)
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
         resource.setrlimit(
             resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE)
@@ -120,11 +120,10 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
         if not isinstance(output, dict):
             raise ToolProcessError("INVALID_TOOL_OUTPUT")
         return output, message["verdict"]
+    except ToolProcessTimeout:
+        raise
     except (EOFError, OSError, json.JSONDecodeError) as exc:
-        process.join(timeout=0.2)
-        raise ToolProcessError(
-            f"TOOL_PROCESS_CRASHED_EXIT_{process.exitcode}"
-        ) from exc
+        raise ToolProcessError("TOOL_PROCESS_CRASHED") from exc
     finally:
         receive_conn.close()
         if process.is_alive():

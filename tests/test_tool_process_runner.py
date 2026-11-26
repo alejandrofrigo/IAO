@@ -40,7 +40,7 @@ def test_tool_runs_in_separate_process_and_returns_verified_json():
 def test_timed_out_tool_process_is_terminated():
     started = time.monotonic()
     with pytest.raises(ToolProcessTimeout):
-        run_tool_isolated(_sleep_tool, _verify_sleep, {}, 2.0)
+        run_tool_isolated(_sleep_tool, _verify_sleep, {}, 0.5)
     assert time.monotonic() - started < 5
 
 
