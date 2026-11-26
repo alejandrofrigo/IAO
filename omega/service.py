@@ -55,6 +55,7 @@ class OmegaService:
         self._public_hits: dict[str, deque[float]] = defaultdict(deque)
         self._operator_bootstrap_hits: deque[float] = deque()
         self._operator_login_hits: deque[float] = deque()
+        self._operator_recovery_hits: deque[float] = deque()
         self._rl = threading.Lock()
 
         # A RUNNING task after restart has an unknown execution outcome.
@@ -183,14 +184,19 @@ class OmegaService:
                 raise ApiError(429, "RATE_LIMITED")
             data = self._json(body)
             code = data.get("code")
+            recovery_code = data.get("recovery_code")
             public_key = data.get("root_public_key_pem")
             if (
                 not isinstance(code, str) or not 32 <= len(code) <= 512
+                or not isinstance(recovery_code, str) or not 32 <= len(recovery_code) <= 512
+                or hmac.compare_digest(code, recovery_code)
                 or not isinstance(public_key, str) or not 1 <= len(public_key) <= 4096
             ):
                 raise ApiError(400, "INVALID_OPERATOR_BOOTSTRAP")
             try:
-                result = self.operator_identity_authority.bootstrap(code, public_key)
+                result = self.operator_identity_authority.bootstrap(
+                    code, public_key, recovery_code=recovery_code,
+                )
             except OperatorIdentityError as exc:
                 # Never echo or audit the supplied bootstrap capability or key.
                 raise ApiError(exc.status, exc.code) from None
@@ -204,6 +210,88 @@ class OmegaService:
                 "key_version": result["key_version"],
                 "status": "ROOT_REGISTERED",
             }
+
+        if method == "POST" and p == "/v1/operator/recovery/challenge":
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_RECOVERY_UNAVAILABLE")
+            now = self.clock()
+            with self._rl:
+                while self._operator_recovery_hits and self._operator_recovery_hits[0] < now - 60:
+                    self._operator_recovery_hits.popleft()
+                limited = len(self._operator_recovery_hits) >= 3
+                if not limited:
+                    self._operator_recovery_hits.append(now)
+            if limited:
+                raise ApiError(429, "RATE_LIMITED")
+            data = self._json(body)
+            recovery_code = data.get("recovery_code")
+            root_public = data.get("new_root_public_key_pem")
+            device_public = data.get("new_device_public_key_pem")
+            if (
+                not isinstance(recovery_code, str) or not 32 <= len(recovery_code) <= 512
+                or not isinstance(root_public, str) or not 1 <= len(root_public) <= 4096
+                or not isinstance(device_public, str) or not 1 <= len(device_public) <= 4096
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_RECOVERY")
+            try:
+                challenge = self.operator_identity_authority.create_operator_recovery_challenge(
+                    recovery_code, root_public, device_public,
+                )
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_recovery", "OPERATOR_RECOVERY_CHALLENGE_ISSUED",
+                "operator_identity", decision="ALLOW",
+                protocol="IAO-OPERATOR-RECOVERY-V1",
+                expires_at=challenge["expires_at"],
+            )
+            return 200, challenge
+
+        if method == "POST" and p == "/v1/operator/recovery/complete":
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_RECOVERY_UNAVAILABLE")
+            data = self._json(body)
+            handle = data.get("challenge")
+            root_encoded = data.get("root_signature")
+            device_encoded = data.get("device_signature")
+            if (
+                not isinstance(handle, str)
+                or not isinstance(root_encoded, str)
+                or not isinstance(device_encoded, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", root_encoded)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", device_encoded)
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_RECOVERY")
+            try:
+                root_signature = base64.b64decode(
+                    root_encoded + "=" * (-len(root_encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                device_signature = base64.b64decode(
+                    device_encoded + "=" * (-len(device_encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                result = self.operator_identity_authority.complete_operator_recovery(
+                    handle, root_signature, device_signature,
+                    device_replacement=lambda public_key, subject: (
+                        self.device_authority.replace_active_device_for_recovery(
+                            public_key, owner_subject=subject,
+                        )
+                    ),
+                )
+            except (binascii.Error, ValueError):
+                raise ApiError(400, "INVALID_OPERATOR_RECOVERY") from None
+            except DeviceAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_recovery", "OPERATOR_IDENTITY_RECOVERED",
+                "operator_identity", decision="ALLOW",
+                authority="READ_ONLY", key_version=result["key_version"],
+                device_replaced=True,
+            )
+            return 200, result
 
         if method == "POST" and p == "/v1/public/session":
             # The HTTP handler overwrites this header using the socket peer address.
