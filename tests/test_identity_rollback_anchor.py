@@ -1,6 +1,5 @@
 """Monotonic identity rollback-anchor tests, including an old SQLite snapshot replay."""
 import shutil
-import sqlite3
 import time
 
 import pytest

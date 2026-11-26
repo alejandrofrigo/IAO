@@ -81,9 +81,7 @@ def capture_identity_state(
     except sqlite3.DatabaseError:
         raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_DATABASE_INVALID") from None
 
-    root_by_id = {row["identity_id"]: row for row in roots}
     binding_by_id = {row["identity_id"]: row for row in bindings}
-    device_by_id = {row["device_id"]: row for row in devices}
     ledger_roots = []
     for row in roots:
         ledger_roots.append({
