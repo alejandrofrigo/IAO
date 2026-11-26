@@ -17,7 +17,7 @@ from omega.tools.registry import ToolSpec
 from omega.task_worker import TaskWorker
 from omega.service import POLICY_VERSION
 from omega.device_authority import DeviceAuthority, DeviceAuthorityError
-from omega.operator_identity import OperatorIdentityAuthority, ROOT_SIGNATURE_DOMAIN
+from omega.operator_identity import OperatorIdentityAuthority, OperatorIdentityError, ROOT_SIGNATURE_DOMAIN
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -70,7 +70,7 @@ class Base(unittest.TestCase):
             bootstrap_expires_at=time.time() + 600,
             subject_digest_key=hashlib.sha256(b"api-recovery-session-key").digest(),
         )
-        authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
+        identity = authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
         self.svc.operator_identity_authority = authority
 
         new_root = ec.generate_private_key(ec.SECP256R1())
@@ -117,8 +117,8 @@ class Base(unittest.TestCase):
         self.assertEqual(result["authority"], "OPERATOR_RECOVERED_READ_ONLY")
         self.assertEqual(result["key_version"], 2)
         self.assertTrue(self.svc.device_authority.verify_registered_public_key(
-            new_device_public, owner_subject="operator:" + authority.primary_device_public_key()[:0] + "x" * 32
-        ) is False)
+            new_device_public, owner_subject="operator:" + identity["identity_id"]
+        ))
         with self.assertRaisesRegex(OperatorIdentityError, "INVALID_OPERATOR_RECOVERY_CODE"):
             authority.create_operator_recovery_challenge(
                 recovery, new_root_public, new_device_public,
