@@ -109,3 +109,18 @@ def test_libp2p_identity_refuses_symlink(tmp_path):
     link.symlink_to(target)
     with pytest.raises(RuntimeError, match="P2P_IDENTITY_PATH_REFUSED"):
         _secure_identity_file(link)
+
+
+def test_external_peer_is_not_enrolled_without_trusted_transport():
+    from tools import iao_federation_autonomous as federation
+    result = federation.enroll_if_consented(
+        None,
+        "iao-federation",
+        {"endpoint": "https://peer.example.org/fed/v1/message"},
+        {"ok": True, "peer_id": "0123456789abcdef"},
+        {"capabilities": ["knowledge.search"]},
+        {"require_mutual_tls": True, "allowed_capabilities": ["knowledge.search"]},
+    )
+    assert result["status"] == "BLOCKED_TRUSTED_TRANSPORT_NOT_INTEGRATED"
+    assert result["enrollment_performed"] is False
+    assert result["capabilities_granted"] == []
