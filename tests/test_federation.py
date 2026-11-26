@@ -49,6 +49,10 @@ class FedBase(unittest.TestCase):
         for n in (self.a, self.b):
             n.store.close()
         self.tmp.cleanup()
+        if self._old_loopback_http is None:
+            os.environ.pop("IAO_ALLOW_LOOPBACK_HTTP", None)
+        else:
+            os.environ["IAO_ALLOW_LOOPBACK_HTTP"] = self._old_loopback_http
 
     def raw(self, env: dict, key=None) -> tuple[int, dict]:  # type: ignore[type-arg,no-untyped-def]
         return self.b.handle(json.dumps(_sign(key or self.a.key, env)).encode())
