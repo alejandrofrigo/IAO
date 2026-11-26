@@ -293,6 +293,62 @@ class OmegaService:
             )
             return 200, result
 
+        if method == "POST" and p == "/v1/operator/identity/revoke":
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_REVOCATION_UNAVAILABLE")
+            principal = self._auth(headers)
+            identity_id = principal.subject.removeprefix("operator:")
+            if (
+                not re.fullmatch(r"[0-9a-f]{32}", identity_id)
+                or principal.subject != "operator:" + identity_id
+            ):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+            bearer = self._verified_bearer_token(headers)
+            if not self.operator_identity_authority.verify_authenticated_session(
+                principal.subject, bearer,
+            ):
+                raise ApiError(403, "OPERATOR_SESSION_NOT_BOUND")
+            data = self._json(body)
+            key_version = data.get("key_version")
+            encoded = data.get("signature")
+            if (
+                isinstance(key_version, bool) or not isinstance(key_version, int)
+                or key_version < 1
+                or not isinstance(encoded, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", encoded)
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_REVOCATION")
+            try:
+                signature = base64.b64decode(
+                    encoded + "=" * (-len(encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                revoked_device = []
+
+                def revoke_device(public_key: str):
+                    revoked_device.append(True)
+                    return self.device_authority.revoke_active_key(public_key)
+
+                self.operator_identity_authority.revoke(
+                    identity_id, signature, expected_key_version=key_version,
+                    device_revocation=revoke_device,
+                )
+            except (binascii.Error, ValueError):
+                raise ApiError(400, "INVALID_OPERATOR_REVOCATION") from None
+            except DeviceAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_identity", "OPERATOR_IDENTITY_REVOKED",
+                "operator_identity", decision="ALLOW",
+                device_revoked=bool(revoked_device),
+            )
+            return 200, {
+                "authority": "OPERATOR_IDENTITY_REVOKED",
+                "device_revoked": bool(revoked_device),
+            }
+
         if method == "GET" and p == "/v1/federation/status":
             # No afirmar que existe una red federada operativa: el servicio
             # API todavía no consume un registro de peers verificados.
