@@ -1194,6 +1194,33 @@ class QueuedTaskApiTests(Base):
             "DENIED",
         )
 
+
+    def test_queued_mode_rejects_unreviewed_read_only_tool(self) -> None:
+        self.svc.registry.register(
+            ToolSpec(
+                "test.remote_read", "1", "test.remote_read", "READ_ONLY",
+                1.0, lambda value: value, lambda value: value,
+                lambda output: "PASS",
+            )
+        )
+        payload = {
+            "goal": "attempt unreviewed read-only tool",
+            "capability": "test.remote_read",
+            "input": {"value": "x"},
+            "execution_mode": "queued",
+        }
+        status, response = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(
+            response["reason"], "QUEUED_TASK_CAPABILITY_NOT_ALLOWLISTED"
+        )
+        self.assertEqual(
+            self.svc.store.get_task(response["task_id"], "queued-user")["state"],
+            "DENIED",
+        )
+
  
     def test_device_enrollment_and_status_api_are_gated_and_read_only(self) -> None:
         code = "one-time-api-enrollment-secret-long-enough"
