@@ -132,7 +132,7 @@
     const device = await window.IAODeviceAuthority.prepareBootstrapIdentity();
     const devicePublicKeyPem = device.publicKeyPem;
     const encodedPem = devicePublicKeyPem
-      .replace(/-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\\s/g, "");
+      .replace(/-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\s/g, "");
     const deviceDer = Uint8Array.from(atob(encodedPem), ch => ch.charCodeAt(0));
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", deviceDer));
     const deviceId = Array.from(digest, value => value.toString(16).padStart(2, "0")).join("");
