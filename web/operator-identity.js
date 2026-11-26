@@ -148,7 +148,7 @@
     if (!window.confirm("Revocar permanentemente la identidad raíz y desactivar el dispositivo primario? Esta acción requiere un nuevo proceso de bootstrap para recuperar el acceso.")) {
       return { cancelled: true };
     }
-    const payload = encoder.encode("revoke-root-v1\\n" + identity.identityId);
+    const payload = encoder.encode("revoke-root-v1\n" + identity.identityId);
     const message = new Uint8Array(ROOT_DOMAIN.length + payload.length);
     message.set(ROOT_DOMAIN); message.set(payload, ROOT_DOMAIN.length);
     const raw = new Uint8Array(await crypto.subtle.sign(
@@ -306,7 +306,7 @@
     }, result => "IDENTIDAD RAÍZ REGISTRADA\nAlgoritmo: " + result.algorithm + "\nVersión: " + result.key_version));
     loginButton.addEventListener("click", () => run(
       loginButton, login,
-      result => "SESIÓN DE OPERADOR AUTENTICADA\\nAutoridad: " + result.authority + "\\nPermisos: ninguno (solo lectura)"
+      result => "SESIÓN DE OPERADOR AUTENTICADA\nAutoridad: " + result.authority + "\nPermisos: ninguno (solo lectura)"
     ));
     associateButton.addEventListener("click", () => run(
       associateButton, associateSession,
@@ -317,7 +317,7 @@
     ));
     revokeButton.addEventListener("click", () => run(
       revokeButton, revokeIdentity,
-      result => result.cancelled ? "Revocación cancelada." : "IDENTIDAD REVOCADA\\nDispositivo desactivado: " + result.device_revoked
+      result => result.cancelled ? "Revocación cancelada." : "IDENTIDAD REVOCADA\nDispositivo desactivado: " + result.device_revoked
     ));
     bindDeviceButton.addEventListener("click", () => run(bindDeviceButton, async () => {
       if (!window.IAODeviceAuthority || typeof window.IAODeviceAuthority.publicKeyPem !== "function") {
