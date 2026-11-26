@@ -76,7 +76,7 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         bootstrap_code=bootstrap_code,
         bootstrap_expires_at=bootstrap_expiry,
         subject_digest_key=hashlib.sha256(
-            b"IAO-OPERATOR-SUBJECT-HMAC-V1\\x00" + token_key.encode("utf-8")
+            b"IAO-OPERATOR-SUBJECT-HMAC-V1\x00" + token_key.encode("utf-8")
         ).digest(),
     )
     bootstrap_code = ""
