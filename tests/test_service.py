@@ -55,6 +55,9 @@ class Base(unittest.TestCase):
         return self.call("POST", "/v1/tasks", h, {"goal": "g", "capability": cap, "input": inp if inp is not None else {"query": "audit chain"}})
 
 
+
+
+class AuthTests(Base):
     def test_root_signed_revocation_deactivates_device_and_session(self) -> None:
         bootstrap_code = "operator-revoke-bootstrap-" + "r" * 40
         enrollment_code = "operator-revoke-device-" + "d" * 40
@@ -139,7 +142,6 @@ class Base(unittest.TestCase):
             device_authority.challenge(enrolled["device_id"], owner_subject="operator:" + identity["identity_id"])
 
 
-class AuthTests(Base):
     def test_dual_signature_operator_login_api_issues_read_only_session_once(self) -> None:
         bootstrap_code = "operator-login-api-bootstrap-" + "v" * 40
         enrollment_code = "operator-login-device-enrollment-" + "w" * 40
