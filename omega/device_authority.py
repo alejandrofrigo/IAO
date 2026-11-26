@@ -252,6 +252,7 @@ class DeviceAuthority:
 
     def replace_active_device_for_recovery(
         self, public_key_pem: Any, *, owner_subject: str,
+        expected_old_public_key_pem: Any = None,
     ) -> dict[str, str]:
         """Install a replacement primary key after the recovery authority has verified its one-time proof.
 
@@ -275,6 +276,20 @@ class DeviceAuthority:
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
+        expected_old_canonical = None
+        if expected_old_public_key_pem is not None:
+            if not isinstance(expected_old_public_key_pem, str) or not 1 <= len(expected_old_public_key_pem) <= 4096:
+                raise DeviceAuthorityError("INVALID_OLD_PUBLIC_KEY")
+            try:
+                old_key = serialization.load_pem_public_key(expected_old_public_key_pem.encode("ascii"))
+            except (ValueError, TypeError, UnicodeEncodeError):
+                raise DeviceAuthorityError("INVALID_OLD_PUBLIC_KEY") from None
+            if not isinstance(old_key, ec.EllipticCurvePublicKey) or not isinstance(old_key.curve, ec.SECP256R1):
+                raise DeviceAuthorityError("INVALID_OLD_PUBLIC_KEY")
+            expected_old_canonical = old_key.public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            ).decode("ascii")
         der = key.public_bytes(
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -287,7 +302,11 @@ class DeviceAuthority:
                 active = db.execute(
                     "SELECT device_id,owner_subject FROM devices WHERE active=1"
                 ).fetchall()
-                if any(row["owner_subject"] != owner_subject for row in active):
+                if any(
+                    row["owner_subject"] != owner_subject
+                    and (expected_old_canonical is None or row["public_key_pem"] != expected_old_canonical)
+                    for row in active
+                ):
                     raise DeviceAuthorityError("UNRELATED_ACTIVE_DEVICE_BLOCKS_RECOVERY", 409)
                 for row in active:
                     db.execute(
