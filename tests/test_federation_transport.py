@@ -175,9 +175,8 @@ def test_discover_feed_fails_closed_on_transport_error(monkeypatch):
     from tools import iao_federation_autonomous as federation
 
     def fail(*args, **kwargs):
-        raise federation.fetch_public_json.__globals__["FederationTransportError"](
-            "REDIRECT_REFUSED"
-        )
+        from omega.federation_transport import FederationTransportError
+        raise FederationTransportError("REDIRECT_REFUSED")
 
     monkeypatch.setattr(federation, "fetch_public_json", fail)
     assert federation.discover_feed("https://directory.example.org/feed") == []
