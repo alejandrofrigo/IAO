@@ -438,7 +438,8 @@ class QueuedTaskApiTests(Base):
             if event["event_type"] == "DEVICE_ENROLLED"
         ]
         self.assertEqual(len(enrollment_events), 1)
-        self.assertEqual(enrollment_events[0]["subject"], "device-owner")
+        self.assertEqual(enrollment_events[0]["details"]["actor"], "device-owner")
+        self.assertEqual(enrollment_events[0]["subject"], "primary_device")
 
     def test_queued_submission_requires_primary_device_proof(self) -> None:
         payload = {
