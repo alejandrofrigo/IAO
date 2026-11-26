@@ -123,7 +123,7 @@ def _parse_ipfs_peer(peer):
     return {
         "peer_id": peer_id,
         "multiaddr": multiaddr,
-        "source": "ipfs_swarm_dht",
+        "source": "ipfs_swarm_peer",
         "status": "DISCOVERED_UNVERIFIED",
         "granted_capabilities": [],
     }
@@ -154,8 +154,45 @@ def discover_dht(ipfs_api):
         if item and item["peer_id"] not in seen:
             seen.add(item["peer_id"])
             out.append(item)
-    audit("dht_peers_discovered", count=len(out))
+    audit("ipfs_swarm_peers_discovered", count=len(out))
     return out
+
+def merge_p2p_candidates(candidates):
+    """Persist discovered libp2p addresses separately from HTTP federation nodes."""
+    path = STATE / "iao-p2p-candidates.json"
+    data = load(path, {"schema": 1, "peers": {}})
+    peers = data.get("peers", {})
+    if not isinstance(peers, dict):
+        peers = {}
+    added = 0
+    now = utc()
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("source") != "ipfs_swarm_peer":
+            continue
+        peer_id = candidate.get("peer_id")
+        multiaddr = candidate.get("multiaddr")
+        if not isinstance(peer_id, str) or not isinstance(multiaddr, str):
+            continue
+        existing = peers.get(peer_id, {})
+        peers[peer_id] = {
+            "peer_id": peer_id,
+            "multiaddr": multiaddr,
+            "source": "ipfs_swarm_peer",
+            "status": "DISCOVERED_UNVERIFIED",
+            "granted_capabilities": [],
+            "first_seen": existing.get("first_seen", now),
+            "last_seen": now,
+        }
+        if not existing:
+            added += 1
+    # Bounded registry: preserve most recently seen entries.
+    ordered = sorted(
+        peers.values(), key=lambda item: item.get("last_seen", ""), reverse=True
+    )[:1000]
+    data["peers"] = {item["peer_id"]: item for item in ordered}
+    save(path, data)
+    return added
+
 
 def run_discovery():
     sources = load(SOURCES, {})
@@ -424,6 +461,7 @@ def run_cycle(dry_run=False, discover=True):
     if discover:
         candidates = run_discovery()
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
+        discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
         discovery_summary["candidates_discovered"] = len(candidates)
     items = [n for n in load(NODES, {"nodes": []}).get("nodes", []) if isinstance(n, dict)]
     node = make_node(policy) if not dry_run else None
