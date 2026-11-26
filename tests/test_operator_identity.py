@@ -195,8 +195,8 @@ def test_root_rotation_racing_primary_device_binding_never_leaves_current_unauth
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
     rotate_payload = (
-        b"rotate-root-v1\\n" + identity_id.encode("ascii") + b"\\n"
-        + b"2\\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
+        b"rotate-root-v1\n" + identity_id.encode("ascii") + b"\n"
+        + b"2\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
     )
     rotate_signature = sign(root_private, rotate_payload)
     workers = [
