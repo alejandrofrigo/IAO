@@ -173,6 +173,38 @@ class DeviceAuthority:
                 raise
         return {"device_id": device_id, "algorithm": "ECDSA-P256-SHA256"}
 
+    def verify_registered_public_key(
+        self, public_key_pem: Any, *, owner_subject: str,
+    ) -> bool:
+        """Confirm this exact public key is the active key enrolled by this owner."""
+        if not isinstance(public_key_pem, str) or not 1 <= len(public_key_pem) <= 4096:
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY")
+        try:
+            key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        except (ValueError, TypeError, UnicodeEncodeError):
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY") from None
+        if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(
+            key.curve, ec.SECP256R1
+        ):
+            raise DeviceAuthorityError("UNSUPPORTED_PUBLIC_KEY")
+        canonical = key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        with self._database() as db:
+            rows = db.execute(
+                "SELECT public_key_pem,owner_subject FROM devices WHERE active=1"
+            ).fetchall()
+        matches = [
+            row for row in rows
+            if isinstance(row["owner_subject"], str)
+            and hmac.compare_digest(row["owner_subject"], owner_subject)
+            and hmac.compare_digest(row["public_key_pem"], canonical)
+        ]
+        if len(matches) != 1:
+            raise DeviceAuthorityError("DEVICE_KEY_NOT_ENROLLED_FOR_OWNER", 403)
+        return True
+
     def challenge(self, device_id: Any, *, owner_subject: str) -> dict[str, str]:
         if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{64}", device_id):
             raise DeviceAuthorityError("INVALID_DEVICE_ID")
