@@ -195,3 +195,32 @@ def test_device_proofs_are_bound_to_the_enrolling_operator(tmp_path):
             request_proof, method="POST", path="/v1/tasks",
             request_digest=digest, owner_subject="different-operator",
         )
+
+
+def test_operator_owner_binding_is_atomic_and_rejects_old_owner(tmp_path):
+    authority, _, device_id = _enrolled_authority(tmp_path)
+    public_key = authority._connect
+    with authority._database() as db:
+        pem = db.execute(
+            "SELECT public_key_pem FROM devices WHERE device_id=?", (device_id,)
+        ).fetchone()["public_key_pem"]
+
+    with pytest.raises(RuntimeError):
+        with authority.bind_active_key_to_operator(
+            pem, owner_subject="operator:" + "a" * 32
+        ):
+            raise RuntimeError("force rollback")
+
+    assert authority.verify_registered_public_key(
+        pem, owner_subject="operator"
+    )
+    with authority.bind_active_key_to_operator(
+        pem, owner_subject="operator:" + "a" * 32
+    ):
+        assert authority.verify_active_public_key(pem)
+
+    assert authority.verify_registered_public_key(
+        pem, owner_subject="operator:" + "a" * 32
+    )
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_KEY_NOT_ENROLLED_FOR_OWNER"):
+        authority.verify_registered_public_key(pem, owner_subject="operator")
