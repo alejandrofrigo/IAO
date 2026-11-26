@@ -253,10 +253,10 @@ class AuthTests(Base):
         self.assertFalse(identity_authority.verify_authenticated_session(
             "operator:" + identity["identity_id"], login_result[1]["access_token"]
         ))
-        self.assertEqual(
-            self.call("GET", "/v1/me", headers),
-            (401, {"error": "OPERATOR_SESSION_REVOKED"}),
-        )
+        revoked_status, revoked_body = self.call("GET", "/v1/me", headers)
+        self.assertEqual(revoked_status, 401)
+        self.assertEqual(revoked_body["error"], "OPERATOR_SESSION_REVOKED")
+        self.assertRegex(revoked_body["correlation_id"], r"^[0-9a-f]{32}$")
         with self.assertRaisesRegex(DeviceAuthorityError, "DEVICE_KEY_NOT_ACTIVE"):
             device_authority.challenge(enrolled["device_id"], owner_subject="operator:" + identity["identity_id"])
 
