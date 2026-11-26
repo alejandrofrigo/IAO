@@ -300,7 +300,7 @@ class DeviceAuthority:
             db.execute("BEGIN IMMEDIATE")
             try:
                 active = db.execute(
-                    "SELECT device_id,owner_subject FROM devices WHERE active=1"
+                    "SELECT device_id,public_key_pem,owner_subject FROM devices WHERE active=1"
                 ).fetchall()
                 if any(
                     row["owner_subject"] != owner_subject
