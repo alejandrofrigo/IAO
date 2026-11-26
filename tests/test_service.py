@@ -1025,7 +1025,7 @@ class QueuedTaskApiTests(Base):
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
         identity.bootstrap(bootstrap, root_pem)
-        self.operator_token = issue_token(KEY, "queued-user", ["knowledge.search", "test.write"])
+        self.operator_token = issue_token(KEY, "queued-user", ["knowledge.search", "test.write", "test.remote_read"])
         session_challenge = identity.create_session_challenge("queued-user", self.operator_token)
         session_payload = base64.urlsafe_b64decode(
             session_challenge["signing_payload"]
