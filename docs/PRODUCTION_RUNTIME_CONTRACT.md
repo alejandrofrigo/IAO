@@ -49,11 +49,23 @@ primary device, stores only its public key, consumes the enrollment code once,
 issues 60-second random challenges, verifies timestamp- and nonce-bound
 signatures, and rejects replayed challenges.
 
-The implemented device action is `status` only. It returns
-`READ_ONLY_DEVICE_VERIFIED`. It does **not** authorize task execution, code
-changes, deployment, credential access or administrative operations. Privileged
-commands remain disabled until a separate policy-bound command queue, explicit
-scope grants, revocation flow and end-to-end rejection tests are implemented.
+The read-only device status proof remains separate from command authorization.
+For queued task submissions, the API now exposes authenticated
+`POST /v1/device/challenge` for a 60-second one-time nonce. The client signs
+the HTTP method, fixed path, timestamp, nonce and SHA-256 digest of the exact
+request body using the enrolled P-256 key, then sends the proof in
+`X-IAO-Device-Proof`. The API verifies and consumes the challenge before
+idempotency handling or task persistence. Missing, malformed, altered or
+replayed proofs are rejected. The device identifier and proof are not written
+to audit events.
+
+The device key must be enrolled through a trusted local provisioning process;
+there is deliberately no public enrollment endpoint. The enrollment code is
+supplied through `IAO_DEVICE_ENROLLMENT_CODE` and consumed once. The queued
+worker and API continue to enforce `READ_ONLY` capabilities. This integration
+does **not** grant write, execution, deployment, credential or administrative
+authority. Production worker startup remains blocked pending full production
+identity integration and end-to-end validation.
 
 ## Health semantics
 
@@ -85,8 +97,8 @@ The worker claims only `QUEUED` tasks using a SQLite write transaction, then
 revalidates the policy version, saved capability scope and task expiry before
 calling the registered tool. Both API acceptance and the worker enforce
 `effect_class == READ_ONLY`; queued write, execution and administrative
-capabilities are rejected. This is a conservative boundary until cryptographic
-primary-device command authorization is integrated into the task endpoint.
+capabilities are rejected. Queued submissions additionally require a fresh
+cryptographic primary-device proof bound to the exact HTTP request body.
 Completion is fenced by the worker lease owner and lease expiry. A stale or
 expired worker cannot commit a result. A task whose execution outcome is
 uncertain is failed closed; it is not automatically requeued or replayed.
