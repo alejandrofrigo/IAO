@@ -678,7 +678,9 @@ def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_sig
     )
     result = authority.complete_operator_recovery(
         challenge["challenge"], root_signature, device_signature,
-        device_replacement=lambda public, subject, old=None: None,
+        device_replacement=lambda public, subject, old=None: devices.replace_active_device_for_recovery(
+            public, owner_subject=subject, expected_old_public_key_pem=old,
+        ),
     )
     assert result["key_version"] == 2
 
