@@ -248,6 +248,7 @@ class PartitionAndHostilePeerTests(FedBase):
                 data = json.dumps(build(req)).encode()
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(data)))
+                self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -283,6 +284,22 @@ class PartitionAndHostilePeerTests(FedBase):
     def test_garbage_and_oversized_responses_handled(self) -> None:
         r = self.a.send(self.b.node_id, self._hostile(lambda req: {"x": "not an envelope"}).url, "knowledge.search", Q)
         self.assertFalse(r["ok"])
+
+    def test_send_rejects_non_loopback_http_and_wrong_endpoint_paths(self) -> None:
+        for endpoint in (
+            "http://192.168.1.10:8080/fed/v1/message",
+            "http://example.org:8080/fed/v1/message",
+            "http://127.0.0.1:8080/admin",
+            "https://example.org/fed/v1/message?redirect=1",
+        ):
+            result = self.a.send(
+                self.b.node_id, endpoint, "knowledge.search", Q
+            )
+            self.assertEqual(
+                (result["ok"], result["error"]),
+                (False, "INVALID_ENDPOINT"),
+                endpoint,
+            )
 
     def test_cannot_send_to_unenrolled_or_revoked_peer(self) -> None:
         self.assertEqual(self.a.send("0" * 16, self.sb.url, "knowledge.search", Q)["error"], "UNKNOWN_PEER")
