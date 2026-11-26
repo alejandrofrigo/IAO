@@ -660,6 +660,26 @@ class OperatorIdentityAuthority:
 
 
     @staticmethod
+    def verify_bootstrap_root_signature(
+        root_public_key_pem: Any, device_public_key_pem: Any, signature: bytes,
+    ) -> bool:
+        """Verify root possession before consuming the one-time bootstrap capability."""
+        if not isinstance(signature, bytes) or not 64 <= len(signature) <= 80:
+            raise OperatorIdentityError("INVALID_OPERATOR_BOOTSTRAP_SIGNATURE", 401)
+        root_key, _ = OperatorIdentityAuthority._public_key(root_public_key_pem)
+        _, payload = OperatorIdentityAuthority.device_binding_payload(
+            device_public_key_pem, key_version=1,
+        )
+        try:
+            root_key.verify(
+                signature, ROOT_SIGNATURE_DOMAIN + payload,
+                ec.ECDSA(hashes.SHA256()),
+            )
+        except (InvalidSignature, ValueError, TypeError):
+            raise OperatorIdentityError("INVALID_OPERATOR_BOOTSTRAP_SIGNATURE", 401) from None
+        return True
+
+    @staticmethod
     def device_binding_payload(device_public_key_pem: Any, *, key_version: int) -> tuple[str, bytes]:
         """Return the canonical device identifier and root-signed binding payload."""
         _, canonical_pem = OperatorIdentityAuthority._public_key(device_public_key_pem)
