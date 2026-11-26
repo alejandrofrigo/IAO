@@ -19,10 +19,21 @@ permanently stranded. This does not itself implement or authorize production
 recovery; a separately provisioned, expiring bootstrap capability is still
 required, and recovery remains outside the API/session flow.
 
-This is a foundation only, not an end-to-end operator identity system. It is
-not yet wired to API sessions, device enrollment/binding, task authorization,
-recovery, or the browser key lifecycle. The current public-session subject
-remains an expiring guest. The current device proof proves possession of one
+The registry now also implements persistent session-association primitives:
+a challenge is bound to the server-supplied authenticated subject digest,
+active root identity digest, root key version, one-time nonce, expiry and
+fixed protocol purpose; the root signature is verified and the challenge is
+consumed atomically before a single durable subject binding is recorded.
+Session verification fails closed after root rotation or revocation. The
+challenge response contains an opaque one-time handle and canonical signing
+payload, not the internal identity identifier or raw subject. Unit tests cover
+subject substitution, guest rejection, invalid signature, replay, expiry,
+restart persistence, rotation and revocation.
+
+This remains a foundation, not an end-to-end operator identity system. These
+primitives are not yet wired to API sessions, device enrollment/binding, task
+authorization, recovery, or the browser key lifecycle. The current public
+session remains guest-only. The current device proof proves possession of one
 enrolled device key only. No durable operator identity or command authority
 may be claimed until those integrations and their end-to-end tests pass.
 
@@ -90,21 +101,24 @@ fixed route, timestamp, nonce and digest of the exact request bytes.
 - Device status remains read-only. Enrollment and identity proof alone grant
   no WRITE, EXECUTE, DEPLOY, CREDENTIAL or ADMIN capability.
 
-## Session association (not yet implemented)
+## Session association (primitive implemented; API/browser integration pending)
 
 A non-guest bearer token is not, by itself, proof that its subject owns the
-root key. Before a session can be associated with an operator identity, the
-server must verify a fresh root-key signature over a domain-separated,
-canonical statement that binds the intended session subject, identity key
-version, challenge nonce, expiry and fixed protocol purpose. The challenge
-must be one-time, stored server-side, scoped to the authenticated session,
-consumed atomically, and invalidated on root rotation or revocation. The
-subject must come from a server-verified authentication principal, never from
-a caller-supplied field. A root signature must not create a session or grant
-scopes; it only authorizes the association. Guest principals are always
-rejected. This association requires persistence, concurrency/replay tests,
-privacy review and browser integration before any device/task route may rely
-on it.
+root key. The isolated registry now supports a fresh root-key signature over
+a domain-separated canonical statement binding the authenticated subject
+digest, identity digest, root key version, nonce, expiry and fixed purpose.
+The challenge is stored server-side, one-time, and consumed atomically; a
+subject mismatch, replay, expiry, rotation or revocation fails closed. The
+subject argument is designed to come from a server-verified principal, never
+from a caller-supplied field. Guest principals are rejected. A root signature
+does not create a session or grant scopes; it only authorizes association.
+
+**Still pending:** expose the challenge/bind operations through the
+authenticated API, inject the persistent authority into the production
+service, associate the browser-held non-extractable root key with the
+challenge, verify the binding on protected routes, and test the complete
+mobile-browser flow. Until then the primitive is not an active authorization
+control and no device/task route may rely on it.
 
 ## Authorization and task flow
 
