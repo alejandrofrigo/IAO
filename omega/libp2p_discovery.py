@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,20 @@ MAX_BOOTSTRAP = 8
 MAX_PEERS = 250
 CONNECT_TIMEOUT = 8.0
 DISCOVERY_TIMEOUT = 30.0
+
+
+def _secure_identity_file(path: str | Path) -> None:
+    """Enforce private permissions on an existing or newly-created node key."""
+    target = Path(path)
+    if target.is_symlink() or not target.is_file():
+        raise RuntimeError("P2P_IDENTITY_PATH_REFUSED")
+    try:
+        os.chmod(target, 0o600)
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except OSError as exc:
+        raise RuntimeError("P2P_IDENTITY_PERMISSION_HARDENING_FAILED") from exc
+    if mode & 0o077:
+        raise RuntimeError("P2P_IDENTITY_PERMISSION_HARDENING_FAILED")
 
 
 def _state_dir() -> Path:
@@ -105,11 +120,16 @@ async def discover_peers(
     if identity_path.exists():
         if not identity_path.is_file():
             raise RuntimeError("P2P_IDENTITY_PATH_REFUSED")
+        _secure_identity_file(identity_path)
         key_pair = load_identity(identity_path)
     else:
         key_pair = create_identity_from_seed(secrets.token_bytes(32))
-        save_identity(key_pair, identity_path)
-        os.chmod(identity_path, 0o600)
+        previous_umask = os.umask(0o077)
+        try:
+            save_identity(key_pair, identity_path)
+        finally:
+            os.umask(previous_umask)
+        _secure_identity_file(identity_path)
 
 
     addresses = _validate_bootstrap(bootstrap_addrs)
