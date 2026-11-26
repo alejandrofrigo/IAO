@@ -44,6 +44,7 @@ class OperatorIdentityAuthority:
     def __init__(
         self, database: str | Path, bootstrap_code: str = "",
         *, bootstrap_expires_at: float | None = None,
+        subject_digest_key: bytes | str | None = None,
     ) -> None:
         self.database = Path(database)
         parent = self.database.parent
@@ -63,6 +64,9 @@ class OperatorIdentityAuthority:
             os.close(fd)
         self.bootstrap_code = bootstrap_code
         self.bootstrap_expires_at = bootstrap_expires_at
+        if isinstance(subject_digest_key, str):
+            subject_digest_key = subject_digest_key.encode("utf-8")
+        self.subject_digest_key = subject_digest_key
         self.lock = threading.RLock()
         with self._database() as db:
             db.executescript(
@@ -414,14 +418,17 @@ class OperatorIdentityAuthority:
                 raise
 
 
-    @staticmethod
-    def _session_subject_digest(subject: Any) -> str:
+    def _session_subject_digest(self, subject: Any) -> str:
         if (
             not isinstance(subject, str) or not subject
             or len(subject) > 512 or subject.startswith("guest:")
         ):
             raise OperatorIdentityError("OPERATOR_SESSION_REQUIRED", 403)
-        return hashlib.sha256(subject.encode("utf-8")).hexdigest()
+        if not isinstance(self.subject_digest_key, bytes) or len(self.subject_digest_key) < 32:
+            raise OperatorIdentityError("OPERATOR_SESSION_BINDING_UNAVAILABLE", 503)
+        return hmac.new(
+            self.subject_digest_key, subject.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
 
     def create_session_challenge(
         self, authenticated_subject: Any, *, ttl_seconds: int = 90,
