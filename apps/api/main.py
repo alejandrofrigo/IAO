@@ -106,6 +106,8 @@ def ready():
     payload["status"] = "degraded"
     payload["production_gates"] = {
         "device_identity_verification": "integrated_read_only",
+        "operator_session_association": "api_available_read_only",
+        "operator_root_bootstrap": "out_of_band_not_provisioned",
         "privileged_device_commands": "disabled",
         "identity_provider": "dev_hmac_not_oidc",
         "independent_federation": "not_verified",
