@@ -404,14 +404,15 @@ def test_session_binding_is_invalidated_by_root_rotation_and_revocation(tmp_path
         subject_digest_key="operator-session-test-key-" + "c" * 40,
     )
     identity = authority.bootstrap(code, old_public)
-    challenge = authority.create_session_challenge("verified-subject")
+    token = "session-token-lifecycle-" + "r" * 40
+    challenge = authority.create_session_challenge("verified-subject", token)
     payload = base64.urlsafe_b64decode(
         challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
     )
     authority.bind_authenticated_session(
-        challenge["challenge"], "verified-subject", sign(old_root, payload)
+        challenge["challenge"], "verified-subject", token, sign(old_root, payload)
     )
-    assert authority.verify_authenticated_session("verified-subject")
+    assert authority.verify_authenticated_session("verified-subject", token)
 
     canonical_new = serialization.load_pem_public_key(new_public.encode()).public_bytes(
         serialization.Encoding.PEM,
@@ -424,22 +425,22 @@ def test_session_binding_is_invalidated_by_root_rotation_and_revocation(tmp_path
     authority.rotate_root(
         identity["identity_id"], new_public, sign(old_root, rotate_payload)
     )
-    assert not authority.verify_authenticated_session("verified-subject")
+    assert not authority.verify_authenticated_session("verified-subject", token)
 
-    refreshed = authority.create_session_challenge("verified-subject")
+    refreshed = authority.create_session_challenge("verified-subject", token)
     refreshed_payload = base64.urlsafe_b64decode(
         refreshed["signing_payload"]
         + "=" * (-len(refreshed["signing_payload"]) % 4)
     )
     authority.bind_authenticated_session(
-        refreshed["challenge"], "verified-subject",
+        refreshed["challenge"], "verified-subject", token,
         sign(new_root, refreshed_payload),
     )
-    assert authority.verify_authenticated_session("verified-subject")
+    assert authority.verify_authenticated_session("verified-subject", token)
 
     revoke_payload = b"revoke-root-v1\n" + identity["identity_id"].encode("ascii")
     authority.revoke(
         identity["identity_id"], sign(new_root, revoke_payload),
         expected_key_version=2,
     )
-    assert not authority.verify_authenticated_session("verified-subject")
+    assert not authority.verify_authenticated_session("verified-subject", token)
