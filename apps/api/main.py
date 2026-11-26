@@ -13,7 +13,6 @@ def live() -> dict[str, str]:
 
 @app.get("/health/ready")
 def ready() -> dict[str, str]:
-    # Discovery candidates are not authenticated IAO federation peers.
     return {
         "status": "degraded",
         "federation": "not_verified",
@@ -28,7 +27,7 @@ def get_manifest() -> dict:
         "protocol": "IAO-FEDERATION-v1",
         "status": "development",
         "federation_status": "not_verified",
-        "discovered_candidates": len(discovery.get_active_nodes()),
+        "known_registry_entries": len(discovery.memory),
         "registration_endpoint": "/v1/federation/register",
         "registration_enabled": False,
     }
