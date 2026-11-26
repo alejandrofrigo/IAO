@@ -454,6 +454,17 @@ class OmegaService:
             res = {"decision": "DENY", "reason": dec.reason}
             self.store.set_task_state(tid, st, res)
             return 403, {"task_id": tid, "state": st, **res}
+        spec = self.registry.get(cap)
+        if execution_mode == "queued" and (
+            spec is None or spec.effect_class != "READ_ONLY"
+        ):
+            to("DENIED", reason="QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY")
+            result = {
+                "decision": "DENY",
+                "reason": "QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY",
+            }
+            self.store.set_task_state(tid, st, result)
+            return 403, {"task_id": tid, "state": st, **result}
         to("AUTHORIZED")
         if execution_mode == "queued":
             if self.ttl <= 0:
@@ -478,7 +489,6 @@ class OmegaService:
                 "status_url": f"/v1/tasks/{tid}",
                 "execution_mode": "queued",
             }
-        spec = self.registry.get(cap)
         assert spec is not None
         if self.ttl <= 0:
             to("EXPIRED")
