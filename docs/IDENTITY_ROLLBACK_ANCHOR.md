@@ -29,25 +29,36 @@ A revoked root is represented by zero active roots plus the revoked-root
 ledger digest. Inactive device records remain part of the digest. Restoring
 either or both older database snapshots therefore produces a different state.
 
-## Important integration limitation
+## Live service integration
 
-This commit provides the anchor primitive and replay tests only. It does **not**
-yet connect every bootstrap, recovery, root rotation/revocation, primary-device
-binding, enrollment and device-replacement mutation to the anchor, and it does
-not yet gate live API authentication on anchor verification. Until that
-transactional integration is complete, the production service does not claim
-rollback enforcement. Never initialize a fresh anchor automatically when an
-existing installation reports a missing anchor: that could bless a restored
-old database.
+The production HTTP runtime now provisions this anchor only when both anchor
+files are absent and the identity/device databases are demonstrably empty. If
+either anchor file is missing, if a prior identity exists without an anchor, or
+if the stored state does not match, startup fails closed. It never silently
+reinitializes an existing installation.
 
-A complete deployment must provision the anchor outside the backup set, then
-make every authority mutation a recoverable two-phase operation: persist a
-pending transition, commit the paired SQLite state, advance the external
-anchor, and reconcile/deny all privileged identity operations while pending or
-mismatched. A hardware monotonic counter or independently administered remote
-witness is required to resist rollback of the entire device filesystem,
-including both the anchor and its key. The local primitive alone cannot make
-that stronger guarantee.
+Every protected API request is serialized through a durable write-ahead
+pending marker. The marker is written and fsynced before the route runs. After
+the route, the paired databases are re-read; if their state changed, the
+sequence advances exactly once before the marker is removed. An operation
+error is propagated only after a coherent partial state has been anchored.
+If the process crashes or the two databases are left incoherent, the pending
+marker remains and all protected requests fail closed until offline
+reconciliation. Health endpoints and anonymous public-session issuance remain
+available.
 
-The primitive is not permission to enable task execution, write/admin scopes or
-the worker.
+The runtime stores the anchor and key by default under
+`~/.config/iao/identity-trust/`, outside the repository state and normal
+backup directory. Operators may set `IAO_IDENTITY_ROLLBACK_DIR` to a separately
+protected location. Do not include this directory in database backup or
+restore operations.
+
+This is local rollback detection, not protection against an attacker who can
+restore the entire device filesystem including the anchor and key. Resisting
+that threat requires a hardware monotonic counter or independently
+administered remote witness. Pending transitions are intentionally not
+auto-reconciled after crashes: an offline recovery procedure must inspect both
+databases and the pending marker before explicitly authorizing a new anchor.
+
+The integration does not enable task execution, write/admin scopes or the
+worker.

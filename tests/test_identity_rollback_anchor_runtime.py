@@ -55,6 +55,35 @@ class RollbackAnchorRuntimeTests(unittest.TestCase):
             {"valid": True, "sequence": 1},
         )
 
+    def test_write_ahead_transition_advances_anchor_after_database_change(self):
+        authority = self.service.operator_identity_authority
+        public = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+
+        def mutate():
+            with sqlite3.connect(authority.database) as db:
+                db.execute(
+                    """INSERT INTO operator_identities
+                    (identity_id,root_public_key_pem,key_version,status,created_at,updated_at)
+                    VALUES(?, ?, 1, 'REVOKED', 1, 1)""",
+                    ("b" * 32, public),
+                )
+            return "committed"
+
+        result = self.service.identity_rollback_anchor.execute(
+            self.service.identity_state_supplier, mutate,
+        )
+        self.assertEqual(result, "committed")
+        current = capture_identity_state(
+            authority.database, self.service.device_authority.database,
+        )
+        self.assertEqual(
+            self.service.identity_rollback_anchor.verify(current),
+            {"valid": True, "sequence": 2},
+        )
+
     def test_live_database_divergence_blocks_protected_api_before_route(self):
         public = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
             serialization.Encoding.PEM,
