@@ -300,7 +300,12 @@ class OperatorIdentityAuthority:
                 db.execute(
                     """INSERT INTO primary_device_bindings
                     (identity_id,device_id,device_public_key_pem,key_version,bound_at)
-                    VALUES(?,?,?,?,?)""",
+                    VALUES(?,?,?,?,?)
+                    ON CONFLICT(identity_id) DO UPDATE SET
+                    device_id=excluded.device_id,
+                    device_public_key_pem=excluded.device_public_key_pem,
+                    key_version=excluded.key_version,
+                    bound_at=excluded.bound_at""",
                     (identity_id, device_id, canonical_pem, expected_key_version, now),
                 )
                 db.execute("COMMIT")
