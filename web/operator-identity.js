@@ -31,13 +31,19 @@
   }
   async function writeIdentity(value) {
     const db = await openDB();
-    return new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).put(value, "root");
+      const request = tx.objectStore(STORE).put(value, "root");
+      request.onerror = () => reject(request.error || new Error("OPERATOR_IDENTITY_WRITE_FAILED"));
       tx.oncomplete = () => { db.close(); resolve(); };
       tx.onerror = () => { db.close(); reject(tx.error); };
       tx.onabort = () => { db.close(); reject(tx.error); };
     });
+    const persisted = await readIdentity();
+    if (!persisted || !persisted.privateKey ||
+        persisted.publicKeyPem !== value.publicKeyPem) {
+      throw new Error("OPERATOR_IDENTITY_STORAGE_VERIFICATION_FAILED");
+    }
   }
   function b64url(bytes) {
     let binary = "";
