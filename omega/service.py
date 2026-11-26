@@ -47,6 +47,17 @@ class OmegaService:
         self._public_hits: dict[str, deque[float]] = defaultdict(deque)
         self._rl = threading.Lock()
 
+        # A RUNNING task after restart has an unknown execution outcome.
+        # Fail closed and require an explicit new request; never replay it.
+        for interrupted in self.store.recover_interrupted_tasks():
+            self.store.audit(
+                interrupted["owner"],
+                "TASK_INTERRUPTED_ON_RESTART",
+                interrupted["id"],
+                decision="FAIL_CLOSED",
+                reason="PROCESS_INTERRUPTED",
+            )
+
         # IAO_PATCH: la dependencia inyectada tiene prioridad sobre el router por defecto.
         if model_adapter is not None:
             self.model = model_adapter
