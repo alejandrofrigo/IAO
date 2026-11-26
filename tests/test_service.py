@@ -55,6 +55,90 @@ class Base(unittest.TestCase):
         return self.call("POST", "/v1/tasks", h, {"goal": "g", "capability": cap, "input": inp if inp is not None else {"query": "audit chain"}})
 
 
+    def test_root_signed_revocation_deactivates_device_and_session(self) -> None:
+        bootstrap_code = "operator-revoke-bootstrap-" + "r" * 40
+        enrollment_code = "operator-revoke-device-" + "d" * 40
+        device_authority = DeviceAuthority(
+            self.state / "operator-revoke-device.sqlite3",
+            enrollment_code=enrollment_code,
+        )
+        root = ec.generate_private_key(ec.SECP256R1())
+        root_public = root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        device = ec.generate_private_key(ec.SECP256R1())
+        device_public = device.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        enrolled = device_authority.enroll(
+            enrollment_code, device_public, owner_subject="pre-login-owner"
+        )
+        identity_authority = OperatorIdentityAuthority(
+            self.state / "operator-revoke-identity.sqlite3",
+            bootstrap_code,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"operator-revoke-session-key").digest(),
+        )
+        identity = identity_authority.bootstrap(bootstrap_code, root_public)
+        _, binding_payload = identity_authority.device_binding_payload(
+            device_public, key_version=1
+        )
+        identity_authority.bind_primary_device(
+            identity["identity_id"], device_public,
+            root.sign(ROOT_SIGNATURE_DOMAIN + binding_payload, ec.ECDSA(hashes.SHA256())),
+            expected_key_version=1,
+        )
+        self.svc.device_authority = device_authority
+        self.svc.operator_identity_authority = identity_authority
+        status, challenge = self.call("POST", "/v1/operator/login/challenge", {}, {})
+        self.assertEqual(status, 200)
+        payload = base64.urlsafe_b64decode(
+            challenge["signing_payload"]
+            + "=" * (-len(challenge["signing_payload"]) % 4)
+        )
+        login_result = self.call(
+            "POST", "/v1/operator/login/complete", {},
+            {
+                "challenge": challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(
+                    root.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
+                ).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(
+                    device.sign(
+                        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + payload,
+                        ec.ECDSA(hashes.SHA256()),
+                    )
+                ).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(login_result[0], 200)
+        headers = {"authorization": "Bearer " + login_result[1]["access_token"]}
+        revoke_payload = b"revoke-root-v1\\n" + identity["identity_id"].encode("ascii")
+        signature = root.sign(
+            ROOT_SIGNATURE_DOMAIN + revoke_payload, ec.ECDSA(hashes.SHA256())
+        )
+        status, result = self.call(
+            "POST", "/v1/operator/identity/revoke", headers,
+            {
+                "key_version": 1,
+                "signature": base64.urlsafe_b64encode(signature).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result, {
+            "authority": "OPERATOR_IDENTITY_REVOKED", "device_revoked": True,
+        })
+        with self.assertRaisesRegex(DeviceAuthorityError, "DEVICE_KEY_NOT_ACTIVE"):
+            device_authority.verify_active_public_key(device_public)
+        self.assertFalse(identity_authority.verify_authenticated_session(
+            "operator:" + identity["identity_id"], login_result[1]["access_token"]
+        ))
+        with self.assertRaisesRegex(DeviceAuthorityError, "DEVICE_KEY_NOT_ACTIVE"):
+            device_authority.challenge(enrolled["device_id"], owner_subject="operator:" + identity["identity_id"])
+
+
 class AuthTests(Base):
     def test_dual_signature_operator_login_api_issues_read_only_session_once(self) -> None:
         bootstrap_code = "operator-login-api-bootstrap-" + "v" * 40
