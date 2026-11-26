@@ -331,6 +331,34 @@ class Store:
             ).fetchone()
         return dict(row) if row else None
 
+    def recover_interrupted_tasks(self) -> list[dict[str, str]]:
+        """Fail closed tasks left RUNNING by a process crash; never replay work."""
+        recovered: list[dict[str, str]] = []
+        now = now_iso()
+        result = json.dumps(
+            {"decision": "INTERRUPTED", "error": "PROCESS_INTERRUPTED"},
+            sort_keys=True,
+        )
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self.db.execute(
+                    "SELECT id, owner FROM task WHERE state='RUNNING'"
+                ).fetchall()
+                for row in rows:
+                    changed = self.db.execute(
+                        "UPDATE task SET state='FAILED', result_json=?, updated_at=? "
+                        "WHERE id=? AND state='RUNNING'",
+                        (result, now, row["id"]),
+                    ).rowcount
+                    if changed == 1:
+                        recovered.append({"id": row["id"], "owner": row["owner"]})
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
+        return recovered
+
     def get_task(self, task_id: str, owner: str) -> dict[str, Any] | None:
         with self.lock:
             r = self.db.execute("SELECT * FROM task WHERE id=? AND owner=?", (task_id, owner)).fetchone()
