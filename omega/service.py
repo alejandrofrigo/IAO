@@ -108,6 +108,13 @@ class OmegaService:
         return p
 
     @staticmethod
+    def _verified_bearer_token(headers: dict[str, str]) -> str:
+        authorization = headers.get("authorization", "")
+        if not authorization.startswith("Bearer "):
+            raise ApiError(401, "AUTHENTICATION_REQUIRED")
+        return authorization[7:]
+
+    @staticmethod
     def _json(body: bytes) -> dict[str, Any]:
         try:
             d = json.loads(body or b"{}")
