@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
-import time
 from typing import Any, Callable
 
 MAX_RESULT_BYTES = 1_048_576
