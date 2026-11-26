@@ -210,7 +210,7 @@ class OmegaService:
                     device_encoded + "=" * (-len(device_encoded) % 4),
                     altchars=b"-_", validate=True,
                 )
-                self.device_authority.verify_bootstrap_device_signature(
+                self.device_authority.preflight_bootstrap_device(
                     device_public_key, device_signature,
                 )
                 self.operator_identity_authority.verify_bootstrap_root_signature(
