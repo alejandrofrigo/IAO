@@ -28,6 +28,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from omega.audit import canonical_json
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
+from omega.federation_transport import (
+    FederationTransportError,
+    post_federation_json,
+    validate_message_endpoint,
+)
 
 MAX_MSG = 32 * 1024
 _EXEC = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fed")
@@ -548,6 +553,10 @@ class Node:
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
         if capability not in c["capabilities"] or capability not in self.served:
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
+        try:
+            validate_message_endpoint(url)
+        except FederationTransportError:
+            return {"ok": False, "error": "INVALID_ENDPOINT"}
         saved_endpoint = c.get("endpoint")
         if saved_endpoint is not None and url != saved_endpoint:
             return {"ok": False, "error": "ENDPOINT_MISMATCH"}
@@ -567,34 +576,46 @@ class Node:
         return ctx
 
     def _post(self, c: dict[str, Any], url: str, env: dict[str, Any], nonce: str, timeout: float) -> dict[str, Any]:
-        req = urllib.request.Request(url, method="POST", data=json.dumps(env).encode(), headers={"Content-Type": "application/json"})
         try:
-            ctx = self._ssl_context()
-            if ctx is not None and url.startswith("https://"):
-                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-                    data = r.read(MAX_MSG * 8)
-            else:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
-                    data = r.read(MAX_MSG * 8)
-        except urllib.error.HTTPError as e:
-            try:
-                err = json.loads(e.read(4096)).get("error", "HTTP_ERROR")
-            except ValueError:
-                err = "HTTP_ERROR"
-            return {"ok": False, "status": e.code, "error": err}
-        except (urllib.error.URLError, OSError, TimeoutError):
-            return {"ok": False, "error": "PEER_UNREACHABLE"}   # partition: no state change, safe to retry
-        try:
-            resp = json.loads(data)
-        except ValueError:
+            status, resp = post_federation_json(
+                url, env, timeout=timeout, max_bytes=MAX_MSG * 8
+            )
+        except FederationTransportError as exc:
+            if exc.code in {
+                "HTTPS_REQUEST_FAILED",
+                "DNS_RESOLUTION_FAILED",
+                "DNS_NO_ADDRESSES",
+                "LOOPBACK_RESOLUTION_FAILED",
+            }:
+                return {"ok": False, "error": "PEER_UNREACHABLE"}
+            return {"ok": False, "error": "TRANSPORT_BLOCKED"}
+
+        if status != 200:
+            error = resp.get("error", "HTTP_ERROR") if isinstance(resp, dict) else "HTTP_ERROR"
+            return {"ok": False, "status": status, "error": error}
+        if not isinstance(resp, dict):
             return {"ok": False, "error": "BAD_RESPONSE"}
         if not _verify(c["pub"], resp):
             return {"ok": False, "error": "BAD_RESPONSE_SIGNATURE"}
-        if resp.get("to") != self.node_id or resp.get("from") != c["peer_id"] or resp.get("in_reply_to") != nonce:
+        if (
+            resp.get("to") != self.node_id
+            or resp.get("from") != c["peer_id"]
+            or resp.get("in_reply_to") != nonce
+        ):
             return {"ok": False, "error": "REPLAYED_OR_MISROUTED_RESPONSE"}
-        if abs(self.clock() - float(resp.get("ts", 0))) > self.skew:
+        try:
+            response_ts = float(resp.get("ts", 0))
+        except (TypeError, ValueError):
             return {"ok": False, "error": "CLOCK_SKEW"}
-        return {"ok": True, "verification": resp.get("verification"), "result": resp["result"], "untrusted": True}
+        if not math.isfinite(response_ts) or abs(self.clock() - response_ts) > self.skew:
+            return {"ok": False, "error": "CLOCK_SKEW"}
+        return {
+            "ok": True,
+            "verification": resp.get("verification"),
+            "result": resp["result"],
+            "untrusted": True,
+        }
+
     @classmethod
     def from_persistent_identity(cls, store, registry, *, identity_dir=None, **kwargs):
         """Crea un nodo federado con la identidad Ed25519 persistente de esta instalación."""
