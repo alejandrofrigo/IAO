@@ -65,6 +65,36 @@ scope grants, revocation flow and end-to-end rejection tests are implemented.
 - `NORMAL` must not be inferred from a live process, configured secret or
   successful container build.
 
+## Durable task queue and worker
+
+The existing synchronous `POST /v1/tasks` behavior remains the default for
+compatibility. A caller may explicitly request asynchronous acceptance with
+`"execution_mode": "queued"`. After authentication, capability authorization,
+and policy checks, the API persists the task and returns HTTP 202 with its
+`task_id`, `state: "QUEUED"`, and `status_url`. The input and authorization
+snapshot are stored in the private SQLite state database; do not put secrets in
+task inputs.
+
+Run the worker as a separate process against the same durable state directory:
+
+```sh
+python -m omega.task_worker
+```
+
+The worker claims only `QUEUED` tasks using a SQLite write transaction, then
+revalidates the policy version, saved capability scope and task expiry before
+calling the registered tool. Completion is fenced by the worker lease owner and
+lease expiry. A stale or expired worker cannot commit a result. A task whose
+execution outcome is uncertain is failed closed; it is not automatically
+requeued or replayed.
+
+The HTTP server does **not** launch the worker implicitly. A running worker
+process is not guaranteed by CI or image qualification. The current worker
+entry point still uses development bearer-token authentication and explicitly
+refuses production mode until OIDC/device-bound command authorization is
+integrated. Keep it disabled in production deployments until that gate is
+implemented and verified.
+
 ## Federation status semantics
 
 - `/v1/federation/status` currently reports `unknown` and
