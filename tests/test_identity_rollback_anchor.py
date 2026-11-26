@@ -52,7 +52,7 @@ def test_anchor_detects_restoration_of_pre_revocation_database_pair(tmp_path):
     before = capture_identity_state(identity_db, device_db)
     assert anchor.initialize(before) == {"initialized": True, "sequence": 1}
 
-    payload = b"revoke-root-v1\\n" + identity_id.encode("ascii")
+    payload = b"revoke-root-v1\n" + identity_id.encode("ascii")
     signature = root_private.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
     # Reopen the authority from the same database and apply the real revocation path.
     authority = OperatorIdentityAuthority(identity_db)

@@ -23,8 +23,8 @@ from typing import Any
 
 ANCHOR_FORMAT_VERSION = 1
 STATE_SCHEMA_VERSION = 1
-MAC_DOMAIN = b"IAO-IDENTITY-ROLLBACK-ANCHOR-V1\\x00"
-STATE_DOMAIN = b"IAO-IDENTITY-ROLLBACK-STATE-V1\\x00"
+MAC_DOMAIN = b"IAO-IDENTITY-ROLLBACK-ANCHOR-V1\x00"
+STATE_DOMAIN = b"IAO-IDENTITY-ROLLBACK-STATE-V1\x00"
 _KEY_BYTES = 32
 _process_lock = threading.RLock()
 
@@ -265,7 +265,7 @@ class IdentityRollbackAnchor:
             "sequence": sequence,
             "state": state,
             "mac": mac,
-        }) + b"\\n"
+        }) + b"\n"
         fd, temp_name = tempfile.mkstemp(prefix=".identity-anchor-", dir=self.parent)
         temp_path = Path(temp_name)
         try:
