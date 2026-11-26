@@ -317,7 +317,8 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
     root_private, root_public = keypair()
     db = tmp_path / "identity.sqlite3"
     authority = OperatorIdentityAuthority(
-        db, code, bootstrap_expires_at=time.time() + 600
+        db, code, bootstrap_expires_at=time.time() + 600,
+        subject_digest_key="operator-session-test-key-" + "a" * 40,
     )
     identity = authority.bootstrap(code, root_public)
     challenge = authority.create_session_challenge("verified-subject-A")
@@ -336,7 +337,9 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
     assert authority.verify_authenticated_session("verified-subject-A")
     assert not authority.verify_authenticated_session("verified-subject-B")
 
-    restarted = OperatorIdentityAuthority(db)
+    restarted = OperatorIdentityAuthority(
+        db, subject_digest_key="operator-session-test-key-" + "a" * 40
+    )
     assert restarted.verify_authenticated_session("verified-subject-A")
     with pytest.raises(OperatorIdentityError, match="SESSION_CHALLENGE_REPLAYED"):
         restarted.bind_authenticated_session(
@@ -355,6 +358,7 @@ def test_session_binding_rejects_invalid_signature_guest_and_expiry(tmp_path, mo
     authority = OperatorIdentityAuthority(
         tmp_path / "identity.sqlite3", code,
         bootstrap_expires_at=time.time() + 600,
+        subject_digest_key="operator-session-test-key-" + "b" * 40,
     )
     authority.bootstrap(code, root_public)
     with pytest.raises(OperatorIdentityError, match="OPERATOR_SESSION_REQUIRED"):
@@ -390,6 +394,7 @@ def test_session_binding_is_invalidated_by_root_rotation_and_revocation(tmp_path
     authority = OperatorIdentityAuthority(
         tmp_path / "identity.sqlite3", code,
         bootstrap_expires_at=time.time() + 600,
+        subject_digest_key="operator-session-test-key-" + "c" * 40,
     )
     identity = authority.bootstrap(code, old_public)
     challenge = authority.create_session_challenge("verified-subject")
