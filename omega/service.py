@@ -262,8 +262,6 @@ class OmegaService:
             ):
                 raise ApiError(400, "INVALID_OPERATOR_LOGIN")
             try:
-                device_public_key = self.operator_identity_authority.primary_device_public_key()
-                self.device_authority.verify_active_public_key(device_public_key)
                 root_signature = base64.b64decode(
                     root_encoded + "=" * (-len(root_encoded) % 4),
                     altchars=b"-_", validate=True,
@@ -275,6 +273,11 @@ class OmegaService:
                 result = self.operator_identity_authority.complete_operator_login(
                     challenge_handle, root_signature, device_signature,
                     self.token_key, ttl_seconds=900,
+                    device_owner_binding=lambda subject, public_key: (
+                        self.device_authority.bind_active_key_to_operator(
+                            public_key, owner_subject=subject,
+                        )
+                    ),
                 )
             except (binascii.Error, ValueError):
                 raise ApiError(400, "INVALID_OPERATOR_LOGIN") from None
