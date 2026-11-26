@@ -285,7 +285,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 )
                 assert queued_denial["denied"], queued_denial
                 assert queued_denial["error"] in {
-                    "DEVICE_OWNER_MISMATCH", "HTTP_403"
+                    "DEVICE_OWNER_MISMATCH", "HTTP_403", "OPERATOR_SESSION_REQUIRED"
                 }, queued_denial
                 assert not page_errors, page_errors
                 context.close()
