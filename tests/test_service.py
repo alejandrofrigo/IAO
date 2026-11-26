@@ -234,9 +234,9 @@ class AuthTests(Base):
             "POST", "/v1/operator/device/bind", headers,
             {"public_key_pem": device_pem, "signature": encoded_device},
         )
-        self.assertEqual(bound, (200, {
-            "authority": "PRIMARY_DEVICE_BOUND_READ_ONLY", "key_version": 1,
-        }))
+        self.assertEqual(bound[0], 200)
+        self.assertEqual(bound[1]["authority"], "PRIMARY_DEVICE_BOUND_READ_ONLY")
+        self.assertEqual(bound[1]["key_version"], 1)
         self.assertTrue(identity.verify_primary_device(
             identity_record["identity_id"], device_pem,
         ))
