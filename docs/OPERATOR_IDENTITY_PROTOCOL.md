@@ -8,7 +8,8 @@ P-256 root, domain-separated signature verification, root-key rotation,
 revocation, SQLite persistence and restrictive filesystem permissions are
 covered by `tests/test_operator_identity.py`. Bootstrap is disabled unless
 an explicit future expiry timestamp is configured; missing, malformed or
-expired bootstrap windows fail closed. It also supports a root-signed,
+expired bootstrap windows fail closed, with expiry rechecked after acquiring
+the SQLite write transaction to prevent a lock-wait race. It also supports a root-signed,
 canonical device-binding payload and a persistent single-primary-device
 binding. A binding is invalidated when the root key version changes and must
 be explicitly re-authorized by the new root key version. Root revocation
