@@ -149,7 +149,7 @@ async def discover_peers(
                                 discovered[record["peer_id"]] = record
                     await trio.sleep(0.2)
 
-    return {
+    result = {
         "status": "DISCOVERY_COMPLETED" if connected else "BOOTSTRAP_UNAVAILABLE",
         "mode": "CLIENT",
         "connected_bootstrappers": connected,
@@ -159,6 +159,10 @@ async def discover_peers(
         "capabilities_granted": [],
         "remote_code_executed": False,
     }
+    result["persisted_new_peers"] = persist_discovered_peers(
+        result["peers"], state_dir=state
+    )
+    return result
 
 
 def persist_discovered_peers(peers: Any, *, state_dir: str | Path | None = None) -> int:
