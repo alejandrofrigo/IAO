@@ -158,6 +158,29 @@
       const prepared = await window.IAODeviceAuthority.prepareRecoveryIdentity();
       return prepared.publicKeyPem;
     });
+    const reconciliation = await request("/v1/operator/recovery/status", "POST", {
+      new_root_public_key_pem: stored.recoveryPendingPublicKeyPem,
+      new_device_public_key_pem: devicePublicKeyPem
+    });
+    if (reconciliation.committed === true) {
+      await window.IAODeviceAuthority.activateRecoveryIdentity();
+      await writeIdentity({
+        privateKey: stored.recoveryPendingPrivateKey,
+        publicKeyPem: stored.recoveryPendingPublicKeyPem,
+        identityId: stored.identityId || null,
+        keyVersion: reconciliation.key_version,
+        createdAt: Date.now(),
+        bootstrapPending: false
+      });
+      return {
+        authority: "OPERATOR_RECOVERED_READ_ONLY",
+        key_version: reconciliation.key_version,
+        device_replaced: true,
+        recovery_code_rotated: true,
+        recoveryCode: newRecoveryCode,
+        reconciled: true
+      };
+    }
     const challenge = await request("/v1/operator/recovery/challenge", "POST", {
       recovery_code: recoveryCode,
       new_root_public_key_pem: stored.recoveryPendingPublicKeyPem,
