@@ -36,7 +36,9 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "degraded"
-    assert body["production_gates"]["device_bound_command_authority"] == "not_integrated"
+    assert body["production_gates"]["device_identity_verification"] == "integrated_read_only"
+    assert body["production_gates"]["privileged_device_commands"] == "disabled"
+    assert body["production_gates"]["identity_provider"] == "dev_hmac_not_oidc"
     assert body["production_gates"]["independent_federation"] == "not_verified"
     assert body["production_gates"]["model_provider"] == "not_configured"
 
