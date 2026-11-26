@@ -1,5 +1,7 @@
 """Framework-agnostic API service. handle(method, path, headers, body) -> (status, payload).
 The same logic can be mounted under FastAPI later; the stdlib server in omega/server.py runs it today."""
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -20,6 +22,7 @@ from omega.audit import canonical_json
 from omega.auth import Principal, issue_token, verify_token
 from omega.control import transition
 from omega.device_authority import DeviceAuthority, DeviceAuthorityError
+from omega.operator_identity import OperatorIdentityAuthority, OperatorIdentityError
 from omega.policy import authorize
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
@@ -41,9 +44,11 @@ def _digest(obj: Any) -> str:
 class OmegaService:
     def __init__(self, store: Store, registry: ToolRegistry, token_key: str, *, rate_limit_per_min: int = 120,
                  daily_task_quota: int = 1000, task_ttl_seconds: int = 300, model_adapter: Any = None,
-                 clock: Any = time.time, device_authority: DeviceAuthority | None = None) -> None:
+                 clock: Any = time.time, device_authority: DeviceAuthority | None = None,
+                 operator_identity_authority: OperatorIdentityAuthority | None = None) -> None:
         self.store, self.registry, self.token_key = store, registry, token_key
         self.device_authority = device_authority
+        self.operator_identity_authority = operator_identity_authority
         self.rate, self.quota, self.ttl, self.model, self.clock = rate_limit_per_min, daily_task_quota, task_ttl_seconds, model_adapter, clock
 
         self._hits: dict[str, deque[float]] = defaultdict(deque)
@@ -246,6 +251,76 @@ class OmegaService:
                 expires_in=challenge["expires_in"],
             )
             return 200, challenge
+
+        if method == "POST" and p == "/v1/operator/session/challenge":
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+            try:
+                challenge = self.operator_identity_authority.create_session_challenge(
+                    pr.subject
+                )
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_session", "OPERATOR_SESSION_CHALLENGE_ISSUED",
+                "root_association", key_version=challenge["key_version"],
+                expires_at=challenge["expires_at"],
+            )
+            return 200, challenge
+
+        if method == "POST" and p == "/v1/operator/session/bind":
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+            data = self._json(body)
+            encoded = data.get("signature")
+            if (
+                not isinstance(encoded, str) or not 80 <= len(encoded) <= 120
+                or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded)
+                or not isinstance(data.get("challenge"), str)
+            ):
+                raise ApiError(400, "INVALID_SESSION_BINDING")
+            try:
+                signature = base64.b64decode(
+                    encoded + "=" * (-len(encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                result = self.operator_identity_authority.bind_authenticated_session(
+                    data["challenge"], pr.subject, signature
+                )
+            except (binascii.Error, ValueError):
+                raise ApiError(400, "INVALID_SESSION_BINDING") from None
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_session", "OPERATOR_SESSION_BOUND",
+                "root_association", decision="ALLOW",
+                key_version=result["key_version"],
+            )
+            return 200, {
+                "associated": True,
+                "authority": "IDENTITY_BOUND_READ_ONLY",
+                "key_version": result["key_version"],
+            }
+
+        if method == "GET" and p == "/v1/operator/session/status":
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            if pr.subject.startswith("guest:"):
+                return 200, {"associated": False, "authority": "GUEST_READ_ONLY"}
+            try:
+                associated = self.operator_identity_authority.verify_authenticated_session(
+                    pr.subject
+                )
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            return 200, {
+                "associated": associated,
+                "authority": "IDENTITY_BOUND_READ_ONLY" if associated else "UNBOUND_READ_ONLY",
+            }
 
         if method == "GET" and p == "/v1/me":
             return 200, {"subject": pr.subject, "scopes": sorted(pr.scopes)}
