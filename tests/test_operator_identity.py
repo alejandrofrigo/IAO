@@ -62,8 +62,12 @@ def test_only_one_active_root_and_signature_is_domain_separated(tmp_path):
     _, other_public = keypair()
     authority = OperatorIdentityAuthority(tmp_path / "identity.sqlite3", code)
     enrolled = authority.bootstrap(code, public)
+    second_code = "another-bootstrap-" + "z" * 40
+    second_authority = OperatorIdentityAuthority(
+        tmp_path / "identity.sqlite3", second_code
+    )
     with pytest.raises(OperatorIdentityError, match="OPERATOR_ROOT_ALREADY_ENROLLED"):
-        authority.bootstrap("another-bootstrap-" + "z" * 40, other_public)
+        second_authority.bootstrap(second_code, other_public)
     with pytest.raises(OperatorIdentityError, match="INVALID_ROOT_SIGNATURE"):
         authority.verify_root_signature(
             enrolled["identity_id"], b"probe", sign(private, b"other"),
