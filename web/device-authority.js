@@ -205,11 +205,18 @@
     await dbPut({
       deviceId: identity.deviceId,
       privateKey: identity.privateKey,
+      publicKeyPem: identity.publicKeyPem,
       algorithm: result.algorithm,
       enrolledAt: Date.now()
     });
 
     return { algorithm: result.algorithm };
+  }
+
+  async function publicKeyPem() {
+    const identity = await dbGet();
+    if (!identity || typeof identity.publicKeyPem !== "string") throw new Error("DEVICE_NOT_ENROLLED");
+    return identity.publicKeyPem;
   }
 
   async function signedTaskHeaders(payload) {
@@ -438,6 +445,7 @@
   }
 
   window.IAODeviceAuthority = Object.freeze({
+    publicKeyPem,
     signedStatus,
     signedTaskHeaders,
     submitQueuedTask
