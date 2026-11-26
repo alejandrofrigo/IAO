@@ -165,7 +165,7 @@ class PolicyToolTests(Base):
         raw_body = json.dumps(queued_retry).encode()
         timestamp = int(time.time())
         digest = hashlib.sha256(raw_body).hexdigest()
-        signed = "\\n".join([
+        signed = "\n".join([
             "POST", "/v1/tasks", str(timestamp), challenge["nonce"], digest,
         ]).encode()
         signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
