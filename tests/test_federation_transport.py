@@ -23,9 +23,10 @@ class FakeResponse:
 class FakeConnection:
     response = FakeResponse()
 
-    def __init__(self, hostname, address, *, timeout, context):
+    def __init__(self, hostname, address, *, port=443, timeout, context):
         self.hostname = hostname
         self.address = address
+        self.port = port
         self.timeout = timeout
         self.context = context
         self.request_args = None
