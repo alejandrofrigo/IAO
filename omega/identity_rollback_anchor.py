@@ -1,9 +1,8 @@
-"""Authenticated monotonic anchor for operator-identity backup rollback detection.
+"""Authenticated monotonic anchor for operator-identity rollback enforcement.
 
-The anchor and its HMAC key must live outside both restorable SQLite databases
-and outside every backup set. This primitive is deliberately not wired into
-request authorization yet: callers must coordinate every identity mutation
-with anchor advancement before claiming rollback enforcement.
+The anchor and its independent HMAC key live outside both restorable SQLite
+databases and all database backup sets. Protected API operations are serialized
+behind a durable pending marker and advance the anchor after coherent changes.
 """
 from __future__ import annotations
 

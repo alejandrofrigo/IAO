@@ -41,8 +41,9 @@ either anchor file is missing, if a prior identity exists without an anchor, or
 if the stored state does not match, startup fails closed. It never silently
 reinitializes an existing installation.
 
-Every protected API request is serialized through a durable write-ahead
-pending marker. The marker is written and fsynced before the route runs. After
+Every operator/device API request, every request authenticated by the operator
+root, and every queued task submission is serialized through a durable
+write-ahead pending marker. The marker is written and fsynced before the route runs. After
 the route, the paired databases are re-read; if their state changed, the
 sequence advances exactly once before the marker is removed. An operation
 error is propagated only after a coherent partial state has been anchored.

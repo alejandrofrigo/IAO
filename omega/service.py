@@ -88,10 +88,30 @@ class OmegaService:
                 raise ApiError(413, "PAYLOAD_TOO_LARGE")
             normalized_method = method.upper()
             route_path = urlsplit(path).path.rstrip("/") or "/"
-            anchor_exempt = route_path in {
-                "/health/live", "/health/ready", "/v1/public/session",
-            }
-            if self.identity_rollback_anchor is not None and not anchor_exempt:
+            anchor_required = (
+                route_path == "/v1/operator"
+                or route_path.startswith(("/v1/operator/", "/v1/device/"))
+            )
+            if not anchor_required:
+                authorization = headers.get("authorization", "")
+                if authorization.startswith("Bearer "):
+                    principal = verify_token(
+                        self.token_key, authorization[7:], self.clock(),
+                    )
+                    anchor_required = bool(
+                        principal is not None
+                        and principal.subject.startswith("operator:")
+                    )
+            if route_path == "/v1/tasks" and not anchor_required:
+                try:
+                    request_data = json.loads(body or b"{}")
+                except (ValueError, UnicodeDecodeError):
+                    request_data = {}
+                anchor_required = (
+                    isinstance(request_data, dict)
+                    and request_data.get("execution_mode") == "queued"
+                )
+            if self.identity_rollback_anchor is not None and anchor_required:
                 if self.identity_state_supplier is None:
                     raise ApiError(503, "IDENTITY_ROLLBACK_ANCHOR_UNAVAILABLE")
                 status, payload = self.identity_rollback_anchor.execute(
