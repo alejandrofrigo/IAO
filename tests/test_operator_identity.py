@@ -344,10 +344,22 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
     assert not authority.verify_authenticated_session("verified-subject-A", token_b)
     assert not authority.verify_authenticated_session("verified-subject-B", token_a)
 
+    refreshed = authority.create_session_challenge("verified-subject-A", token_b)
+    refreshed_payload = base64.urlsafe_b64decode(
+        refreshed["signing_payload"]
+        + "=" * (-len(refreshed["signing_payload"]) % 4)
+    )
+    authority.bind_authenticated_session(
+        refreshed["challenge"], "verified-subject-A", token_b,
+        sign(root_private, refreshed_payload),
+    )
+    assert authority.verify_authenticated_session("verified-subject-A", token_b)
+    assert not authority.verify_authenticated_session("verified-subject-A", token_a)
+
     restarted = OperatorIdentityAuthority(
         db, subject_digest_key="operator-session-test-key-" + "a" * 40
     )
-    assert restarted.verify_authenticated_session("verified-subject-A", token_a)
+    assert restarted.verify_authenticated_session("verified-subject-A", token_b)
     with pytest.raises(OperatorIdentityError, match="SESSION_CHALLENGE_REPLAYED"):
         restarted.bind_authenticated_session(
             challenge["challenge"], "verified-subject-A", token_a, signature
