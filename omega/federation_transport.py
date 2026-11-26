@@ -82,12 +82,26 @@ def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
         or any(ord(ch) < 33 or ord(ch) == 127 for ch in url)
     ):
         raise FederationTransportError("INVALID_ENDPOINT")
-    if parsed.scheme == "https" and port in (None, 443):
+    if parsed.scheme == "https":
+        tunnel_hosts = {"bore.pub", "loca.lt"}
+        tunnel_suffixes = (
+            ".ngrok-free.app", ".ngrok.io",
+            ".trycloudflare.com", ".loca.lt",
+        )
+        normalized_host = host.lower().rstrip(".")
+        is_tunnel = (
+            normalized_host in tunnel_hosts
+            or any(normalized_host.endswith(suffix) for suffix in tunnel_suffixes)
+        )
+        if port not in (None, 443) and not (
+            os.environ.get("IAO_TLS_CA_FILE") or is_tunnel
+        ):
+            raise FederationTransportError("INVALID_ENDPOINT")
         try:
             ascii_host = host.encode("idna").decode("ascii")
         except UnicodeError as exc:
             raise FederationTransportError("INVALID_ENDPOINT") from exc
-        return "https", ascii_host, 443, parsed.path, ascii_host
+        return "https", ascii_host, port or 443, parsed.path, ascii_host
     if parsed.scheme == "http" and port is not None:
         try:
             address = ipaddress.ip_address(host)
