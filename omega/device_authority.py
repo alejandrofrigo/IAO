@@ -141,7 +141,7 @@ class DeviceAuthority:
             raise DeviceAuthorityError("INVALID_DEVICE_ID")
         nonce = secrets.token_hex(32)
         now = time.time()
-        with self.lock, self._connect() as db:
+        with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT active FROM devices WHERE device_id=?", (device_id,)
@@ -198,7 +198,7 @@ class DeviceAuthority:
             ["POST", "/v1/device/command", str(timestamp), nonce, digest]
         ).encode("utf-8")
 
-        with self.lock, self._connect() as db:
+        with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 """
