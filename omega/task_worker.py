@@ -36,9 +36,11 @@ class TaskWorker:
         *,
         lease_seconds: int = 60,
         poll_seconds: float = 1.0,
+        operator_identity_authority: Any = None,
     ) -> None:
         self.store = store
         self.registry = registry
+        self.operator_identity_authority = operator_identity_authority
         self.worker_id = worker_id or ("worker-" + uuid.uuid4().hex)
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
@@ -113,6 +115,34 @@ class TaskWorker:
                 return self._finish(
                     task_id, owner, "FAILED",
                     {"decision": "ALLOW", "error": "INVALID_INPUT", "verification": "FAIL"},
+                )
+
+            # Revalidate revocation, root-key version, exact bearer-session
+            # digest and primary-device binding immediately before tool execution.
+            # The bearer token itself is never persisted in the task intent.
+            session_digest = intent.get("operator_session_digest")
+            device_id = intent.get("operator_device_id")
+            if (
+                self.operator_identity_authority is None
+                or not isinstance(session_digest, str)
+                or not isinstance(device_id, str)
+            ):
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_UNAVAILABLE"},
+                )
+            try:
+                self.operator_identity_authority.verify_primary_device_for_session_digest(
+                    owner, session_digest, device_id,
+                )
+            except Exception:
+                self.store.audit(
+                    owner, "TASK_WORKER_OPERATOR_AUTHORITY_DENIED", task_id,
+                    decision="FAIL_CLOSED",
+                )
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_REVOKED"},
                 )
 
             started = datetime.now(timezone.utc).isoformat()
@@ -238,6 +268,7 @@ def main() -> None:
         worker_id=os.environ.get("IAO_WORKER_ID") or None,
         lease_seconds=int(os.environ.get("IAO_WORKER_LEASE_SECONDS", "60")),
         poll_seconds=float(os.environ.get("IAO_WORKER_POLL_SECONDS", "1")),
+        operator_identity_authority=service.operator_identity_authority,
     )
     def request_stop(*_: object) -> None:
         worker.stop()
