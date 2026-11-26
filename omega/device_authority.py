@@ -68,6 +68,7 @@ class DeviceAuthority:
                 CREATE TABLE IF NOT EXISTS devices (
                     device_id TEXT PRIMARY KEY,
                     public_key_pem TEXT NOT NULL,
+                    owner_subject TEXT,
                     active INTEGER NOT NULL CHECK(active IN (0,1)),
                     created_at REAL NOT NULL
                 );
@@ -90,6 +91,10 @@ class DeviceAuthority:
                     WHERE consumed_at IS NULL;
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(devices)")}
+            if "owner_subject" not in columns:
+                # Legacy devices without an owner binding fail closed.
+                db.execute("ALTER TABLE devices ADD COLUMN owner_subject TEXT")
         os.chmod(self.database, 0o600)
 
     def _connect(self) -> sqlite3.Connection:
@@ -111,13 +116,20 @@ class DeviceAuthority:
     def _code_digest(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    def enroll(self, code: Any, public_key_pem: Any) -> dict[str, str]:
+    def enroll(self, code: Any, public_key_pem: Any, *, owner_subject: str) -> dict[str, str]:
         if not isinstance(self.enrollment_code, str) or len(self.enrollment_code) < 32:
             raise DeviceAuthorityError("DEVICE_ENROLLMENT_DISABLED", 503)
         if not isinstance(code, str) or not hmac.compare_digest(
             self._code_digest(code), self._code_digest(self.enrollment_code)
         ):
             raise DeviceAuthorityError("INVALID_ENROLLMENT_CODE", 403)
+        if (
+            not isinstance(owner_subject, str)
+            or not owner_subject
+            or owner_subject.startswith("guest:")
+            or len(owner_subject) > 256
+        ):
+            raise DeviceAuthorityError("OPERATOR_SESSION_REQUIRED", 403)
         if not isinstance(public_key_pem, str) or len(public_key_pem) > 4096:
             raise DeviceAuthorityError("INVALID_PUBLIC_KEY")
         try:
@@ -152,8 +164,8 @@ class DeviceAuthority:
                     (digest, now),
                 )
                 db.execute(
-                    "INSERT INTO devices(device_id,public_key_pem,active,created_at) VALUES(?,?,1,?)",
-                    (device_id, public_key_pem, now),
+                    "INSERT INTO devices(device_id,public_key_pem,owner_subject,active,created_at) VALUES(?,?,?,1,?)",
+                    (device_id, public_key_pem, owner_subject, now),
                 )
                 db.execute("COMMIT")
             except Exception:
@@ -161,7 +173,7 @@ class DeviceAuthority:
                 raise
         return {"device_id": device_id, "algorithm": "ECDSA-P256-SHA256"}
 
-    def challenge(self, device_id: Any) -> dict[str, str]:
+    def challenge(self, device_id: Any, *, owner_subject: str) -> dict[str, str]:
         if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{64}", device_id):
             raise DeviceAuthorityError("INVALID_DEVICE_ID")
         nonce = secrets.token_hex(32)
@@ -169,11 +181,17 @@ class DeviceAuthority:
         with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT active FROM devices WHERE device_id=?", (device_id,)
+                "SELECT active, owner_subject FROM devices WHERE device_id=?",
+                (device_id,),
             ).fetchone()
             if row is None or row["active"] != 1:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("DEVICE_NOT_FOUND", 404)
+            if not isinstance(owner_subject, str) or not hmac.compare_digest(
+                row["owner_subject"] or "", owner_subject
+            ):
+                db.execute("ROLLBACK")
+                raise DeviceAuthorityError("DEVICE_OWNER_MISMATCH", 403)
             # Bound persistent state even if a caller repeatedly requests
             # challenges without completing the signed proof. BEGIN IMMEDIATE
             # makes the per-device cap atomic across server processes.
@@ -205,6 +223,7 @@ class DeviceAuthority:
         method: str,
         path: str,
         request_digest: str,
+        owner_subject: str,
     ) -> dict[str, str]:
         """Verify a one-time device signature bound to one exact API request.
 
@@ -256,7 +275,7 @@ class DeviceAuthority:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 """
-                SELECT d.public_key_pem, d.active, c.expires_at, c.consumed_at
+                SELECT d.public_key_pem, d.active, d.owner_subject, c.expires_at, c.consumed_at
                 FROM devices d JOIN device_challenges c ON c.device_id=d.device_id
                 WHERE d.device_id=? AND c.nonce=?
                 """,
@@ -265,6 +284,11 @@ class DeviceAuthority:
             if row is None or row["active"] != 1:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("DEVICE_OR_CHALLENGE_NOT_FOUND", 404)
+            if not isinstance(owner_subject, str) or not hmac.compare_digest(
+                row["owner_subject"] or "", owner_subject
+            ):
+                db.execute("ROLLBACK")
+                raise DeviceAuthorityError("DEVICE_OWNER_MISMATCH", 403)
             if row["consumed_at"] is not None or row["expires_at"] < now:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("CHALLENGE_EXPIRED_OR_REPLAYED", 401)
@@ -291,7 +315,7 @@ class DeviceAuthority:
             db.execute("COMMIT")
         return {"authority": "DEVICE_REQUEST_VERIFIED"}
 
-    def verify_status(self, payload: Any) -> dict[str, str]:
+    def verify_status(self, payload: Any, *, owner_subject: str) -> dict[str, str]:
         if not isinstance(payload, dict):
             raise DeviceAuthorityError("INVALID_REQUEST")
         device_id = payload.get("device_id")
@@ -334,7 +358,7 @@ class DeviceAuthority:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 """
-                SELECT d.public_key_pem, d.active, c.expires_at, c.consumed_at
+                SELECT d.public_key_pem, d.active, d.owner_subject, c.expires_at, c.consumed_at
                 FROM devices d JOIN device_challenges c ON c.device_id=d.device_id
                 WHERE d.device_id=? AND c.nonce=?
                 """,
@@ -343,6 +367,11 @@ class DeviceAuthority:
             if row is None or row["active"] != 1:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("DEVICE_OR_CHALLENGE_NOT_FOUND", 404)
+            if not isinstance(owner_subject, str) or not hmac.compare_digest(
+                row["owner_subject"] or "", owner_subject
+            ):
+                db.execute("ROLLBACK")
+                raise DeviceAuthorityError("DEVICE_OWNER_MISMATCH", 403)
             if row["consumed_at"] is not None or row["expires_at"] < now:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("CHALLENGE_EXPIRED_OR_REPLAYED", 401)
