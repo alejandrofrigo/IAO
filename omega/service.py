@@ -26,7 +26,7 @@ from omega.device_authority import DeviceAuthority, DeviceAuthorityError
 from omega.operator_identity import OperatorIdentityAuthority, OperatorIdentityError
 from omega.policy import authorize
 from omega.store import Store
-from omega.tools.registry import ToolRegistry
+from omega.tools.registry import QUEUED_TOOL_ALLOWLIST, ToolRegistry
 
 POLICY_VERSION = "policy-v1:" + hashlib.sha256((Path(__file__).parent / "policy.py").read_bytes()).hexdigest()[:12]
 MAX_BODY = 64 * 1024
@@ -1113,6 +1113,14 @@ class OmegaService:
             result = {
                 "decision": "DENY",
                 "reason": "QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY",
+            }
+            self.store.set_task_state(tid, st, result)
+            return 403, {"task_id": tid, "state": st, **result}
+        if execution_mode == "queued" and cap not in QUEUED_TOOL_ALLOWLIST:
+            to("DENIED", reason="QUEUED_TASK_CAPABILITY_NOT_ALLOWLISTED")
+            result = {
+                "decision": "DENY",
+                "reason": "QUEUED_TASK_CAPABILITY_NOT_ALLOWLISTED",
             }
             self.store.set_task_state(tid, st, result)
             return 403, {"task_id": tid, "state": st, **result}
