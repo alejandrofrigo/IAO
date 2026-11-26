@@ -338,7 +338,7 @@ class QueuedTaskApiTests(Base):
             {"action": "status"}, separators=(",", ":"), ensure_ascii=False
         )
         digest = hashlib.sha256(canonical.encode()).hexdigest()
-        signed = "\\n".join([
+        signed = "\n".join([
             "POST", "/v1/device/command", str(timestamp),
             challenge["nonce"], digest,
         ]).encode()
