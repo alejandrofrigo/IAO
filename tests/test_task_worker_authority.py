@@ -149,6 +149,31 @@ def test_interruption_after_tool_invocation_is_not_replayed(tmp_path, monkeypatc
     finally:
         store.close()
 
+
+def test_worker_rejects_unreviewed_read_only_tool_even_if_persisted():
+    worker, store, calls = _worker(None)
+    intent = json.loads(store.task["intent_json"])
+    intent["allowed_capabilities"] = ["test.remote_read"]
+    intent["authorized_scopes"] = ["test.remote_read"]
+    store.task["intent_json"] = json.dumps(intent)
+    worker.registry.register(ToolSpec(
+        name="test.remote_read",
+        version="1",
+        scope="test.remote_read",
+        effect_class="READ_ONLY",
+        timeout_seconds=2,
+        validate_input=lambda value: value,
+        run=lambda value: calls.append(value) or {"items": []},
+        verify=lambda value: "PASS",
+    ))
+
+    assert worker.run_once() is True
+
+    assert calls == []
+    assert store.executions == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "WORKER_TOOL_NOT_ALLOWLISTED"
+
 def test_worker_fails_closed_when_operator_authority_is_unavailable():
     worker, store, calls = _worker(None)
 
