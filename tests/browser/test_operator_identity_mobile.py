@@ -103,6 +103,20 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 page = context.new_page()
                 page_errors: list[str] = []
                 page.on("pageerror", lambda error: page_errors.append(str(error)))
+                page.add_init_script(
+                    """(() => {
+                      window.__iaoIdbWrites = [];
+                      const originalPut = IDBObjectStore.prototype.put;
+                      IDBObjectStore.prototype.put = function(value, key) {
+                        window.__iaoIdbWrites.push({
+                          database: this.transaction.db.name,
+                          store: this.name,
+                          key: key === undefined ? null : String(key)
+                        });
+                        return originalPut.apply(this, arguments);
+                      };
+                    })();"""
+                )
                 page.goto(web_origin, wait_until="networkidle")
 
                 page.get_by_role("button", name="Entrar al chat").click()
@@ -146,6 +160,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                       db.close();
                       return {
                         databases: databases.map(item => ({name: item.name, version: item.version})),
+                        writes: window.__iaoIdbWrites,
                         stores, keys,
                         present: Boolean(value),
                         keyVersion: value && value.keyVersion,
