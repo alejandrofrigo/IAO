@@ -340,7 +340,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 assert rotated_recovery_code in recovery_output, recovery_output
 
                 recovered_identity = page.evaluate(
-                    """async (oldRootPem, oldDevicePem) => {
+                    """async ({oldRootPem, oldDevicePem}) => {
                       const db = await new Promise((resolve, reject) => {
                         const request = indexedDB.open('iao-operator-root', 1);
                         request.onerror = () => reject(request.error);
@@ -364,8 +364,10 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                         devicePublicKeyPem
                       };
                     }""",
-                    local_identity["publicKeyPem"],
-                    after_reload["devicePublicKeyPem"],
+                    {
+                        "oldRootPem": local_identity["publicKeyPem"],
+                        "oldDevicePem": after_reload["devicePublicKeyPem"],
+                    },
                 )
                 assert recovered_identity["keyVersion"] == 2, recovered_identity
                 assert recovered_identity["rootKeyChanged"], recovered_identity
