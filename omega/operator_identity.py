@@ -277,6 +277,12 @@ class OperatorIdentityAuthority:
                     key_version=?,updated_at=? WHERE identity_id=?""",
                     (new_pem, next_version, now, identity_id),
                 )
+                # A session association is tied to the old root version.
+                # Require a fresh challenge and signature from the new root.
+                db.execute(
+                    "DELETE FROM operator_session_bindings WHERE identity_id=?",
+                    (identity_id,),
+                )
                 db.execute("COMMIT")
             except Exception:
                 db.execute("ROLLBACK")
@@ -410,6 +416,10 @@ class OperatorIdentityAuthority:
                 # is no longer an active authorization and cannot block recovery.
                 db.execute(
                     "DELETE FROM primary_device_bindings WHERE identity_id=?",
+                    (identity_id,),
+                )
+                db.execute(
+                    "DELETE FROM operator_session_bindings WHERE identity_id=?",
                     (identity_id,),
                 )
                 db.execute("COMMIT")
