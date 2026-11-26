@@ -260,6 +260,10 @@ def test_recovery_replaces_only_same_operator_device_and_invalidates_pending_pro
 
 def test_recovery_cannot_replace_an_unrelated_active_device(tmp_path):
     authority, _, device_id = _enrolled_authority(tmp_path)
+    with authority._database() as db:
+        original_public = db.execute(
+            "SELECT public_key_pem FROM devices WHERE device_id=?", (device_id,)
+        ).fetchone()["public_key_pem"]
     new_private = ec.generate_private_key(ec.SECP256R1())
     new_public = new_private.public_key().public_bytes(
         serialization.Encoding.PEM,
@@ -269,4 +273,4 @@ def test_recovery_cannot_replace_an_unrelated_active_device(tmp_path):
         authority.replace_active_device_for_recovery(
             new_public, owner_subject="operator:" + "b" * 32,
         )
-    assert authority.verify_active_public_key(old_public)
+    assert authority.verify_active_public_key(original_public)
