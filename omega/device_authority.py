@@ -10,6 +10,8 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+import stat
 import re
 import secrets
 import sqlite3
@@ -37,7 +39,27 @@ class DeviceAuthorityError(RuntimeError):
 class DeviceAuthority:
     def __init__(self, database: str | Path, enrollment_code: str = "") -> None:
         self.database = Path(database)
-        self.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        parent = self.database.parent
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # The database contains the enrolled device's public identity and
+        # replay-protection state. Refuse path substitution and keep both the
+        # directory and SQLite files private before SQLite opens them.
+        if parent.is_symlink() or self.database.is_symlink():
+            raise RuntimeError("DEVICE_AUTHORITY_SYMLINK_REFUSED")
+        if self.database.exists() and not self.database.is_file():
+            raise RuntimeError("DEVICE_AUTHORITY_PATH_NOT_REGULAR_FILE")
+        os.chmod(parent, 0o700)
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(str(self.database), flags, 0o600)
+        except OSError as exc:
+            raise RuntimeError("DEVICE_AUTHORITY_DATABASE_OPEN_FAILED") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise RuntimeError("DEVICE_AUTHORITY_PATH_NOT_REGULAR_FILE")
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
         self.enrollment_code = enrollment_code
         self.lock = threading.RLock()
         with self._database() as db:
@@ -68,10 +90,7 @@ class DeviceAuthority:
                     WHERE consumed_at IS NULL;
                 """
             )
-        try:
-            self.database.chmod(0o600)
-        except OSError:
-            pass
+        os.chmod(self.database, 0o600)
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.database, timeout=10, isolation_level=None)
