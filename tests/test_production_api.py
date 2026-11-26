@@ -141,7 +141,7 @@ def test_device_enrollment_challenge_signature_and_replay_protection(monkeypatch
     action = "status"
     canonical = json.dumps({"action": action}, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode()).hexdigest()
-    signed_text = "\\n".join(
+    signed_text = "\n".join(
         ["POST", "/v1/device/command", str(timestamp), nonce, digest]
     ).encode()
     signature = private_key.sign(signed_text, ec.ECDSA(hashes.SHA256()))
