@@ -133,7 +133,9 @@ def _enroll_one(fed_node, candidate: dict[str, Any]) -> dict[str, Any]:
     )
     fed_node._validate_peer_contract(contract)
     existing = fed_node.peers.get(expected_id)
-    if existing is not None and not existing.get("revoked"):
+    if existing is not None and existing.get("revoked"):
+        raise ValueError("PEER_REVOKED_LOCALLY")
+    if existing is not None:
         old_pub = existing.get("pub")
         new_pub = __import__("base64").b64decode(contract["pubkey"], validate=True)
         if old_pub != new_pub:
