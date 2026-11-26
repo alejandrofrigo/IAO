@@ -250,6 +250,17 @@ def test_recovery_replaces_only_same_operator_device_and_invalidates_pending_pro
     )
     assert result["device_id"] != enrolled["device_id"]
     assert authority.verify_registered_public_key(new_public, owner_subject=owner)
+    pending_retry = authority.challenge(result["device_id"], owner_subject=owner)
+    retried = authority.replace_active_device_for_recovery(
+        new_public, owner_subject=owner,
+        expected_old_public_key_pem=old_public,
+    )
+    assert retried["device_id"] == result["device_id"]
+    with authority._database() as db:
+        assert db.execute(
+            "SELECT 1 FROM device_challenges WHERE nonce=?",
+            (pending_retry["nonce"],),
+        ).fetchone() is None
     with pytest.raises(DeviceAuthorityError, match="DEVICE_KEY_NOT_ACTIVE"):
         authority.verify_active_public_key(old_public)
     with authority._database() as db:
