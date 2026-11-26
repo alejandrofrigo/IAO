@@ -12,10 +12,52 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="IAO API", version="11.2.0")
 _service = None
+_device_authority = None
 _service_lock = threading.Lock()
+
+_allowed_origins = [
+    item.strip().rstrip("/")
+    for item in os.environ.get(
+        "IAO_CORS_ORIGINS",
+        "https://alejandrofrigo.github.io",
+    ).split(",")
+    if item.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+)
+
+
+def _get_device_authority():
+    global _device_authority
+    if _device_authority is not None:
+        return _device_authority
+    with _service_lock:
+        if _device_authority is None:
+            from omega.device_authority import DeviceAuthority
+
+            state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+            _device_authority = DeviceAuthority(
+                state_dir / "device-authority.sqlite3",
+                os.environ.get("IAO_DEVICE_ENROLLMENT_CODE", ""),
+            )
+    return _device_authority
+
+
+async def _device_json(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _get_service():
@@ -68,6 +110,53 @@ def ready():
         "model_provider": "configured" if _get_service().model is not None else "not_configured",
     }
     return JSONResponse(status_code=200, content=payload)
+
+
+@app.post("/v1/device/enroll")
+async def device_enroll(request: Request):
+    from omega.device_authority import DeviceAuthorityError
+
+    payload = await _device_json(request)
+    if payload is None:
+        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
+    try:
+        result = _get_device_authority().enroll(
+            payload.get("code"),
+            payload.get("public_key_pem"),
+        )
+        return JSONResponse(status_code=201, content=result)
+    except DeviceAuthorityError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": exc.code})
+
+
+@app.post("/v1/device/challenge")
+async def device_challenge(request: Request):
+    from omega.device_authority import DeviceAuthorityError
+
+    payload = await _device_json(request)
+    if payload is None:
+        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
+    try:
+        return JSONResponse(
+            status_code=200,
+            content=_get_device_authority().challenge(payload.get("device_id")),
+        )
+    except DeviceAuthorityError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": exc.code})
+
+
+@app.post("/v1/device/command")
+async def device_command(request: Request):
+    from omega.device_authority import DeviceAuthorityError
+
+    payload = await _device_json(request)
+    if payload is None:
+        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST"})
+    try:
+        result = _get_device_authority().verify_status(payload)
+        return JSONResponse(status_code=200, content=result)
+    except DeviceAuthorityError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": exc.code})
 
 
 @app.api_route(
