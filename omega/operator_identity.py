@@ -91,6 +91,7 @@ class OperatorIdentityAuthority:
                     challenge_digest TEXT PRIMARY KEY,
                     identity_id TEXT NOT NULL REFERENCES operator_identities(identity_id),
                     recovery_digest TEXT NOT NULL,
+                    new_recovery_digest TEXT NOT NULL,
                     root_public_key_pem TEXT NOT NULL,
                     device_public_key_pem TEXT NOT NULL,
                     signing_payload BLOB NOT NULL,
@@ -138,6 +139,11 @@ class OperatorIdentityAuthority:
                 );
                 """
             )
+            recovery_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(operator_recovery_challenges)")
+            }
+            if "new_recovery_digest" not in recovery_columns:
+                db.execute("ALTER TABLE operator_recovery_challenges ADD COLUMN new_recovery_digest TEXT")
             identity_columns = {
                 row["name"] for row in db.execute("PRAGMA table_info(operator_identities)")
             }
@@ -259,13 +265,19 @@ class OperatorIdentityAuthority:
 
     def create_operator_recovery_challenge(
         self, recovery_code: Any, new_root_public_key_pem: Any,
-        new_device_public_key_pem: Any, *, ttl_seconds: int = 90,
+        new_device_public_key_pem: Any, new_recovery_code: Any, *, ttl_seconds: int = 90,
     ) -> dict[str, Any]:
         """Authorize a short-lived replacement challenge with the offline recovery secret."""
         if not isinstance(recovery_code, str) or not 32 <= len(recovery_code) <= 512:
             raise OperatorIdentityError("INVALID_OPERATOR_RECOVERY_CODE", 403)
         if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 30 <= ttl_seconds <= 90:
             raise OperatorIdentityError("INVALID_OPERATOR_RECOVERY_TTL")
+        if (
+            not isinstance(new_recovery_code, str) or not 32 <= len(new_recovery_code) <= 512
+            or hmac.compare_digest(self._digest(new_recovery_code), self._digest(recovery_code))
+        ):
+            raise OperatorIdentityError("INVALID_NEW_OPERATOR_RECOVERY_CODE")
+        new_recovery_digest = self._digest(new_recovery_code)
         _, root_pem = self._public_key(new_root_public_key_pem)
         _, device_pem = self._public_key(new_device_public_key_pem)
         recovery_digest = self._digest(recovery_code)
@@ -313,6 +325,7 @@ class OperatorIdentityAuthority:
                     "expires_at": int(expires_at),
                     "identity_tag": hashlib.sha256(row["identity_id"].encode("ascii")).hexdigest(),
                     "next_key_version": row["key_version"] + 1,
+                    "new_recovery_code_sha256": new_recovery_digest,
                     "nonce": nonce,
                     "protocol": "IAO-OPERATOR-RECOVERY-V1",
                     "purpose": "REPLACE_ROOT_AND_PRIMARY_DEVICE",
@@ -320,11 +333,11 @@ class OperatorIdentityAuthority:
                 }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
                 db.execute(
                     """INSERT INTO operator_recovery_challenges
-                    (challenge_digest,identity_id,recovery_digest,root_public_key_pem,
-                     device_public_key_pem,signing_payload,expires_at)
-                    VALUES(?,?,?,?,?,?,?)""",
+                    (challenge_digest,identity_id,recovery_digest,new_recovery_digest,
+                     root_public_key_pem,device_public_key_pem,signing_payload,expires_at)
+                    VALUES(?,?,?,?,?,?,?,?)""",
                     (self._digest(handle), row["identity_id"], recovery_digest,
-                     root_pem, device_pem, payload, expires_at),
+                     new_recovery_digest, root_pem, device_pem, payload, expires_at),
                 )
                 db.execute("COMMIT")
             except Exception:
@@ -406,9 +419,9 @@ class OperatorIdentityAuthority:
                 device_replacement(row["device_public_key_pem"], subject)
                 changed = db.execute(
                     """UPDATE operator_identities SET root_public_key_pem=?,
-                    key_version=?,status='ACTIVE',revoked_at=NULL,recovery_code_digest=NULL,
+                    key_version=?,status='ACTIVE',revoked_at=NULL,recovery_code_digest=?,
                     updated_at=? WHERE identity_id=? AND key_version=?""",
-                    (row["root_public_key_pem"], next_version, now,
+                    (row["root_public_key_pem"], next_version, row["new_recovery_digest"], now,
                      row["identity_id"], row["old_key_version"]),
                 ).rowcount
                 if changed != 1:
@@ -455,6 +468,7 @@ class OperatorIdentityAuthority:
             "authority": "OPERATOR_RECOVERED_READ_ONLY",
             "key_version": next_version,
             "device_replaced": True,
+            "recovery_code_rotated": True,
         }
 
     @staticmethod
