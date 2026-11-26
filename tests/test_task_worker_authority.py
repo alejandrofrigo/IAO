@@ -77,6 +77,78 @@ def _worker(authority):
     ), store, calls
 
 
+
+def test_interruption_after_tool_invocation_is_not_replayed(tmp_path, monkeypatch):
+    from omega.store import Store
+
+    class SimulatedProcessInterruption(BaseException):
+        pass
+
+    store = Store(tmp_path / "worker-interruption.db", b"worker-test-audit-key-0123456789")
+    calls = []
+    task_id = "interrupted-task"
+    owner = "operator:test-owner"
+    intent = {
+        "allowed_capabilities": ["knowledge.search"],
+        "authorized_scopes": ["knowledge.search"],
+        "input": {"query": "fault injection"},
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        "policy_version": POLICY_VERSION,
+        "budget": {"timeout_seconds": 2},
+        "operator_session_digest": "a" * 64,
+        "operator_device_id": "b" * 64,
+    }
+    task, created = store.create_task(task_id, owner, intent, None)
+    assert created is True
+    store.set_task_state(task["id"], "AUTHORIZED")
+    assert store.queue_task(task["id"]) is True
+
+    def run_tool(_payload):
+        calls.append("invoked")
+        raise SimulatedProcessInterruption()
+
+    registry = ToolRegistry()
+    registry.register(ToolSpec(
+        name="knowledge.search",
+        version="1",
+        scope="knowledge.search",
+        effect_class="READ_ONLY",
+        timeout_seconds=2,
+        validate_input=lambda value: value,
+        run=run_tool,
+        verify=lambda value: "PASS",
+    ))
+
+    class ActiveAuthority:
+        def verify_primary_device_for_session_digest(self, *_args):
+            return True
+
+    worker = TaskWorker(
+        store, registry, worker_id="fault-injection-worker",
+        operator_identity_authority=ActiveAuthority(),
+    )
+    try:
+        with pytest.raises(SimulatedProcessInterruption):
+            worker.run_once()
+
+        assert calls == ["invoked"]
+        running = store.get_task(task_id, owner)
+        assert running["state"] == "RUNNING"
+
+        recovered = store.recover_interrupted_tasks(
+            now="2999-01-01T00:00:00+00:00"
+        )
+        assert recovered == [{"id": task_id, "owner": owner}]
+        failed = store.get_task(task_id, owner)
+        assert failed["state"] == "FAILED"
+        assert failed["result_json"] == (
+            '{"decision": "INTERRUPTED", "error": "PROCESS_INTERRUPTED"}'
+        )
+        assert store.claim_next_task("replacement-worker") is None
+        assert calls == ["invoked"]
+    finally:
+        store.close()
+
 def test_worker_fails_closed_when_operator_authority_is_unavailable():
     worker, store, calls = _worker(None)
 
