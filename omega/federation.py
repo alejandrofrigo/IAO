@@ -628,6 +628,8 @@ class Node:
             return {"ok": False, "error": "BAD_RESPONSE"}
         if not _verify(c["pub"], resp):
             return {"ok": False, "error": "BAD_RESPONSE_SIGNATURE"}
+        if "result" not in resp:
+            return {"ok": False, "error": "BAD_RESPONSE"}
         if (
             resp.get("to") != self.node_id
             or resp.get("from") != c["peer_id"]
