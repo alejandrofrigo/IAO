@@ -2,10 +2,18 @@
 
 ## Status
 
-Design contract only. This document does not claim that durable operator
-identity, account recovery, device revocation, or privileged command authority
-is implemented. The current public-session subject remains an expiring guest.
-The current device proof proves possession of one enrolled device key only.
+The durable root-key registry has a first isolated implementation in
+`omega/operator_identity.py`: one-time bootstrap consumption, a single active
+P-256 root, domain-separated signature verification, root-key rotation,
+revocation, SQLite persistence and restrictive filesystem permissions are
+covered by `tests/test_operator_identity.py`.
+
+This is a foundation only, not an end-to-end operator identity system. It is
+not yet wired to API sessions, device enrollment/binding, task authorization,
+recovery, or the browser key lifecycle. The current public-session subject
+remains an expiring guest. The current device proof proves possession of one
+enrolled device key only. No durable operator identity or command authority
+may be claimed until those integrations and their end-to-end tests pass.
 
 ## Security objectives
 
