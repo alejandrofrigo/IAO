@@ -66,7 +66,6 @@ def test_registry_rejects_symlink(tmp_path):
     target.write_text('{"schema":1,"candidates":{}}')
     (tmp_path / "registry.json").symlink_to(target)
     import pytest
-    import pytest
     with pytest.raises(RuntimeError, match="SYMLINK_REFUSED"):
         ExternalNetwork(tmp_path, []).run_cycle()
 

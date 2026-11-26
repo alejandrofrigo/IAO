@@ -182,14 +182,12 @@ class GitHubPublicDiscovery:
         self.state_dir = state_dir
 
     def discover(self) -> list[dict[str, Any]]:
-        from omega.federation_discovery import discover_once
-        log_path = self.state_dir / "federation-discovery.jsonl"
-        offset = log_path.stat().st_size if log_path.exists() else 0
-        discover_once(self.state_dir)
-        if not log_path.exists():
+        # Reuse the independent worker's evidence log; avoid duplicate GitHub API searches.
+        log_path = self.state_dir.parent / "federation-discovery.jsonl"
+        if not log_path.is_file() or log_path.is_symlink():
             return []
         with log_path.open("rb") as stream:
-            stream.seek(offset)
+            stream.seek(max(0, log_path.stat().st_size - 2_000_000))
             lines = stream.read(2_000_000).splitlines()
         records = []
         for line in lines:
