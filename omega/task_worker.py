@@ -270,6 +270,15 @@ def main() -> None:
         poll_seconds=float(os.environ.get("IAO_WORKER_POLL_SECONDS", "1")),
         operator_identity_authority=service.operator_identity_authority,
     )
+    # Startup reconciliation is fail-closed: expired RUNNING and VERIFYING
+    # leases are marked FAILED and are never automatically re-enqueued.
+    recovered = service.store.recover_interrupted_tasks()
+    for item in recovered:
+        service.store.audit(
+            item["owner"], "TASK_WORKER_INTERRUPTED_RECOVERED", item["id"],
+            decision="FAIL_CLOSED",
+        )
+
     def request_stop(*_: object) -> None:
         worker.stop()
     signal.signal(signal.SIGTERM, request_stop)
