@@ -333,11 +333,16 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
         authority.bind_authenticated_session(
             challenge["challenge"], "verified-subject-B", token_a, signature
         )
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_SESSION_MISMATCH"):
+        authority.bind_authenticated_session(
+            challenge["challenge"], "verified-subject-A", token_b, signature
+        )
     assert authority.bind_authenticated_session(
-        challenge["challenge"], "verified-subject-A", signature
+        challenge["challenge"], "verified-subject-A", token_a, signature
     ) == {"key_version": 1}
-    assert authority.verify_authenticated_session("verified-subject-A")
-    assert not authority.verify_authenticated_session("verified-subject-B")
+    assert authority.verify_authenticated_session("verified-subject-A", token_a)
+    assert not authority.verify_authenticated_session("verified-subject-A", token_b)
+    assert not authority.verify_authenticated_session("verified-subject-B", token_a)
 
     restarted = OperatorIdentityAuthority(
         db, subject_digest_key="operator-session-test-key-" + "a" * 40
