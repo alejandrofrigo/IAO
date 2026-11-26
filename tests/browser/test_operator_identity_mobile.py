@@ -64,6 +64,8 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
         (state / "state").mkdir()
         (state / "corpus").mkdir()
         bootstrap_code = "browser-e2e-bootstrap-" + "b" * 48
+        initial_recovery_code = "browser-e2e-recovery-" + "r" * 48
+        rotated_recovery_code = "browser-e2e-recovery-rotated-" + "n" * 48
         environment = os.environ.copy()
         environment.update({
             "OMEGA_DEV_TOKEN_KEY": "browser-e2e-token-" + "t" * 48,
@@ -133,7 +135,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 page.get_by_placeholder("Código de bootstrap fuera de banda").fill(bootstrap_code)
                 page.get_by_placeholder(
                     "Crear código de recuperación offline (mínimo 32 caracteres)"
-                ).fill("browser-e2e-recovery-" + "r" * 48)
+                ).fill(initial_recovery_code)
                 panel.get_by_role("button", name="Registrar identidad raíz").click()
                 page.wait_for_function(
                     """() => {
@@ -176,7 +178,8 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                         present: Boolean(value),
                         keyVersion: value && value.keyVersion,
                         privateKey: Boolean(value && value.privateKey),
-                        extractable: value && value.privateKey ? value.privateKey.extractable : null
+                        extractable: value && value.privateKey ? value.privateKey.extractable : null,
+                        publicKeyPem: value && value.publicKeyPem
                       };
                     }"""
                 )
@@ -256,6 +259,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                           ? root.privateKey.extractable : null,
                         deviceKeyPresent: typeof devicePublicKey === 'string' &&
                           devicePublicKey.includes('BEGIN PUBLIC KEY'),
+                        devicePublicKeyPem: devicePublicKey,
                         sessionStatus: response.status,
                         session: await response.json()
                       };
@@ -287,6 +291,110 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 assert queued_denial["error"] in {
                     "DEVICE_OWNER_MISMATCH", "HTTP_403", "OPERATOR_SESSION_REQUIRED"
                 }, queued_denial
+
+                # Simulate a lost HTTP response after the server commits recovery.
+                # Retry must reconcile durable state instead of replaying the challenge.
+                page.get_by_placeholder("Código de recuperación offline actual").fill(
+                    initial_recovery_code
+                )
+                page.get_by_placeholder(
+                    "Nuevo código de recuperación offline (mínimo 32 caracteres)"
+                ).fill(rotated_recovery_code)
+                recovery_button = panel.get_by_role(
+                    "button", name="Recuperar identidad y sustituir dispositivo"
+                )
+                recovery_path = "**/v1/operator/recovery/complete"
+                recovery_intercepted = {"count": 0}
+
+                def drop_committed_recovery_response(route):
+                    response = route.fetch()
+                    assert response.status == 200, response.text()
+                    recovery_intercepted["count"] += 1
+                    route.abort("failed")
+
+                page.route(recovery_path, drop_committed_recovery_response)
+                recovery_button.click()
+                page.wait_for_function(
+                    """() => {
+                      const output = document.querySelector('#iao-operator-identity-panel pre');
+                      return output && output.textContent.startsWith('ERROR:');
+                    }""",
+                    timeout=20000,
+                )
+                assert recovery_intercepted["count"] == 1
+                page.unroute(recovery_path, drop_committed_recovery_response)
+
+                # Pending keys and the new recovery code survive the lost response.
+                # The second attempt must complete through /recovery/status.
+                recovery_button.click()
+                page.wait_for_function(
+                    """() => {
+                      const output = document.querySelector('#iao-operator-identity-panel pre');
+                      return output && output.textContent.includes('IDENTIDAD RECUPERADA');
+                    }""",
+                    timeout=20000,
+                )
+                recovery_output = panel.locator("pre").inner_text()
+                assert "Versión de clave: 2" in recovery_output, recovery_output
+                assert rotated_recovery_code in recovery_output, recovery_output
+
+                recovered_identity = page.evaluate(
+                    """async (oldRootPem, oldDevicePem) => {
+                      const db = await new Promise((resolve, reject) => {
+                        const request = indexedDB.open('iao-operator-root', 1);
+                        request.onerror = () => reject(request.error);
+                        request.onsuccess = () => resolve(request.result);
+                      });
+                      const root = await new Promise((resolve, reject) => {
+                        const request = db.transaction('identity', 'readonly')
+                          .objectStore('identity').get('root');
+                        request.onerror = () => reject(request.error);
+                        request.onsuccess = () => resolve(request.result || null);
+                      });
+                      db.close();
+                      const devicePublicKeyPem = await window.IAODeviceAuthority.publicKeyPem();
+                      return {
+                        keyVersion: root && root.keyVersion,
+                        rootKeyChanged: Boolean(root && root.publicKeyPem &&
+                          root.publicKeyPem !== oldRootPem),
+                        rootPrivateKeyExtractable: root && root.privateKey
+                          ? root.privateKey.extractable : null,
+                        deviceKeyChanged: devicePublicKeyPem !== oldDevicePem
+                      };
+                    }""",
+                    local_identity["publicKeyPem"],
+                    after_reload["devicePublicKeyPem"],
+                )
+                assert recovered_identity["keyVersion"] == 2, recovered_identity
+                assert recovered_identity["rootKeyChanged"], recovered_identity
+                assert recovered_identity["rootPrivateKeyExtractable"] is False, recovered_identity
+                assert recovered_identity["deviceKeyChanged"], recovered_identity
+
+                # The recovered root/device pair authenticates, still read-only.
+                panel.get_by_role("button", name="Iniciar sesión de operador").click()
+                page.wait_for_function(
+                    """() => {
+                      const output = document.querySelector('#iao-operator-identity-panel pre');
+                      return output && (
+                        output.textContent.includes('SESIÓN DE OPERADOR AUTENTICADA') ||
+                        output.textContent.startsWith('ERROR:')
+                      );
+                    }""",
+                    timeout=20000,
+                )
+                assert "SESIÓN DE OPERADOR AUTENTICADA" in panel.locator("pre").inner_text()
+                recovered_session = page.evaluate(
+                    """async () => {
+                      const response = await fetch(window.iaoApiUrl('/v1/me'), {
+                        headers: {Authorization: 'Bearer ' + window.iaoGetSessionToken()},
+                        credentials: 'omit', cache: 'no-store'
+                      });
+                      return {status: response.status, body: await response.json()};
+                    }"""
+                )
+                assert recovered_session["status"] == 200, recovered_session
+                assert recovered_session["body"]["subject"].startswith("operator:"), recovered_session
+                assert recovered_session["body"]["scopes"] == [], recovered_session
                 assert not page_errors, page_errors
                 context.close()
                 browser.close()
