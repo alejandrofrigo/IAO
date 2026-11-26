@@ -163,7 +163,7 @@
       atob(encoded + "=".repeat((4 - encoded.length % 4) % 4)),
       c => c.charCodeAt(0)
     );
-    const rootDomain = encoder.encode("IAO-OPERATOR-RECOVERY-V1\\x00");
+    const rootDomain = encoder.encode("IAO-OPERATOR-RECOVERY-V1\x00");
     const rootMessage = new Uint8Array(rootDomain.length + payload.length);
     rootMessage.set(rootDomain); rootMessage.set(payload, rootDomain.length);
     const rootRaw = new Uint8Array(await crypto.subtle.sign(
