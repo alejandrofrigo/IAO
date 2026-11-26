@@ -101,7 +101,7 @@
     } finally { privateBytes.fill(0); }
     return { privateKey, publicKeyPem: pem("PUBLIC KEY", spki) };
   }
-  async function bootstrap(code) {
+  async function bootstrap(code, recoveryCode) {
     if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
     let stored = await readIdentity();
     if (stored && stored.keyVersion) throw new Error("ROOT_IDENTITY_ALREADY_REGISTERED");
@@ -118,11 +118,77 @@
       await writeIdentity(stored);
     }
     const result = await request("/v1/operator/bootstrap", "POST", {
-      code, root_public_key_pem: stored.publicKeyPem
+      code, recovery_code: recoveryCode, root_public_key_pem: stored.publicKeyPem
     });
     await writeIdentity({ ...stored, identityId: result.identity_id, keyVersion: result.key_version, bootstrapPending: false });
     return result;
   }
+  async function recoverIdentity(recoveryCode) {
+    if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
+    if (typeof recoveryCode !== "string" || recoveryCode.length < 32 || recoveryCode.length > 512) {
+      throw new Error("INVALID_OPERATOR_RECOVERY_CODE");
+    }
+    if (!window.IAODeviceAuthority ||
+        typeof window.IAODeviceAuthority.prepareRecoveryIdentity !== "function" ||
+        typeof window.IAODeviceAuthority.signRecoveryPayload !== "function") {
+      throw new Error("DEVICE_RECOVERY_NOT_AVAILABLE");
+    }
+    let stored = await readIdentity() || {};
+    if (!stored.recoveryPendingPrivateKey) {
+      const generated = await generateRootKey();
+      stored = {
+        ...stored,
+        recoveryPendingPrivateKey: generated.privateKey,
+        recoveryPendingPublicKeyPem: generated.publicKeyPem,
+        recoveryPendingAt: Date.now()
+      };
+      await writeIdentity(stored);
+    }
+    let devicePublicKeyPem = await window.IAODeviceAuthority.recoveryPublicKeyPem().catch(async () => {
+      const prepared = await window.IAODeviceAuthority.prepareRecoveryIdentity();
+      return prepared.publicKeyPem;
+    });
+    const challenge = await request("/v1/operator/recovery/challenge", "POST", {
+      recovery_code: recoveryCode,
+      new_root_public_key_pem: stored.recoveryPendingPublicKeyPem,
+      new_device_public_key_pem: devicePublicKeyPem
+    });
+    if (challenge.protocol !== "IAO-OPERATOR-RECOVERY-V1" ||
+        typeof challenge.challenge !== "string" ||
+        typeof challenge.signing_payload !== "string") {
+      throw new Error("INVALID_OPERATOR_RECOVERY_CHALLENGE");
+    }
+    const encoded = challenge.signing_payload.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = Uint8Array.from(
+      atob(encoded + "=".repeat((4 - encoded.length % 4) % 4)),
+      c => c.charCodeAt(0)
+    );
+    const rootDomain = encoder.encode("IAO-OPERATOR-RECOVERY-V1\\x00");
+    const rootMessage = new Uint8Array(rootDomain.length + payload.length);
+    rootMessage.set(rootDomain); rootMessage.set(payload, rootDomain.length);
+    const rootRaw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, stored.recoveryPendingPrivateKey, rootMessage
+    ));
+    const deviceSignature = await window.IAODeviceAuthority.signRecoveryPayload(
+      challenge.signing_payload
+    );
+    const result = await request("/v1/operator/recovery/complete", "POST", {
+      challenge: challenge.challenge,
+      root_signature: b64url(rawEcdsaToDer(rootRaw)),
+      device_signature: deviceSignature
+    });
+    await window.IAODeviceAuthority.activateRecoveryIdentity();
+    await writeIdentity({
+      privateKey: stored.recoveryPendingPrivateKey,
+      publicKeyPem: stored.recoveryPendingPublicKeyPem,
+      identityId: stored.identityId || null,
+      keyVersion: result.key_version,
+      createdAt: Date.now(),
+      bootstrapPending: false
+    });
+    return result;
+  }
+
   async function associateSession() {
     const identity = await readIdentity();
     if (!identity || !identity.privateKey) throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
@@ -258,8 +324,18 @@
     const code = document.createElement("input");
     code.type = "password"; code.autocomplete = "off"; code.placeholder = "Código de bootstrap fuera de banda";
     code.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
+    const recoveryCode = document.createElement("input");
+    recoveryCode.type = "password"; recoveryCode.autocomplete = "off";
+    recoveryCode.placeholder = "Código de recuperación offline (solo una vez)";
+    recoveryCode.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
+    const bootstrapRecoveryCode = document.createElement("input");
+    bootstrapRecoveryCode.type = "password"; bootstrapRecoveryCode.autocomplete = "off";
+    bootstrapRecoveryCode.placeholder = "Crear código de recuperación offline (mínimo 32 caracteres)";
+    bootstrapRecoveryCode.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
     const bootstrapButton = document.createElement("button");
     bootstrapButton.type = "button"; bootstrapButton.textContent = "Registrar identidad raíz";
+    const recoveryButton = document.createElement("button");
+    recoveryButton.type = "button"; recoveryButton.textContent = "Recuperar identidad y sustituir dispositivo";
     const loginButton = document.createElement("button");
     loginButton.type = "button"; loginButton.textContent = "Iniciar sesión de operador";
     const associateButton = document.createElement("button");
@@ -299,10 +375,21 @@
       catch (error) { show("ERROR: " + error.message, true); }
       finally { await refreshSessionGates(); }
     }
+    recoveryButton.addEventListener("click", () => run(
+      recoveryButton, async () => {
+        const secret = recoveryCode.value; recoveryCode.value = "";
+        if (!secret) throw new Error("OPERATOR_RECOVERY_CODE_REQUIRED");
+        return recoverIdentity(secret);
+      },
+      result => "IDENTIDAD RECUPERADA\\nVersión de clave: " + result.key_version + "\\nDispositivo sustituido: " + result.device_replaced
+    ));
     bootstrapButton.addEventListener("click", () => run(bootstrapButton, async () => {
       const secret = code.value; code.value = "";
+      const recoverySecret = bootstrapRecoveryCode.value; bootstrapRecoveryCode.value = "";
       if (!secret) throw new Error("OPERATOR_BOOTSTRAP_REQUIRED");
-      return bootstrap(secret);
+      if (!recoverySecret) throw new Error("OPERATOR_RECOVERY_CODE_REQUIRED");
+      if (secret === recoverySecret) throw new Error("RECOVERY_CODE_MUST_DIFFER_FROM_BOOTSTRAP");
+      return bootstrap(secret, recoverySecret);
     }, result => "IDENTIDAD RAÍZ REGISTRADA\nAlgoritmo: " + result.algorithm + "\nVersión: " + result.key_version));
     loginButton.addEventListener("click", () => run(
       loginButton, login,
@@ -325,7 +412,7 @@
       }
       return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
-    section.append(title, description, code, bootstrapButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
+    section.append(title, description, code, bootstrapRecoveryCode, bootstrapButton, recoveryCode, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
     document.body.appendChild(section);
     window.addEventListener("iao-session-changed", refreshSessionGates);
     refreshSessionGates();
@@ -333,7 +420,7 @@
       identity ? (identity.bootstrapPending ? "Clave raíz local conservada; confirma el bootstrap o consulta su estado." : "Clave raíz local disponible en este navegador.") : "No hay identidad raíz registrada en este navegador.", false
     )).catch(error => show("Almacenamiento no disponible: " + error.message, true));
   }
-  window.IAOOperatorIdentity = Object.freeze({ login, associateSession, bindPrimaryDevice, revokeIdentity, status });
+  window.IAOOperatorIdentity = Object.freeze({ login, associateSession, bindPrimaryDevice, recoverIdentity, revokeIdentity, status });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", panel, { once: true });
   else panel();
 })();
