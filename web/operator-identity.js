@@ -101,6 +101,13 @@
     } finally { privateBytes.fill(0); }
     return { privateKey, publicKeyPem: pem("PUBLIC KEY", spki) };
   }
+  function generateOfflineRecoveryCode() {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    let binary = "";
+    for (const value of bytes) binary += String.fromCharCode(value);
+    return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+  }
+
   async function bootstrap(code, recoveryCode) {
     if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
     let stored = await readIdentity();
@@ -121,7 +128,7 @@
       code, recovery_code: recoveryCode, root_public_key_pem: stored.publicKeyPem
     });
     await writeIdentity({ ...stored, identityId: result.identity_id, keyVersion: result.key_version, bootstrapPending: false });
-    return result;
+    return { ...result, recoveryCode };
   }
   async function recoverIdentity(recoveryCode, newRecoveryCode) {
     if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
@@ -190,7 +197,7 @@
       createdAt: Date.now(),
       bootstrapPending: false
     });
-    return result;
+    return { ...result, recoveryCode: newRecoveryCode };
   }
 
   async function associateSession() {
@@ -351,6 +358,12 @@
     bootstrapRecoveryCode.type = "password"; bootstrapRecoveryCode.autocomplete = "off";
     bootstrapRecoveryCode.placeholder = "Crear código de recuperación offline (mínimo 32 caracteres)";
     bootstrapRecoveryCode.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
+    const generateBootstrapRecoveryButton = document.createElement("button");
+    generateBootstrapRecoveryButton.type = "button";
+    generateBootstrapRecoveryButton.textContent = "Generar código offline";
+    const generateNewRecoveryButton = document.createElement("button");
+    generateNewRecoveryButton.type = "button";
+    generateNewRecoveryButton.textContent = "Generar nuevo código offline";
     const bootstrapButton = document.createElement("button");
     bootstrapButton.type = "button"; bootstrapButton.textContent = "Registrar identidad raíz";
     const recoveryButton = document.createElement("button");
@@ -394,6 +407,12 @@
       catch (error) { show("ERROR: " + error.message, true); }
       finally { await refreshSessionGates(); }
     }
+    generateBootstrapRecoveryButton.addEventListener("click", () => {
+      bootstrapRecoveryCode.value = generateOfflineRecoveryCode();
+    });
+    generateNewRecoveryButton.addEventListener("click", () => {
+      newRecoveryCode.value = generateOfflineRecoveryCode();
+    });
     recoveryButton.addEventListener("click", () => run(
       recoveryButton, async () => {
         const secret = recoveryCode.value; recoveryCode.value = "";
@@ -402,7 +421,7 @@
         if (!nextSecret) throw new Error("NEW_OPERATOR_RECOVERY_CODE_REQUIRED");
         return recoverIdentity(secret, nextSecret);
       },
-      result => "IDENTIDAD RECUPERADA\\nVersión de clave: " + result.key_version + "\\nDispositivo sustituido: " + result.device_replaced + "\\nCódigo offline rotado: " + result.recovery_code_rotated + "\\nGuarda el nuevo código fuera de este dispositivo."
+      result => "IDENTIDAD RECUPERADA\\nVersión de clave: " + result.key_version + "\\nDispositivo sustituido: " + result.device_replaced + "\\nNuevo código offline (guárdalo ahora):\\n" + result.recoveryCode
     ));
     bootstrapButton.addEventListener("click", () => run(bootstrapButton, async () => {
       const secret = code.value; code.value = "";
@@ -433,7 +452,7 @@
       }
       return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
-    section.append(title, description, code, bootstrapRecoveryCode, bootstrapButton, recoveryCode, newRecoveryCode, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
+    section.append(title, description, code, bootstrapRecoveryCode, generateBootstrapRecoveryButton, bootstrapButton, recoveryCode, newRecoveryCode, generateNewRecoveryButton, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
     document.body.appendChild(section);
     window.addEventListener("iao-session-changed", refreshSessionGates);
     refreshSessionGates();
