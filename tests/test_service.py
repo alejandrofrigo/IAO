@@ -1,8 +1,10 @@
 import json
+import os
 import sqlite3
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from omega.auth import issue_token
@@ -16,6 +18,11 @@ CORPUS = Path(__file__).resolve().parent.parent / "docs" / "corpus"
 
 class Base(unittest.TestCase):
     def setUp(self) -> None:
+        self._audit_env = patch.dict(
+            os.environ,
+            {"AUDIT_HMAC_KEY": "unit-test-audit-key-" + "a" * 48},
+        )
+        self._audit_env.start()
         self.tmp = tempfile.TemporaryDirectory()
         self.state = Path(self.tmp.name)
         self.mk()
@@ -26,6 +33,7 @@ class Base(unittest.TestCase):
     def tearDown(self) -> None:
         self.svc.store.close()
         self.tmp.cleanup()
+        self._audit_env.stop()
 
     def tok(self, sub: str, scopes: list[str] | None = None) -> dict[str, str]:
         return {"authorization": "Bearer " + issue_token(KEY, sub, ["knowledge.search"] if scopes is None else scopes)}
