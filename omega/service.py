@@ -99,6 +99,14 @@ class OmegaService:
         if p is None:
             self.store.audit("anonymous", "AUTH", "request", decision="DENY", reason="AUTHENTICATION_REQUIRED")
             raise ApiError(401, "AUTHENTICATION_REQUIRED")
+        if p.subject.startswith("operator:"):
+            if (
+                self.operator_identity_authority is None
+                or not self.operator_identity_authority.verify_authenticated_session(
+                    p.subject, h[7:],
+                )
+            ):
+                raise ApiError(401, "OPERATOR_SESSION_REVOKED")
         now = self.clock()
         with self._rl:
             q = self._hits[p.subject]
