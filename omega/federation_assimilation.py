@@ -498,8 +498,64 @@ class CandidateRegistry:
                 if not evidence.get("evidence_sha256"):
                     raise AssimilationError("VERIFICATION_EVIDENCE_INCOMPLETE")
                 transport = evidence.get("transport")
-                if not isinstance(transport, dict) or transport.get("https_verified") is not True:
+                if (
+                    not isinstance(transport, dict)
+                    or transport.get("https_verified") is not True
+                ):
                     raise AssimilationError("HTTPS_VERIFICATION_REQUIRED")
+                if transport.get("redirected") is not False:
+                    raise AssimilationError("REDIRECT_REFUSED")
+
+                proof = {
+                    key: evidence.get(key)
+                    for key in (
+                        "identity", "response", "requester_id",
+                        "nonce", "request_ts", "transport",
+                    )
+                }
+                try:
+                    encoded = json.dumps(
+                        proof, sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
+                except Exception as exc:
+                    raise AssimilationError(
+                        "VERIFICATION_EVIDENCE_INVALID"
+                    ) from exc
+                digest = hashlib.sha256(encoded).hexdigest()
+                if (
+                    not isinstance(evidence.get("evidence_sha256"), str)
+                    or evidence["evidence_sha256"] != digest
+                ):
+                    raise AssimilationError("VERIFICATION_EVIDENCE_HASH_MISMATCH")
+
+                policy = item.get("authorization_policy")
+                if (
+                    not isinstance(policy, dict)
+                    or policy.get("id") != "IAO_PINNED_IDENTITY_VERIFICATION_V1"
+                    or policy.get("evidence_sha256") != digest
+                    or policy.get("decision") != "PENDING_OPERATOR_APPROVAL"
+                ):
+                    raise AssimilationError("VERIFICATION_POLICY_EVIDENCE_MISMATCH")
+
+                try:
+                    from tools.iao_federation_binding import verify_binding
+
+                    checked = verify_binding(
+                        evidence["identity"],
+                        evidence["response"],
+                        expected_node_id=item["node_id"],
+                        requester_id=evidence["requester_id"],
+                        nonce=evidence["nonce"],
+                        request_ts=float(evidence["request_ts"]),
+                        now=__import__("time").time(),
+                        skew=60.0,
+                    )
+                except Exception as exc:
+                    raise AssimilationError(
+                        "CRYPTOGRAPHIC_RECHECK_FAILED"
+                    ) from exc
+                if not isinstance(checked, dict) or checked.get("ok") is not True:
+                    raise AssimilationError("CRYPTOGRAPHIC_RECHECK_REJECTED")
 
             now = __import__("datetime").datetime.now(
                 __import__("datetime").timezone.utc
