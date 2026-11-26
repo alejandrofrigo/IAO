@@ -273,6 +273,14 @@
     return identity.publicKeyPem;
   }
 
+  async function hasRecoveryKey(publicKeyPem) {
+    if (typeof publicKeyPem !== "string" || !publicKeyPem) return false;
+    const pending = await dbGetPending();
+    if (pending && pending.privateKey && pending.publicKeyPem === publicKeyPem) return true;
+    const active = await dbGet();
+    return !!(active && active.privateKey && active.publicKeyPem === publicKeyPem);
+  }
+
   async function signRecoveryPayload(payloadBase64) {
     const identity = await dbGetPending();
     if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
@@ -566,6 +574,7 @@
     publicKeyPem,
     prepareRecoveryIdentity,
     recoveryPublicKeyPem,
+    hasRecoveryKey,
     signRecoveryPayload,
     activateRecoveryIdentity,
     signOperatorLoginPayload,
