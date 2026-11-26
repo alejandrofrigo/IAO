@@ -464,6 +464,70 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                     timeout=20000,
                 )
                 assert "SESIÓN DE OPERADOR AUTENTICADA" in panel.locator("pre").inner_text()
+
+                # Revocation must clear local root material and invalidate the
+                # already-issued bearer session at the API boundary.
+                revocation_token = page.evaluate("() => window.iaoGetSessionToken()")
+                page.once("dialog", lambda dialog: dialog.accept())
+                panel.get_by_role(
+                    "button", name="Revocar identidad y dispositivo"
+                ).click()
+                page.wait_for_function(
+                    """() => {
+                      const output = document.querySelector('#iao-operator-identity-panel pre');
+                      return output && output.textContent.includes('IDENTIDAD REVOCADA');
+                    }""",
+                    timeout=20000,
+                )
+                revoked_state = page.evaluate(
+                    """async (token) => {
+                      const db = await new Promise((resolve, reject) => {
+                        const request = indexedDB.open('iao-operator-root', 1);
+                        request.onerror = () => reject(request.error);
+                        request.onsuccess = () => resolve(request.result);
+                      });
+                      const root = await new Promise((resolve, reject) => {
+                        const request = db.transaction('identity', 'readonly')
+                          .objectStore('identity').get('root');
+                        request.onerror = () => reject(request.error);
+                        request.onsuccess = () => resolve(request.result || null);
+                      });
+                      db.close();
+                      const meResponse = await fetch(window.iaoApiUrl('/v1/me'), {
+                        headers: {Authorization: 'Bearer ' + token},
+                        credentials: 'omit', cache: 'no-store'
+                      });
+                      const pem = await window.IAODeviceAuthority.publicKeyPem();
+                      const encoded = pem.replace(/-----[^-]+-----/g, '').replace(/\\s/g, '');
+                      const der = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
+                      const digest = await crypto.subtle.digest('SHA-256', der);
+                      const deviceId = Array.from(new Uint8Array(digest),
+                        byte => byte.toString(16).padStart(2, '0')).join('');
+                      const challengeResponse = await fetch(
+                        window.iaoApiUrl('/v1/device/challenge'), {
+                          method: 'POST',
+                          headers: {
+                            Authorization: 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                          },
+                          body: JSON.stringify({device_id: deviceId}),
+                          credentials: 'omit', cache: 'no-store'
+                        }
+                      );
+                      return {
+                        rootPresent: Boolean(root),
+                        meStatus: meResponse.status,
+                        meBody: await meResponse.json(),
+                        challengeStatus: challengeResponse.status,
+                        challengeBody: await challengeResponse.json()
+                      };
+                    }""",
+                    revocation_token,
+                )
+                assert not revoked_state["rootPresent"], revoked_state
+                assert revoked_state["meStatus"] == 401, revoked_state
+                assert revoked_state["meBody"]["error"] == "OPERATOR_SESSION_REVOKED", revoked_state
+                assert revoked_state["challengeStatus"] == 401, revoked_state
                 assert not page_errors, page_errors
                 context.close()
                 browser.close()
