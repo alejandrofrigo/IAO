@@ -514,7 +514,13 @@ class QueuedTaskApiTests(Base):
         status, accepted = self.call(
             "POST", "/v1/tasks", self.queued_headers(payload), payload
         )
-        self.assertEqual(status, 202)
+        self.assertEqual(
+            status, 202,
+            msg=str([
+                event for event in self.svc.store._all_events()
+                if event["event_type"] == "API_INTERNAL_ERROR"
+            ][-1:]),
+        )
         self.assertEqual(accepted["state"], "QUEUED")
         self.assertTrue(accepted["status_url"].endswith(accepted["task_id"]))
         queued = self.svc.store.get_task(accepted["task_id"], "queued-user")
