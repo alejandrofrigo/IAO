@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==8.3.4", "httpx==0.28.1", "ruff==0.9.4", "mypy==1.14.1"]
+browser = ["playwright==1.56.0"]
 p2p = ["libp2p==0.8.2"]
 
 [tool.setuptools.packages.find]
