@@ -71,6 +71,31 @@ button:disabled{opacity:.5}
     return data;
   }
 
+  window.iaoActivateOperatorSession = async accessToken => {
+    if (typeof accessToken !== "string" || !accessToken) throw new Error("INVALID_OPERATOR_SESSION");
+    token = accessToken;
+    conversationId = null;
+    window.dispatchEvent(new Event("iao-session-changed"));
+    try {
+      const conversation = await request("/v1/conversations", "POST",
+        {title: "Chat privado de operador IAO"});
+      if (typeof conversation.conversation_id !== "string" || !conversation.conversation_id) {
+        throw new Error("INVALID_CONVERSATION");
+      }
+      conversationId = conversation.conversation_id;
+      messagesEl.replaceChildren();
+      messageEl.disabled = false;
+      sendBtn.disabled = false;
+      status("Sesión de operador autenticada. Solo lectura; sin permisos de mando. Caduca en 15 minutos.");
+      messageEl.focus();
+    } catch (error) {
+      token = null;
+      conversationId = null;
+      window.dispatchEvent(new Event("iao-session-changed"));
+      throw error;
+    }
+  };
+
   function addMessage(role, text) {
     const div = document.createElement("div");
     div.className = "msg " + (role === "user" ? "user" : "omega");
