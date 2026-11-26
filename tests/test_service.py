@@ -722,6 +722,19 @@ class QueuedTaskApiTests(Base):
         replay = self.call("POST", "/v1/tasks", headers, payload)
         self.assertEqual((replay[0], replay[1]["error"]), (401, "CHALLENGE_EXPIRED_OR_REPLAYED"))
 
+    def test_queued_task_rejects_same_subject_with_different_bearer_session(self) -> None:
+        payload = {
+            "goal": "search",
+            "capability": "knowledge.search",
+            "input": {"query": "audit"},
+            "execution_mode": "queued",
+        }
+        headers = self.queued_headers(payload)
+        headers["authorization"] = self.tok("queued-user")["authorization"]
+        status, response = self.call("POST", "/v1/tasks", headers, payload)
+        self.assertEqual((status, response["error"]), (403, "PRIMARY_DEVICE_NOT_AUTHORIZED"))
+        self.assertEqual(self.svc.store.count_tasks_since("queued-user", "0000"), 0)
+
     def test_queued_proof_cannot_be_reused_for_modified_body(self) -> None:
         payload = {
             "goal": "search",
