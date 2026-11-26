@@ -250,6 +250,51 @@ class DeviceAuthority:
                     db.execute("ROLLBACK")
                 raise
 
+    @contextmanager
+    def revoke_active_key(self, public_key_pem: Any):
+        """Deactivate an exact enrolled key and invalidate all its pending proofs.
+
+        Call only after the owning operator root signature has been verified.
+        """
+        if not isinstance(public_key_pem, str) or not 1 <= len(public_key_pem) <= 4096:
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY")
+        try:
+            key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        except (ValueError, TypeError, UnicodeEncodeError):
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY") from None
+        if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+            raise DeviceAuthorityError("UNSUPPORTED_PUBLIC_KEY")
+        canonical = key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                rows = db.execute(
+                    "SELECT device_id FROM devices WHERE public_key_pem=? AND active=1",
+                    (canonical,),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise DeviceAuthorityError("DEVICE_KEY_NOT_ACTIVE", 403)
+                device_id = rows[0]["device_id"]
+                changed = db.execute(
+                    "UPDATE devices SET active=0 WHERE device_id=? AND active=1",
+                    (device_id,),
+                ).rowcount
+                if changed != 1:
+                    raise DeviceAuthorityError("DEVICE_KEY_NOT_ACTIVE", 403)
+                db.execute(
+                    "DELETE FROM device_challenges WHERE device_id=?",
+                    (device_id,),
+                )
+                yield True
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
     def verify_active_public_key(self, public_key_pem: Any) -> bool:
         """Check that an exact public key is currently enrolled and not revoked."""
         if not isinstance(public_key_pem, str) or not 1 <= len(public_key_pem) <= 4096:
