@@ -55,6 +55,7 @@ class Base(unittest.TestCase):
         return self.call("POST", "/v1/tasks", h, {"goal": "g", "capability": cap, "input": inp if inp is not None else {"query": "audit chain"}})
 
 
+class AuthTests(Base):
     def test_dual_signature_operator_login_api_issues_read_only_session_once(self) -> None:
         bootstrap_code = "operator-login-api-bootstrap-" + "v" * 40
         enrollment_code = "operator-login-device-enrollment-" + "w" * 40
@@ -142,7 +143,6 @@ class Base(unittest.TestCase):
         self.assertNotIn(device_public, audit)
 
 
-class AuthTests(Base):
     def test_operator_bootstrap_endpoint_consumes_out_of_band_capability_once(self) -> None:
         code = "out-of-band-bootstrap-" + "q" * 48
         self.svc.store.close()
