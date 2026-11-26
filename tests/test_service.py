@@ -110,7 +110,7 @@ class AuthTests(Base):
                 ).decode().rstrip("="),
                 "device_signature": base64.urlsafe_b64encode(
                     device.sign(
-                        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + payload,
+                        b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + payload,
                         ec.ECDSA(hashes.SHA256()),
                     )
                 ).decode().rstrip("="),
@@ -118,7 +118,7 @@ class AuthTests(Base):
         )
         self.assertEqual(login_result[0], 200)
         headers = {"authorization": "Bearer " + login_result[1]["access_token"]}
-        revoke_payload = b"revoke-root-v1\\n" + identity["identity_id"].encode("ascii")
+        revoke_payload = b"revoke-root-v1\n" + identity["identity_id"].encode("ascii")
         signature = root.sign(
             ROOT_SIGNATURE_DOMAIN + revoke_payload, ec.ECDSA(hashes.SHA256())
         )
