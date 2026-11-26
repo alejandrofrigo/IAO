@@ -304,6 +304,11 @@ class CandidateRegistry:
         evidence: dict[str, Any],
     ) -> dict[str, Any]:
         """Verify pinned Ed25519 identity and apply autonomous policy v1."""
+        # The current callers can supply transport booleans as ordinary JSON.
+        # Those assertions are forgeable and are NOT proof of a TLS session.
+        # Until a trusted, redirect-blocking, SSRF-safe transport adapter is
+        # integrated, do not advance lifecycle state from caller-supplied data.
+        raise AssimilationError("TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED")
         import time
         import json
         import hashlib
