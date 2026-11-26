@@ -250,6 +250,78 @@ class DeviceAuthority:
                     db.execute("ROLLBACK")
                 raise
 
+    def replace_active_device_for_recovery(
+        self, public_key_pem: Any, *, owner_subject: str,
+    ) -> dict[str, str]:
+        """Install a replacement primary key after the recovery authority has verified its one-time proof.
+
+        Existing active keys are replaced only when already owned by this same
+        opaque operator principal. An unrelated active device blocks recovery.
+        """
+        if (
+            not isinstance(owner_subject, str)
+            or not re.fullmatch(r"operator:[0-9a-f]{32}", owner_subject)
+        ):
+            raise DeviceAuthorityError("INVALID_OPERATOR_SUBJECT", 403)
+        if not isinstance(public_key_pem, str) or not 1 <= len(public_key_pem) <= 4096:
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY")
+        try:
+            key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        except (ValueError, TypeError, UnicodeEncodeError):
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY") from None
+        if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+            raise DeviceAuthorityError("UNSUPPORTED_PUBLIC_KEY")
+        canonical = key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        der = key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        device_id = hashlib.sha256(der).hexdigest()
+        now = time.time()
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                active = db.execute(
+                    "SELECT device_id,owner_subject FROM devices WHERE active=1"
+                ).fetchall()
+                if any(row["owner_subject"] != owner_subject for row in active):
+                    raise DeviceAuthorityError("UNRELATED_ACTIVE_DEVICE_BLOCKS_RECOVERY", 409)
+                for row in active:
+                    db.execute(
+                        "UPDATE devices SET active=0 WHERE device_id=?",
+                        (row["device_id"],),
+                    )
+                    db.execute(
+                        "DELETE FROM device_challenges WHERE device_id=?",
+                        (row["device_id"],),
+                    )
+                existing = db.execute(
+                    "SELECT device_id FROM devices WHERE device_id=?",
+                    (device_id,),
+                ).fetchone()
+                if existing is None:
+                    db.execute(
+                        """INSERT INTO devices
+                        (device_id,public_key_pem,owner_subject,active,created_at)
+                        VALUES(?,?,?,1,?)""",
+                        (device_id, canonical, owner_subject, now),
+                    )
+                else:
+                    db.execute(
+                        """UPDATE devices SET public_key_pem=?,owner_subject=?,
+                        active=1,created_at=? WHERE device_id=?""",
+                        (canonical, owner_subject, now, device_id),
+                    )
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        return {"device_id": device_id, "algorithm": "ECDSA-P256-SHA256"}
+
     @contextmanager
     def revoke_active_key(self, public_key_pem: Any):
         """Deactivate an exact enrolled key and invalidate all its pending proofs.
