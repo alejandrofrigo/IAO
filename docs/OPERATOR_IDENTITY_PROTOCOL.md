@@ -29,8 +29,10 @@ fixed protocol purpose; the root signature is verified and the challenge is
 consumed atomically before a single durable subject binding is recorded.
 Session verification fails closed after root rotation or revocation. The
 challenge response contains an opaque one-time handle and canonical signing
-payload, not the internal identity identifier or raw subject. API tests cover
-subject substitution, guest rejection, invalid signature, replay, expiry,
+payload, not the internal identity identifier, raw subject or bearer token.
+Only a domain-separated HMAC digest of the exact bearer token is persisted;
+a different token for the same subject cannot consume the challenge. API tests cover
+subject and token substitution, guest rejection, invalid signature, replay, expiry,
 restart persistence, rotation and revocation. The production service stores
 the registry in its persistent state directory.
 
