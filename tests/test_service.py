@@ -153,8 +153,35 @@ class PolicyToolTests(Base):
             self.call("POST", "/v1/tasks", headers, payload)[0], 200
         )
         queued_retry = {**payload, "execution_mode": "queued"}
+        authority = self.svc.device_authority
+        authority.enrollment_code = "unit-test-mode-switch-enrollment-secret"
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        enrolled = authority.enroll(authority.enrollment_code, public_pem)
+        challenge = authority.challenge(enrolled["device_id"])
+        raw_body = json.dumps(queued_retry).encode()
+        timestamp = int(time.time())
+        digest = hashlib.sha256(raw_body).hexdigest()
+        signed = "\\n".join([
+            "POST", "/v1/tasks", str(timestamp), challenge["nonce"], digest,
+        ]).encode()
+        signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
+        proof = {
+            "device_id": enrolled["device_id"],
+            "nonce": challenge["nonce"],
+            "timestamp": timestamp,
+            "request_digest": digest,
+            "signature": base64.urlsafe_b64encode(signature).decode().rstrip("="),
+        }
+        queued_headers = {
+            **headers,
+            "x-iao-device-proof": json.dumps(proof, separators=(",", ":")),
+        }
         status, response = self.call(
-            "POST", "/v1/tasks", headers, queued_retry
+            "POST", "/v1/tasks", queued_headers, queued_retry
         )
         self.assertEqual(
             (status, response["error"]),
