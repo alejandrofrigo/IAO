@@ -56,6 +56,49 @@ class Base(unittest.TestCase):
 
 
 class AuthTests(Base):
+    def test_operator_bootstrap_endpoint_consumes_out_of_band_capability_once(self) -> None:
+        code = "out-of-band-bootstrap-" + "q" * 48
+        authority = OperatorIdentityAuthority(
+            self.state / "bootstrap-api.sqlite3",
+            code,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"bootstrap-api-test-key").digest(),
+        )
+        self.svc.operator_identity_authority = authority
+        root = ec.generate_private_key(ec.SECP256R1())
+        public = root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        status, result = self.call(
+            "POST", "/v1/operator/bootstrap", {},
+            {"code": code, "root_public_key_pem": public},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(result["status"], "ROOT_REGISTERED")
+        self.assertNotIn("identity_id", result)
+        self.assertNotIn(public, json.dumps(result))
+        repeated = self.call(
+            "POST", "/v1/operator/bootstrap", {},
+            {"code": code, "root_public_key_pem": public},
+        )
+        self.assertEqual(
+            (repeated[0], repeated[1]["error"]),
+            (409, "OPERATOR_BOOTSTRAP_ALREADY_USED"),
+        )
+        audit = json.dumps(self.svc.store._all_events())
+        self.assertNotIn(code, audit)
+        self.assertNotIn(public, audit)
+
+    def test_operator_bootstrap_is_disabled_without_out_of_band_configuration(self) -> None:
+        status, result = self.call(
+            "POST", "/v1/operator/bootstrap", {},
+            {"code": "unconfigured-bootstrap-" + "x" * 40,
+             "root_public_key_pem": "not-a-public-key"},
+        )
+        self.assertEqual((status, result["error"]), (503, "OPERATOR_BOOTSTRAP_DISABLED"))
+
+
     def test_root_signed_session_binding_api_is_scoped_and_read_only(self) -> None:
         bootstrap_code = "session-api-bootstrap-" + "z" * 40
         authority = OperatorIdentityAuthority(
