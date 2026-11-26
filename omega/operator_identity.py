@@ -404,6 +404,33 @@ class OperatorIdentityAuthority:
             "protocol": "IAO-OPERATOR-RECOVERY-V1",
         }
 
+    def verify_recovered_keypair(
+        self, root_public_key_pem: Any, device_public_key_pem: Any,
+    ) -> dict[str, Any]:
+        """Reconcile an ambiguous recovery response without revealing identity metadata."""
+        _, root_pem = self._public_key(root_public_key_pem)
+        _, device_pem = self._public_key(device_public_key_pem)
+        with self._database() as db:
+            row = db.execute(
+                """SELECT i.identity_id,i.key_version,b.device_public_key_pem,
+                b.key_version AS device_key_version
+                FROM operator_identities i
+                JOIN primary_device_bindings b ON b.identity_id=i.identity_id
+                WHERE i.status='ACTIVE'"""
+            ).fetchone()
+        if (
+            row is None
+            or row["key_version"] != row["device_key_version"]
+            or not hmac.compare_digest(row["root_public_key_pem"] if "root_public_key_pem" in row.keys() else "", root_pem)
+            or not hmac.compare_digest(row["device_public_key_pem"], device_pem)
+        ):
+            return {"committed": False}
+        return {
+            "committed": True,
+            "identity_id": row["identity_id"],
+            "key_version": row["key_version"],
+        }
+
     def complete_operator_recovery(
         self, challenge: Any, root_signature: bytes, device_signature: bytes,
         *, device_replacement=None,
