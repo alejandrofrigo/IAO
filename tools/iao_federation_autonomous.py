@@ -84,25 +84,77 @@ def discover_feed(url, timeout=10):
                         "source": f"feed:{url}"})
     audit("discovery_feed_ok", url=url, peers=len(out)); return out
 
-def discover_dht(ipfs_api):
+def _validate_local_ipfs_api(value):
+    """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
+    from urllib.parse import urlsplit
     try:
-        req = urllib.request.Request(f"{ipfs_api}/api/v0/swarm/peers", method="POST",
-                                     headers={"Content-Type": "application/json"})
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower()
+        return (
+            parsed.scheme == "http"
+            and host in {"127.0.0.1", "localhost", "::1"}
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.path in ("", "/")
+            and not parsed.query
+            and not parsed.fragment
+            and parsed.port in (None, 5001)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _parse_ipfs_peer(peer):
+    """Retain the real libp2p peer ID and multiaddr; never invent an HTTPS URL."""
+    if not isinstance(peer, dict):
+        return None
+    peer_id = peer.get("Peer")
+    multiaddr = peer.get("Addr")
+    if (
+        not isinstance(peer_id, str)
+        or not 20 <= len(peer_id) <= 100
+        or not all(ch.isalnum() for ch in peer_id)
+        or not isinstance(multiaddr, str)
+        or not multiaddr.startswith("/")
+        or len(multiaddr) > 512
+        or any(ord(ch) < 33 or ord(ch) > 126 for ch in multiaddr)
+    ):
+        return None
+    return {
+        "peer_id": peer_id,
+        "multiaddr": multiaddr,
+        "source": "ipfs_swarm_dht",
+        "status": "DISCOVERED_UNVERIFIED",
+        "granted_capabilities": [],
+    }
+
+
+def discover_dht(ipfs_api):
+    if not _validate_local_ipfs_api(ipfs_api):
+        audit("dht_discovery_rejected", reason="LOCAL_IPFS_API_REQUIRED")
+        return []
+    try:
+        req = urllib.request.Request(
+            f"{ipfs_api.rstrip('/')}/api/v0/swarm/peers",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read(500_000))
-    except Exception:
+    except Exception as exc:
+        audit("dht_discovery_unavailable", error_type=type(exc).__name__)
+        return []
+    peers = data.get("Peers", []) if isinstance(data, dict) else []
+    if not isinstance(peers, list):
         return []
     out = []
-    for p in data.get("Peers", []):
-        addr = p.get("Addr", "")
-        parts = addr.split("/")
-        host = port = None
-        for i, x in enumerate(parts):
-            if x == "ip4" and i+1 < len(parts): host = parts[i+1]
-            if x == "tcp" and i+1 < len(parts): port = parts[i+1]
-        if host and port:
-            out.append({"url": f"https://{host}:{port}", "id": None,
-                        "capabilities": [], "source": "dht"})
+    seen = set()
+    for peer in peers[:500]:
+        item = _parse_ipfs_peer(peer)
+        if item and item["peer_id"] not in seen:
+            seen.add(item["peer_id"])
+            out.append(item)
+    audit("dht_peers_discovered", count=len(out))
     return out
 
 def run_discovery():
@@ -143,7 +195,16 @@ def merge_candidates_into_nodes(candidates):
     ids = {n.get("id") for n in cfg.get("nodes", []) if n.get("id")}
     added = 0
     for c in candidates:
-        if not c.get("id") or c["id"] in ids: continue
+        # Solo endpoints IAO HTTPS con ID verificable entran en el pipeline HTTP.
+        # Peers libp2p y anuncios Nostr permanecen en sus registros de descubrimiento.
+        if (
+            not isinstance(c, dict)
+            or not isinstance(c.get("url"), str)
+            or not c.get("url", "").startswith("https://")
+            or not c.get("id")
+            or c["id"] in ids
+        ):
+            continue
         cfg["nodes"].append({"url": c["url"], "id": c["id"],
             "authorized": False,
             "capabilities": c.get("capabilities", []),
