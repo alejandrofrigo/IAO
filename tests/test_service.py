@@ -167,9 +167,9 @@ class Base(unittest.TestCase):
             },
         )
         self.assertEqual(status, 200)
-        self.assertEqual(mismatched, {
-            "committed": False, "authority": "RECOVERY_NOT_COMMITTED",
-        })
+        self.assertFalse(mismatched["committed"])
+        self.assertEqual(mismatched["authority"], "RECOVERY_NOT_COMMITTED")
+        self.assertRegex(mismatched["correlation_id"], r"^[0-9a-f]{32}$")
         with self.assertRaisesRegex(OperatorIdentityError, "INVALID_OPERATOR_RECOVERY_CODE"):
             authority.create_operator_recovery_challenge(
                 recovery, new_root_public, new_device_public, "another-new-recovery-" + "z" * 40,
