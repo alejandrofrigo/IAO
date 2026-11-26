@@ -194,6 +194,7 @@ class OmegaService:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
             if os.environ.get("IAO_DEVICE_ENROLLMENT_ENABLED", "").strip() != "1":
                 raise ApiError(403, "DEVICE_ENROLLMENT_DISABLED")
+            pr = self._auth(headers)
             data = self._json(body)
             try:
                 enrolled = self.device_authority.enroll(
@@ -205,7 +206,8 @@ class OmegaService:
                 "system", "DEVICE_ENROLLED", "primary_device",
                 algorithm=enrolled["algorithm"],
             )
-            return 201, enrolled
+            # The client derives the public-key fingerprint locally.
+            return 201, {"algorithm": enrolled["algorithm"]}
 
         if method == "POST" and p == "/v1/device/command":
             if self.device_authority is None:
