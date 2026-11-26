@@ -116,6 +116,7 @@ class AuthTests(Base):
         ).decode("ascii")
         identity = authority.bootstrap(bootstrap_code, public)
         headers_a = self.tok("authenticated-session-A")
+        headers_a_alt = self.tok("authenticated-session-A", scopes=[])
         headers_b = self.tok("authenticated-session-B")
 
         guest = self.call("POST", "/v1/public/session", {}, {})
@@ -140,6 +141,13 @@ class AuthTests(Base):
         encoded = base64.urlsafe_b64encode(signature).decode().rstrip("=")
         body = {"challenge": challenge["challenge"], "signature": encoded}
 
+        same_subject_other_token = self.call(
+            "POST", "/v1/operator/session/bind", headers_a_alt, body
+        )
+        self.assertEqual(
+            (same_subject_other_token[0], same_subject_other_token[1]["error"]),
+            (403, "OPERATOR_SESSION_MISMATCH"),
+        )
         wrong_session = self.call(
             "POST", "/v1/operator/session/bind", headers_b, body
         )
