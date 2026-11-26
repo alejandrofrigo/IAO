@@ -353,7 +353,7 @@ class AuthTests(Base):
         self.assertNotIn(public, json.dumps(result))
         repeated = self.call(
             "POST", "/v1/operator/bootstrap", {},
-            {"code": code, "root_public_key_pem": public},
+            {"code": code, "recovery_code": recovery_code, "root_public_key_pem": public},
         )
         self.assertEqual(
             (repeated[0], repeated[1]["error"]),
@@ -368,6 +368,7 @@ class AuthTests(Base):
         status, result = self.call(
             "POST", "/v1/operator/bootstrap", {},
             {"code": "unconfigured-bootstrap-" + "x" * 40,
+             "recovery_code": "unconfigured-recovery-" + "r" * 40,
              "root_public_key_pem": "not-a-public-key"},
         )
         self.assertEqual((status, result["error"]), (503, "OPERATOR_BOOTSTRAP_DISABLED"))
