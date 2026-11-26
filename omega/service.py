@@ -55,6 +55,7 @@ class OmegaService:
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._public_hits: dict[str, deque[float]] = defaultdict(deque)
         self._operator_bootstrap_hits: deque[float] = deque()
+        self._operator_bootstrap_status_hits: deque[float] = deque()
         self._operator_login_hits: deque[float] = deque()
         self._operator_recovery_hits: deque[float] = deque()
         self._operator_recovery_complete_hits: deque[float] = deque()
@@ -172,6 +173,50 @@ class OmegaService:
                     "tools": sorted(self.registry.names()),
                 },
             }
+        if method == "POST" and p == "/v1/operator/bootstrap/status":
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_BOOTSTRAP_UNAVAILABLE")
+            now = self.clock()
+            with self._rl:
+                while self._operator_bootstrap_status_hits and self._operator_bootstrap_status_hits[0] < now - 60:
+                    self._operator_bootstrap_status_hits.popleft()
+                limited = len(self._operator_bootstrap_status_hits) >= 10
+                if not limited:
+                    self._operator_bootstrap_status_hits.append(now)
+            if limited:
+                raise ApiError(429, "RATE_LIMITED")
+            data = self._json(body)
+            root_public_key = data.get("root_public_key_pem")
+            device_public_key = data.get("device_public_key_pem")
+            if (
+                not isinstance(root_public_key, str) or not 1 <= len(root_public_key) <= 4096
+                or not isinstance(device_public_key, str) or not 1 <= len(device_public_key) <= 4096
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_BOOTSTRAP_STATUS")
+            try:
+                result = self.operator_identity_authority.verify_recovered_keypair(
+                    root_public_key, device_public_key,
+                )
+                if not result.get("committed"):
+                    return 200, {
+                        "committed": False,
+                        "authority": "BOOTSTRAP_NOT_COMMITTED",
+                    }
+                self.device_authority.verify_registered_public_key(
+                    device_public_key,
+                    owner_subject="operator:" + result["identity_id"],
+                )
+            except (OperatorIdentityError, DeviceAuthorityError, ValueError):
+                return 200, {
+                    "committed": False,
+                    "authority": "BOOTSTRAP_NOT_COMMITTED",
+                }
+            return 200, {
+                "committed": True,
+                "authority": "OPERATOR_BOOTSTRAPPED_READ_ONLY",
+                "key_version": result["key_version"],
+            }
+
         if method == "POST" and p == "/v1/operator/bootstrap":
             if self.operator_identity_authority is None or self.device_authority is None:
                 raise ApiError(503, "OPERATOR_BOOTSTRAP_UNAVAILABLE")
