@@ -212,16 +212,17 @@ class OmegaService:
         if method == "POST" and p == "/v1/device/command":
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
+            pr = self._auth(headers)
             try:
                 result = self.device_authority.verify_status(self._json(body))
             except DeviceAuthorityError as exc:
                 self.store.audit(
-                    "system", "DEVICE_STATUS_DENIED", "primary_device",
+                    pr.subject, "DEVICE_STATUS_DENIED", "primary_device",
                     decision="DENY", reason=exc.code,
                 )
                 raise ApiError(exc.status, exc.code) from None
             self.store.audit(
-                "system", "DEVICE_STATUS_VERIFIED", "primary_device",
+                pr.subject, "DEVICE_STATUS_VERIFIED", "primary_device",
                 decision="ALLOW", authority="READ_ONLY",
             )
             return 200, result
