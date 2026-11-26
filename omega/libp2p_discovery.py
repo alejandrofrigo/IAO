@@ -28,17 +28,65 @@ DISCOVERY_TIMEOUT = 30.0
 
 
 def _secure_identity_file(path: str | Path) -> None:
-    """Enforce private permissions on an existing or newly-created node key."""
+    """Enforce private permissions without following a symlink."""
     target = Path(path)
-    if target.is_symlink() or not target.is_file():
-        raise RuntimeError("P2P_IDENTITY_PATH_REFUSED")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        os.chmod(target, 0o600)
-        mode = stat.S_IMODE(target.stat().st_mode)
+        fd = os.open(target, flags)
+    except OSError as exc:
+        raise RuntimeError("P2P_IDENTITY_PATH_REFUSED") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("P2P_IDENTITY_PATH_REFUSED")
+        os.fchmod(fd, 0o600)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+            raise RuntimeError("P2P_IDENTITY_PERMISSION_HARDENING_FAILED")
     except OSError as exc:
         raise RuntimeError("P2P_IDENTITY_PERMISSION_HARDENING_FAILED") from exc
-    if mode & 0o077:
-        raise RuntimeError("P2P_IDENTITY_PERMISSION_HARDENING_FAILED")
+    finally:
+        os.close(fd)
+
+
+def _load_or_create_identity(path, create_identity_from_seed, load_identity, save_identity):
+    """Create the persistent identity atomically; concurrent starters converge."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        _secure_identity_file(target)
+        return load_identity(target)
+
+    import secrets
+
+    key_pair = create_identity_from_seed(secrets.token_bytes(32))
+    fd, temp_name = tempfile.mkstemp(
+        prefix=".peer-identity-", suffix=".tmp", dir=str(target.parent)
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        os.close(fd)
+        fd = -1
+        temp_path = Path(temp_name)
+        save_identity(key_pair, temp_path)
+        _secure_identity_file(temp_path)
+        try:
+            # Hard-link creation is atomic and never overwrites an existing key.
+            os.link(temp_path, target)
+            created = True
+        except FileExistsError:
+            created = False
+        if created:
+            _secure_identity_file(target)
+            return key_pair
+        _secure_identity_file(target)
+        return load_identity(target)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
 
 
 def _state_dir() -> Path:
@@ -115,21 +163,9 @@ async def discover_peers(
     except OSError:
         pass
     identity_path = state / "peer-identity.key"
-    if identity_path.is_symlink():
-        raise RuntimeError("P2P_IDENTITY_SYMLINK_REFUSED")
-    if identity_path.exists():
-        if not identity_path.is_file():
-            raise RuntimeError("P2P_IDENTITY_PATH_REFUSED")
-        _secure_identity_file(identity_path)
-        key_pair = load_identity(identity_path)
-    else:
-        key_pair = create_identity_from_seed(secrets.token_bytes(32))
-        previous_umask = os.umask(0o077)
-        try:
-            save_identity(key_pair, identity_path)
-        finally:
-            os.umask(previous_umask)
-        _secure_identity_file(identity_path)
+    key_pair = _load_or_create_identity(
+        identity_path, create_identity_from_seed, load_identity, save_identity
+    )
 
 
     addresses = _validate_bootstrap(bootstrap_addrs)
