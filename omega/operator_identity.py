@@ -412,7 +412,7 @@ class OperatorIdentityAuthority:
         _, device_pem = self._public_key(device_public_key_pem)
         with self._database() as db:
             row = db.execute(
-                """SELECT i.identity_id,i.key_version,b.device_public_key_pem,
+                """SELECT i.identity_id,i.root_public_key_pem,i.key_version,b.device_public_key_pem,
                 b.key_version AS device_key_version
                 FROM operator_identities i
                 JOIN primary_device_bindings b ON b.identity_id=i.identity_id
@@ -421,7 +421,7 @@ class OperatorIdentityAuthority:
         if (
             row is None
             or row["key_version"] != row["device_key_version"]
-            or not hmac.compare_digest(row["root_public_key_pem"] if "root_public_key_pem" in row.keys() else "", root_pem)
+            or not hmac.compare_digest(row["root_public_key_pem"], root_pem)
             or not hmac.compare_digest(row["device_public_key_pem"], device_pem)
         ):
             return {"committed": False}
