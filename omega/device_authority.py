@@ -15,6 +15,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,7 @@ class DeviceAuthority:
         self.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.enrollment_code = enrollment_code
         self.lock = threading.RLock()
-        with self._connect() as db:
+        with self._database() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS devices (
@@ -73,6 +74,14 @@ class DeviceAuthority:
         db.execute("PRAGMA journal_mode=WAL")
         return db
 
+    @contextmanager
+    def _database(self):
+        db = self._connect()
+        try:
+            yield db
+        finally:
+            db.close()
+
     @staticmethod
     def _code_digest(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -100,7 +109,7 @@ class DeviceAuthority:
         )
         device_id = hashlib.sha256(der).hexdigest()
         digest = self._code_digest(code)
-        with self.lock, self._connect() as db:
+        with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 if db.execute(
