@@ -49,16 +49,17 @@ flow. The bootstrap capability is cleared from the input and is not persisted.
 This browser path has not yet passed target-mobile-browser end-to-end testing.
 
 This is still not an end-to-end operator identity system. Trusted deployment
-provisioning, a usable non-guest authentication/session provider, enforcement
-of the association on protected device/task routes, and safe recovery remain
-unimplemented. A read-only API route now allows the exact already-enrolled
-DeviceAuthority public key to be bound only by a root signature presented from
-the exact bearer session previously associated with that root. This binding
-route does not itself establish a device challenge, grant task authority, or
-prove mobile-browser end-to-end operation. The current public session remains guest-only, and the current
-device proof proves possession of one separately enrolled device key only.
-The new status is explicitly READ_ONLY and does not grant scopes or task
-authority. No command authority may be claimed until those integrations and
+provisioning, a usable non-guest authentication/session provider, browser
+end-to-end verification, worker-side identity revalidation and safe recovery
+remain unimplemented. Queued task acceptance now requires the exact bearer
+session previously associated with the active root, the active root's current
+PRIMARY device binding, and a fresh one-time device signature over the exact
+request body/method/path. The service checks the proof's device identifier
+against the root-bound primary device before persisting a queued task, and
+rechecks the same binding before returning an idempotent queued-task replay.
+This gate grants no new scopes and does not enable worker execution. The
+current public session remains guest-only and is rejected for queued tasks.
+No command authority may be claimed until the remaining integrations and
 their end-to-end tests pass.
 
 ## Security objectives
@@ -160,13 +161,19 @@ then verifies a root signature over the canonical key/version/PRIMARY binding
 statement. It stores no submitted raw subject or token and returns no device
 identifier or public key. A key that is not the exact enrolled key is rejected.
 
-**Still pending:** add an expiring one-time device-binding challenge to the
-root-signed statement, verify this flow in the target mobile browser, provide
-a non-guest authentication/session provider, and enforce current session
-association plus device binding on protected device/task routes. The
-public chat currently creates guest sessions only, which are intentionally
-rejected by session association. Until the remaining gates pass, the endpoint
-is informational/read-only and must not be treated as command authority.
+**Implemented:** queued task acceptance now revalidates the exact bearer
+session and active root-bound PRIMARY device after the device proof has been
+verified. The proof is one-time and bound to the exact request body, method,
+and path. A different bearer token for the same subject is rejected, and the
+same checks apply before an idempotent queued-task replay is returned.
+
+**Still pending:** add an expiring one-time challenge to the root-signed
+device-binding statement, verify this flow in the target mobile browser,
+provide a non-guest authentication/session provider, and revalidate identity
+and device state independently inside the worker immediately before
+execution. The public chat currently creates guest sessions only, which are
+intentionally rejected for queued tasks. This API gate does not confer
+privileged command authority or establish that the worker is safe to run.
 
 ## Authorization and task flow
 
