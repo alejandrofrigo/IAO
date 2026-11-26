@@ -62,6 +62,19 @@ scope grants, revocation flow and end-to-end rejection tests are implemented.
 - `NORMAL` must not be inferred from a live process, configured secret or
   successful container build.
 
+## Federation status semantics
+
+- `/v1/federation/status` currently reports `unknown` and
+  `discovery_only`. It does not claim an active orchestrator, active network
+  nodes, trusted peers or a verified federation.
+- Public repository discovery creates unverified leads only. A discovered
+  repository, manifest, public key or reachable HTTPS endpoint is not by itself
+  proof of operator consent, key possession, peer enrollment or granted
+  capabilities.
+- Remote enrollment and privileged peer capabilities remain disabled until
+  the runtime exposes a verified peer registry and the mutual-authentication,
+  consent, revocation and authorization gates have end-to-end tests.
+
 ## What this container does not provide
 
 GitHub Actions builds and tests the image; GitHub Pages can serve the static
