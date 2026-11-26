@@ -405,7 +405,7 @@ class OmegaService:
                                    ("input", isinstance(tin, dict))) if not ok]
         expires = datetime.fromtimestamp(self.clock() + self.ttl, timezone.utc).isoformat()
         execution_mode = d.get("execution_mode", "sync")
-        if execution_mode not in {"sync", "queued"}:
+        if not isinstance(execution_mode, str) or execution_mode not in {"sync", "queued"}:
             raise ApiError(400, "INVALID_EXECUTION_MODE")
         intent = {
             "contract_version": "1.0",
