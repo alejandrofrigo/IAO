@@ -443,6 +443,80 @@ def test_session_challenge_is_single_use_across_independent_authority_instances(
     assert bindings[0]["key_version"] == 1
 
 
+
+def test_concurrent_session_binding_and_root_revocation_leave_no_session_authority(tmp_path):
+    """Revocation wins durably even when another worker binds a session concurrently."""
+    import base64
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    bootstrap = "session-revoke-race-bootstrap-" + "b" * 40
+    token = "session-revoke-race-token-" + "t" * 48
+    subject = "verified-subject-revoke-race"
+    digest_key = b"session-revoke-race-digest-key-" + b"k" * 32
+    root_private, root_public = keypair()
+    identity_db = tmp_path / "session-revoke-race.sqlite3"
+    authority = OperatorIdentityAuthority(
+        identity_db, bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=digest_key,
+    )
+    identity = authority.bootstrap(bootstrap, root_public)
+    identity_id = identity["identity_id"]
+    challenge = authority.create_session_challenge(subject, token)
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"]
+        + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    session_signature = sign(root_private, payload)
+    revoke_signature = sign(
+        root_private, b"revoke-root-v1\\n" + identity_id.encode("ascii")
+    )
+    workers = [
+        OperatorIdentityAuthority(identity_db, subject_digest_key=digest_key)
+        for _ in range(2)
+    ]
+    gate = Barrier(2)
+
+    def bind():
+        gate.wait(timeout=10)
+        try:
+            workers[0].bind_authenticated_session(
+                challenge["challenge"], subject, token, session_signature,
+            )
+            return "bound"
+        except OperatorIdentityError as exc:
+            return exc.code
+
+    def revoke():
+        gate.wait(timeout=10)
+        workers[1].revoke(
+            identity_id, revoke_signature, expected_key_version=1,
+        )
+        return "revoked"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        bind_future = pool.submit(bind)
+        revoke_future = pool.submit(revoke)
+        bind_outcome = bind_future.result()
+        revoke_outcome = revoke_future.result()
+
+    assert revoke_outcome == "revoked"
+    assert bind_outcome in {"bound", "OPERATOR_IDENTITY_NOT_ACTIVE"}
+    assert not workers[0].verify_authenticated_session(subject, token)
+    with workers[0]._database() as db:
+        identity_row = db.execute(
+            "SELECT status FROM operator_identities WHERE identity_id=?",
+            (identity_id,),
+        ).fetchone()
+        session_bindings = db.execute(
+            "SELECT 1 FROM operator_session_bindings WHERE identity_id=?",
+            (identity_id,),
+        ).fetchall()
+    assert identity_row["status"] == "REVOKED"
+    assert session_bindings == []
+
+
 def test_session_binding_rejects_invalid_signature_guest_and_expiry(tmp_path, monkeypatch):
     import base64
 
