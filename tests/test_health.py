@@ -18,4 +18,4 @@ class HealthTests(unittest.TestCase):
     def test_chat_does_not_claim_model_is_ready(self) -> None:
         r = TestClient(app).post("/v1/chat", json={"conversation_id": "t", "message": "hello"})
         self.assertEqual(r.status_code, 503)
-        self.assertEqual(r.json()["detail"]["code"], "MODEL_ADAPTER_NOT_CONFIGURED")
+        self.assertEqual(r.json()["error"], "PERSISTENT_RUNTIME_UNAVAILABLE")
