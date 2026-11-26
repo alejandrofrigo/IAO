@@ -1,5 +1,4 @@
 """Filesystem safety tests for the privileged device-authority database."""
-import os
 import stat
 
 import pytest
@@ -11,14 +10,9 @@ def test_device_authority_database_and_parent_are_private(tmp_path):
     parent = tmp_path / "state"
     parent.mkdir(mode=0o777)
     database = parent / "device-authority.sqlite3"
-    authority = DeviceAuthority(database)
-    try:
-        assert stat.S_IMODE(parent.stat().st_mode) == 0o700
-        assert stat.S_IMODE(database.stat().st_mode) == 0o600
-        assert authority._database is not None
-    finally:
-        # Close any SQLite sidecars before checking the primary database.
-        pass
+    DeviceAuthority(database)
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(database.stat().st_mode) == 0o600
 
 
 def test_device_authority_refuses_database_symlink(tmp_path):
