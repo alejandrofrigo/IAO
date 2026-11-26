@@ -95,3 +95,17 @@ def test_p2p_inventory_stays_separate_from_http_candidates(tmp_path):
     peer = next(iter(registry["p2p_peers"].values()))
     assert peer["status"] == "DISCOVERED_UNVERIFIED"
     assert peer["granted_capabilities"] == []
+
+
+def test_libp2p_adapter_uses_existing_outbound_discovery(monkeypatch):
+    from omega import libp2p_discovery
+    from omega.external_network import Libp2pDHTDiscovery
+
+    monkeypatch.setattr(libp2p_discovery, "discover_sync", lambda *args, **kwargs: {
+        "status": "DISCOVERY_COMPLETED",
+        "peers": [{"peer_id": "12D3KooWJ5xExamplePeerIdentifier",
+                   "multiaddrs": ["/ip4/203.0.113.10/tcp/4001"]}],
+    })
+    found = Libp2pDHTDiscovery().discover()
+    assert found[0]["peer_id"] == "12D3KooWJ5xExamplePeerIdentifier"
+    assert found[0]["multiaddr"][0].startswith("/")

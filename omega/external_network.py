@@ -200,6 +200,23 @@ class GitHubPublicDiscovery:
         return records
 
 
+class Libp2pDHTDiscovery:
+    """Actively join the public Kademlia DHT in outbound-only client mode."""
+    name = "libp2p_kad_dht"
+
+    def __init__(self, bootstrap_addrs: list[str] | None = None):
+        self.bootstrap_addrs = bootstrap_addrs
+
+    def discover(self) -> list[dict[str, Any]]:
+        from omega.libp2p_discovery import discover_sync
+        result = discover_sync(self.bootstrap_addrs, timeout=25)
+        peers = result.get("peers", []) if isinstance(result, dict) else []
+        return [
+            {"peer_id": peer.get("peer_id"), "multiaddr": peer.get("multiaddrs", [])}
+            for peer in peers[:MAX_CANDIDATES] if isinstance(peer, dict)
+        ]
+
+
 class LocalP2PInventory:
     """Import libp2p peer IDs and multiaddrs without fabricating HTTPS endpoints."""
     name = "local_p2p_inventory"
@@ -295,7 +312,7 @@ class ExternalNetwork:
                     if not isinstance(found, list):
                         raise TypeError("SOURCE_RESULT_MUST_BE_LIST")
                     for raw in found[:MAX_CANDIDATES]:
-                        if source.name == "local_p2p_inventory":
+                        if source.name in {"local_p2p_inventory", "libp2p_kad_dht"}:
                             if not isinstance(raw, dict):
                                 continue
                             peer_id, addrs = raw.get("peer_id"), raw.get("multiaddr")
@@ -368,6 +385,18 @@ def build_network(state_dir: str | Path | None = None) -> ExternalNetwork:
     if isinstance(directories, list) and directories:
         sources.append(SignedHTTPSDirectories(directories))
     sources.append(LocalP2PInventory(state))
+    p2p = config.get("libp2p", {})
+    if not isinstance(p2p, dict):
+        p2p = {}
+    if p2p.get("enabled", True):
+        try:
+            import importlib.util
+            available = importlib.util.find_spec("libp2p") is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            available = False
+        if available:
+            bootstrap = p2p.get("bootstrap_addrs")
+            sources.append(Libp2pDHTDiscovery(bootstrap if isinstance(bootstrap, list) else None))
     return ExternalNetwork(state, sources)
 
 
