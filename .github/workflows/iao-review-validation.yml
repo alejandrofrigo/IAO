@@ -28,6 +28,9 @@ jobs:
       - name: Prepare isolated test runtime
         run: |
           mkdir -p apps
-          echo "AUDIT_HMAC_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
+          key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          echo "::add-mask::$key"
+          echo "AUDIT_HMAC_KEY=$key" >> "$GITHUB_ENV"
+          unset key
       - name: Run tests
         run: python -m pytest -q
