@@ -624,8 +624,8 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
         authority.create_operator_recovery_challenge(
             recovery, new_root_public, new_device_public, "unused-next-recovery-" + "u" * 40,
         )
-    next_root_private, next_root_public = keypair()
-    next_device_private, next_device_public = keypair()
+    _, next_root_public = keypair()
+    _, next_device_public = keypair()
     next_challenge = authority.create_operator_recovery_challenge(
         next_recovery, next_root_public, next_device_public,
         "second-rotated-recovery-" + "t" * 48,
