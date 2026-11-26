@@ -236,7 +236,7 @@ def test_recovery_replaces_only_same_operator_device_and_invalidates_pending_pro
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
-    enrolled = authority.enroll(code, old_public, owner_subject=owner)
+    enrolled = authority.enroll(code, old_public, owner_subject="pre-login-owner")
     challenge = authority.challenge(enrolled["device_id"], owner_subject=owner)
 
     new_public_key = ec.generate_private_key(ec.SECP256R1())
@@ -246,6 +246,7 @@ def test_recovery_replaces_only_same_operator_device_and_invalidates_pending_pro
     ).decode("ascii")
     result = authority.replace_active_device_for_recovery(
         new_public, owner_subject=owner,
+        expected_old_public_key_pem=old_public,
     )
     assert result["device_id"] != enrolled["device_id"]
     assert authority.verify_registered_public_key(new_public, owner_subject=owner)
