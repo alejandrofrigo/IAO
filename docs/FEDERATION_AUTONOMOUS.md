@@ -12,6 +12,10 @@
 - La identidad IAO HTTP usa Ed25519; el challenge vincula clave pública, ID del nodo, nonce, requester y timestamp.
 - Las respuestas federadas se tratan como datos no confiables, aunque su firma sea válida.
 - Los directorios y feeds públicos de descubrimiento usan un cliente HTTPS fijado a una IP DNS global verificada, sin proxies ambientales ni redirects, con validación TLS del hostname, límite de respuesta y tipo JSON obligatorio.
+- El envío de mensajes federados también usa transporte fijado y limitado: DNS público validado, conexión a la IP fijada, TLS con validación del hostname, sin redirects/proxies y con tamaño/tipo de respuesta controlados.
+- Cada peer necesita un endpoint exacto fijado en su registro antes de poder recibir un envío; una URL aportada por el llamante no basta. Los registros antiguos sin endpoint quedan bloqueados hasta que se fije uno mediante una operación controlada.
+- HTTP sin TLS solo se acepta para direcciones IP literales loopback en pruebas e integración local; nunca para peers remotos.
+- El cliente puede presentar certificado mTLS mediante IAO_TLS_CLIENT_CERT_FILE e IAO_TLS_CLIENT_KEY_FILE; IAO_TLS_CA_FILE permite una CA específica. La clave cliente debe tener permisos privados. La opción IAO_TLS_REQUIRE_CLIENT_CERT exige que exista la pareja de archivos, pero no demuestra por sí sola que el servidor remoto exija el certificado.
 
 ## Bloqueos de seguridad intencionados
 
