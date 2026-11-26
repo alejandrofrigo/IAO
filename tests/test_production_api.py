@@ -175,3 +175,33 @@ def test_device_authority_rejects_unsigned_privileged_action(monkeypatch, tmp_pa
         },
     )
     assert response.status_code == 400
+
+
+def test_device_challenge_endpoint_caps_outstanding_challenges(monkeypatch, tmp_path) -> None:
+    client = configured_client(monkeypatch, tmp_path)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_pem = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    code = "one-time-enrollment-code-" + "z" * 32
+    enrolled = client.post(
+        "/v1/device/enroll",
+        json={"code": code, "public_key_pem": public_pem},
+    )
+    assert enrolled.status_code == 201
+    device_id = enrolled.json()["device_id"]
+
+    for _ in range(5):
+        response = client.post(
+            "/v1/device/challenge",
+            json={"device_id": device_id},
+        )
+        assert response.status_code == 200
+
+    limited = client.post(
+        "/v1/device/challenge",
+        json={"device_id": device_id},
+    )
+    assert limited.status_code == 429
+    assert limited.json()["error"] == "DEVICE_CHALLENGE_RATE_LIMITED"
