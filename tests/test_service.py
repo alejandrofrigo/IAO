@@ -55,6 +55,92 @@ class Base(unittest.TestCase):
         return self.call("POST", "/v1/tasks", h, {"goal": "g", "capability": cap, "input": inp if inp is not None else {"query": "audit chain"}})
 
 
+    def test_dual_signature_operator_login_api_issues_read_only_session_once(self) -> None:
+        bootstrap_code = "operator-login-api-bootstrap-" + "v" * 40
+        enrollment_code = "operator-login-device-enrollment-" + "w" * 40
+        device_authority = DeviceAuthority(
+            self.state / "operator-login-device.sqlite3",
+            enrollment_code=enrollment_code,
+        )
+        root = ec.generate_private_key(ec.SECP256R1())
+        root_public = root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        device = ec.generate_private_key(ec.SECP256R1())
+        device_public = device.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        device_authority.enroll(
+            enrollment_code, device_public, owner_subject="existing-device-owner"
+        )
+        identity_authority = OperatorIdentityAuthority(
+            self.state / "operator-login-identity.sqlite3",
+            bootstrap_code,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"operator-login-api-session-key").digest(),
+        )
+        identity = identity_authority.bootstrap(bootstrap_code, root_public)
+        _, binding_payload = identity_authority.device_binding_payload(
+            device_public, key_version=1
+        )
+        identity_authority.bind_primary_device(
+            identity["identity_id"], device_public,
+            root.sign(ROOT_SIGNATURE_DOMAIN + binding_payload, ec.ECDSA(hashes.SHA256())),
+            expected_key_version=1,
+        )
+        self.svc.device_authority = device_authority
+        self.svc.operator_identity_authority = identity_authority
+
+        status, challenge = self.call(
+            "POST", "/v1/operator/login/challenge", {}, {}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(challenge["protocol"], "IAO-OPERATOR-LOGIN-V1")
+        payload = base64.urlsafe_b64decode(
+            challenge["signing_payload"]
+            + "=" * (-len(challenge["signing_payload"]) % 4)
+        )
+        root_signature = root.sign(
+            ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+        )
+        device_signature = device.sign(
+            b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        encoded = lambda value: base64.urlsafe_b64encode(value).decode().rstrip("=")
+        status, result = self.call(
+            "POST", "/v1/operator/login/complete", {},
+            {
+                "challenge": challenge["challenge"],
+                "root_signature": encoded(root_signature),
+                "device_signature": encoded(device_signature),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["authority"], "OPERATOR_AUTHENTICATED_READ_ONLY")
+        self.assertEqual(result["scopes"], [])
+        headers = {"authorization": "Bearer " + result["access_token"]}
+        self.assertEqual(self.call("GET", "/v1/me", headers)[1]["scopes"], [])
+        self.assertTrue(
+            self.call("GET", "/v1/operator/session/status", headers)[1]["associated"]
+        )
+        replay = self.call(
+            "POST", "/v1/operator/login/complete", {},
+            {
+                "challenge": challenge["challenge"],
+                "root_signature": encoded(root_signature),
+                "device_signature": encoded(device_signature),
+            },
+        )
+        self.assertEqual((replay[0], replay[1]["error"]), (409, "OPERATOR_LOGIN_REPLAYED"))
+        audit = json.dumps(self.svc.store._all_events())
+        self.assertNotIn(result["access_token"], audit)
+        self.assertNotIn(root_public, audit)
+        self.assertNotIn(device_public, audit)
+
+
 class AuthTests(Base):
     def test_operator_bootstrap_endpoint_consumes_out_of_band_capability_once(self) -> None:
         code = "out-of-band-bootstrap-" + "q" * 48
