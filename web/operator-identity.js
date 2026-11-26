@@ -187,12 +187,32 @@
     bindDeviceButton.type = "button"; bindDeviceButton.textContent = "Vincular dispositivo primario";
     const output = document.createElement("pre");
     output.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;";
+    let sessionAuthority = "UNAVAILABLE";
     function show(message, failed) { output.textContent = message; output.style.color = failed ? "#c44" : "inherit"; }
+    function applySessionGates() {
+      const hasToken = typeof window.iaoGetSessionToken === "function" &&
+        Boolean(window.iaoGetSessionToken());
+      associateButton.disabled = !hasToken || sessionAuthority !== "UNBOUND_READ_ONLY";
+      bindDeviceButton.disabled = !hasToken || sessionAuthority !== "IDENTITY_BOUND_READ_ONLY";
+    }
+    async function refreshSessionGates() {
+      sessionAuthority = "UNAVAILABLE";
+      applySessionGates();
+      if (typeof window.iaoGetSessionToken !== "function" || !window.iaoGetSessionToken()) return;
+      try {
+        const current = await status();
+        sessionAuthority = typeof current.authority === "string"
+          ? current.authority : "UNAVAILABLE";
+      } catch (_) {
+        sessionAuthority = "UNAVAILABLE";
+      }
+      applySessionGates();
+    }
     async function run(button, action, success) {
       button.disabled = true;
       try { show(success(await action()), false); }
       catch (error) { show("ERROR: " + error.message, true); }
-      finally { button.disabled = false; }
+      finally { await refreshSessionGates(); }
     }
     bootstrapButton.addEventListener("click", () => run(bootstrapButton, async () => {
       const secret = code.value; code.value = "";
@@ -214,6 +234,8 @@
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
     section.append(title, description, code, bootstrapButton, associateButton, statusButton, bindDeviceButton, output);
     document.body.appendChild(section);
+    window.addEventListener("iao-session-changed", refreshSessionGates);
+    refreshSessionGates();
     readIdentity().then(identity => show(
       identity ? (identity.bootstrapPending ? "Clave raíz local conservada; confirma el bootstrap o consulta su estado." : "Clave raíz local disponible en este navegador.") : "No hay identidad raíz registrada en este navegador.", false
     )).catch(error => show("Almacenamiento no disponible: " + error.message, true));
