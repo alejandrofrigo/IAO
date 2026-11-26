@@ -519,6 +519,17 @@ class AuthTests(Base):
         self.assertEqual((status, result["error"]), (401, "INVALID_BOOTSTRAP_DEVICE_SIGNATURE"))
         self.assertEqual(self.svc.operator_identity_authority.primary_device_public_key(), None)
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
+        body["device_signature"] = base64.urlsafe_b64encode(
+            device.sign(
+                b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + payload,
+                ec.ECDSA(hashes.SHA256()),
+            )
+        ).decode().rstrip("=")
+        body["root_signature"] = base64.urlsafe_b64encode(b"x" * 70).decode().rstrip("=")
+        status, result = self.call("POST", "/v1/operator/bootstrap", {}, body)
+        self.assertEqual((status, result["error"]), (401, "INVALID_OPERATOR_BOOTSTRAP_SIGNATURE"))
+        self.assertEqual(self.svc.operator_identity_authority.primary_device_public_key(), None)
+        self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
 
     def test_operator_bootstrap_is_disabled_without_device_authority(self) -> None:
         status, result = self.call(
