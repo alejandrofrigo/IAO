@@ -821,7 +821,7 @@ def test_operator_recovery_challenge_expires_before_any_device_replacement(tmp_p
     bootstrap = "expiry-bootstrap-" + "b" * 40
     recovery = "expiry-recovery-" + "r" * 48
     rotated = "expiry-rotated-recovery-" + "n" * 48
-    old_root, old_public = keypair()
+    _, old_public = keypair()
     new_root, new_root_public = keypair()
     new_device, new_device_public = keypair()
     authority = OperatorIdentityAuthority(
@@ -838,11 +838,11 @@ def test_operator_recovery_challenge_expires_before_any_device_replacement(tmp_p
         challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
     )
     root_signature = new_root.sign(
-        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        b"IAO-OPERATOR-RECOVERY-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
     device_signature = new_device.sign(
-        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
     replaced = []
@@ -860,4 +860,4 @@ def test_operator_recovery_challenge_expires_before_any_device_replacement(tmp_p
             (authority._digest(challenge["challenge"]),),
         ).fetchone()
     assert row["consumed_at"] is None
-    assert authority.primary_device_public_key() if False else True
+    assert authority._recovery_digest(rotated) != authority._recovery_digest(recovery)
