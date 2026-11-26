@@ -15,8 +15,13 @@ COPY pyproject.toml README.md ./
 COPY apps ./apps
 COPY omega ./omega
 
-RUN python -m pip install --no-cache-dir --upgrade pip \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 \
+    && apt-mark manual libgmp10 \
+    && python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir '.[p2p]' \
+    && apt-get purge -y --auto-remove build-essential libgmp-dev \
+    && rm -rf /var/lib/apt/lists/* \
     && groupadd --system iao \
     && useradd --system --gid iao --home-dir /home/iao --create-home iao \
     && mkdir -p /var/lib/iao /app/knowledge \
