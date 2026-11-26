@@ -28,8 +28,12 @@ mechanism, not proof of exactly-once tool effects.
 - [x] Unit test covers an expired `VERIFYING` lease: startup recovery marks it
       failed and it cannot be claimed again. Full process-kill fault injection
       across external tool side effects remains outstanding.
-- [ ] Fault-injection tests cover process death before tool invocation,
-      during invocation, after invocation, and before result persistence.
+- [x] Fault-injection test raises a process-interruption exception after the
+      tool has been invoked but before execution/result persistence; recovery
+      marks the task failed and proves it is not re-invoked. This is an in-process
+      boundary simulation, not a physical process-kill or power-loss test.
+- [ ] Physical process-kill tests cover death before tool invocation, during
+      invocation, after invocation, and before result persistence.
 - [ ] Tool execution has an explicit idempotency contract. A timeout or worker
       crash after an external side effect must not trigger blind replay.
 - [ ] Lease renewal and maximum execution duration are bounded and tested.
