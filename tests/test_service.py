@@ -152,6 +152,24 @@ class Base(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(reconciled["authority"], "RECOVERY_COMMITTED_READ_ONLY")
         self.assertEqual(reconciled["key_version"], 2)
+        # The identity DB alone is insufficient: reconciliation must also
+        # confirm that DeviceAuthority still enrolls this exact key to the owner.
+        with device_authority._database() as db:
+            db.execute(
+                "UPDATE devices SET owner_subject=? WHERE public_key_pem=?",
+                ("operator:unrelated-owner", new_device_public),
+            )
+        status, mismatched = self.call(
+            "POST", "/v1/operator/recovery/status", {},
+            {
+                "new_root_public_key_pem": new_root_public,
+                "new_device_public_key_pem": new_device_public,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(mismatched, {
+            "committed": False, "authority": "RECOVERY_NOT_COMMITTED",
+        })
         with self.assertRaisesRegex(OperatorIdentityError, "INVALID_OPERATOR_RECOVERY_CODE"):
             authority.create_operator_recovery_challenge(
                 recovery, new_root_public, new_device_public, "another-new-recovery-" + "z" * 40,
