@@ -114,7 +114,7 @@ fixed route, timestamp, nonce and digest of the exact request bytes.
 - Device status remains read-only. Enrollment and identity proof alone grant
   no WRITE, EXECUTE, DEPLOY, CREDENTIAL or ADMIN capability.
 
-## Session association (primitive implemented; API/browser integration pending)
+## Session association (API integrated; browser flow partial)
 
 A non-guest bearer token is not, by itself, proof that its subject owns the
 root key. The isolated registry now supports a fresh root-key signature over
@@ -137,9 +137,9 @@ storage and local challenge signing.
 high-entropy, one-time secret delivered out of band, and
 IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT to its short validity deadline as a Unix
 timestamp. Leave both unset to keep bootstrap disabled. Never put the secret
-in source control, public build artifacts, URLs, analytics or logs. Remove the
-environment secret after successful bootstrap; the database also enforces
-single-use consumption.
+in source control, public build artifacts, URLs, analytics or logs. The runtime removes the secret from its process environment during service
+construction and clears the in-memory capability after successful bootstrap;
+the database also enforces single-use consumption.
 
 **Still pending:** verify this flow in the target mobile browser, provide a
 non-guest authentication/session provider, cryptographically cross-check the
