@@ -63,10 +63,19 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
             enrollment_code=os.environ.get("IAO_DEVICE_ENROLLMENT_CODE", ""),
         ),
     )
+    bootstrap_expiry_raw = os.environ.get(
+        "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT", ""
+    ).strip()
+    try:
+        bootstrap_expiry = float(bootstrap_expiry_raw) if bootstrap_expiry_raw else None
+    except ValueError:
+        bootstrap_expiry = None
     kw.setdefault(
         "operator_identity_authority",
         OperatorIdentityAuthority(
             state_dir / "operator-identity.sqlite3",
+            bootstrap_code=os.environ.get("IAO_OPERATOR_BOOTSTRAP_CODE", ""),
+            bootstrap_expires_at=bootstrap_expiry,
             subject_digest_key=hashlib.sha256(
                 b"IAO-OPERATOR-SUBJECT-HMAC-V1\x00" + token_key.encode("utf-8")
             ).digest(),
