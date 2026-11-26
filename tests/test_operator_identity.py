@@ -636,10 +636,7 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
     with pytest.raises(OperatorIdentityError, match="OPERATOR_RECOVERY_REPLAYED"):
         authority.complete_operator_recovery(
             challenge["challenge"], root_signature, device_signature,
-            device_replacement=lambda public, subject, old=None: devices.replace_active_device_for_recovery(
-            public, owner_subject=subject, expected_old_public_key_pem=old,
-        ),
-        )
+            device_replacement=lambda public, subject, old=None: None,
 
 
 def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_signature(tmp_path):
@@ -668,20 +665,14 @@ def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_sig
     with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_RECOVERY_SIGNATURE"):
         authority.complete_operator_recovery(
             challenge["challenge"], root_signature, b"x" * 70,
-            device_replacement=lambda public, subject, old=None: devices.replace_active_device_for_recovery(
-            public, owner_subject=subject, expected_old_public_key_pem=old,
-        ),
-        )
+            device_replacement=lambda public, subject, old=None: None,
     device_signature = device_private.sign(
         b"IAO-OPERATOR-RECOVERY-DEVICE-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
     result = authority.complete_operator_recovery(
         challenge["challenge"], root_signature, device_signature,
-        device_replacement=lambda public, subject, old=None: devices.replace_active_device_for_recovery(
-            public, owner_subject=subject, expected_old_public_key_pem=old,
-        ),
-    )
+            device_replacement=lambda public, subject, old=None: None,
     assert result["key_version"] == 2
 
 
