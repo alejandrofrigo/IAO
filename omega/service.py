@@ -53,6 +53,7 @@ class OmegaService:
 
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._public_hits: dict[str, deque[float]] = defaultdict(deque)
+        self._operator_bootstrap_hits: deque[float] = deque()
         self._rl = threading.Lock()
 
         # A RUNNING task after restart has an unknown execution outcome.
@@ -145,6 +146,42 @@ class OmegaService:
                     "tools": sorted(self.registry.names()),
                 },
             }
+        if method == "POST" and p == "/v1/operator/bootstrap":
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            now = self.clock()
+            with self._rl:
+                while self._operator_bootstrap_hits and self._operator_bootstrap_hits[0] < now - 60:
+                    self._operator_bootstrap_hits.popleft()
+                limited = len(self._operator_bootstrap_hits) >= 3
+                if not limited:
+                    self._operator_bootstrap_hits.append(now)
+            if limited:
+                raise ApiError(429, "RATE_LIMITED")
+            data = self._json(body)
+            code = data.get("code")
+            public_key = data.get("root_public_key_pem")
+            if (
+                not isinstance(code, str) or not 32 <= len(code) <= 512
+                or not isinstance(public_key, str) or not 1 <= len(public_key) <= 4096
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_BOOTSTRAP")
+            try:
+                result = self.operator_identity_authority.bootstrap(code, public_key)
+            except OperatorIdentityError as exc:
+                # Never echo or audit the supplied bootstrap capability or key.
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_bootstrap", "OPERATOR_ROOT_BOOTSTRAPPED",
+                "root_identity", decision="ALLOW",
+                key_version=result["key_version"],
+            )
+            return 201, {
+                "algorithm": "ECDSA-P256-SHA256",
+                "key_version": result["key_version"],
+                "status": "ROOT_REGISTERED",
+            }
+
         if method == "POST" and p == "/v1/public/session":
             # The HTTP handler overwrites this header using the socket peer address.
             client = headers.get("x-omega-client-ip", "unknown")[:64]
