@@ -12,6 +12,7 @@ import hmac
 import json
 import math
 import os
+import re
 import secrets
 import sqlite3
 import stat
