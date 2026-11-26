@@ -141,7 +141,17 @@ def _get_service():
                 corpus_dir = Path(os.environ.get("IAO_CORPUS_DIR", "/app/knowledge"))
                 _service = build_service(state_dir, token_key, corpus_dir)
     service = _service
-    _ensure_federation(service)
+    try:
+        _ensure_federation(service)
+    except Exception as exc:
+        # Federation degradation must not take down local sessions or chat.
+        try:
+            service.store.audit(
+                "system", "FEDERATION_INITIALIZATION_FAILED",
+                "local", error_type=type(exc).__name__,
+            )
+        except Exception:
+            pass
     return service
 
 
