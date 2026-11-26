@@ -59,9 +59,12 @@ idempotency handling or task persistence. Missing, malformed, altered or
 replayed proofs are rejected. The device identifier and proof are not written
 to audit events.
 
-The device key must be enrolled through a trusted local provisioning process;
-there is deliberately no public enrollment endpoint. The enrollment code is
-supplied through `IAO_DEVICE_ENROLLMENT_CODE` and consumed once. The queued
+The device key is enrolled through `POST /v1/device/enroll`, which is disabled
+unless the operator explicitly sets `IAO_DEVICE_ENROLLMENT_ENABLED=1` and
+provides `IAO_DEVICE_ENROLLMENT_CODE`. The deployment operator must ensure
+TLS at the public edge before enabling enrollment. The code is consumed once;
+it is never written to audit events. The authenticated browser session is used
+to request challenges, and the browser signs queued task bodies locally. The queued
 worker and API continue to enforce `READ_ONLY` capabilities. This integration
 does **not** grant write, execution, deployment, credential or administrative
 authority. Production worker startup remains blocked pending full production
