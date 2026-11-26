@@ -74,7 +74,6 @@ def test_backup_does_not_restore_revoked_state_or_replace_live_databases(tmp_pat
     identity_db, device_db, root_private, root_public, device_public, identity = _pair(tmp_path)
     backup = tmp_path / "pre-revocation"
     create_identity_backup(identity_db, device_db, backup)
-    identity_id = identity.bootstrap("unused-bootstrap-secret-" + "x" * 40, root_public)["identity_id"] if False else None
     with sqlite3.connect(identity_db) as db:
         row = db.execute("SELECT identity_id FROM operator_identities WHERE status='ACTIVE'").fetchone()
     identity_id = row[0]

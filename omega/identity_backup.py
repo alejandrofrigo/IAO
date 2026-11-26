@@ -7,6 +7,7 @@ independent monotonic trust anchor and an operator-controlled restore procedure.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -155,7 +156,7 @@ def verify_identity_backup(backup_directory: str | Path) -> dict[str, Any]:
             path = root / filename
             if path.is_symlink() or not path.is_file() or not isinstance(expected, str):
                 raise IdentityBackupError("IDENTITY_BACKUP_MANIFEST_INVALID")
-            if not hashlib.compare_digest(_sha256(path), expected):
+            if not hmac.compare_digest(_sha256(path), expected):
                 raise IdentityBackupError("IDENTITY_BACKUP_CHECKSUM_MISMATCH")
         state = _paired_state(root / IDENTITY_BACKUP_NAME, root / DEVICE_BACKUP_NAME)
         if manifest.get("state") != state:
