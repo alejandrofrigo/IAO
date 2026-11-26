@@ -16,7 +16,7 @@ from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolSpec
 from omega.task_worker import TaskWorker
 from omega.service import POLICY_VERSION
-from omega.device_authority import DeviceAuthority
+from omega.device_authority import DeviceAuthority, DeviceAuthorityError
 from omega.operator_identity import OperatorIdentityAuthority, ROOT_SIGNATURE_DOMAIN
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -127,7 +127,7 @@ class AuthTests(Base):
         self.assertTrue(device_authority.verify_registered_public_key(
             device_public, owner_subject=operator_subject,
         ))
-        with self.assertRaisesRegex(Exception, "DEVICE_KEY_NOT_ENROLLED_FOR_OWNER"):
+        with self.assertRaisesRegex(DeviceAuthorityError, "DEVICE_KEY_NOT_ENROLLED_FOR_OWNER"):
             device_authority.verify_registered_public_key(
                 device_public, owner_subject="existing-device-owner",
             )
