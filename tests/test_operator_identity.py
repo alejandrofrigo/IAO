@@ -1191,6 +1191,19 @@ def test_recovery_retries_after_device_commit_and_identity_transaction_failure(t
     assert identity_row["recovery_code_digest"] == authority._recovery_digest(recovery)
     assert challenge_row["consumed_at"] is None
 
+    # Simulate a process restart: both authorities are reconstructed from
+    # their durable SQLite files before the one-time recovery is retried.
+    authority = OperatorIdentityAuthority(
+        identity_db, subject_digest_key=digest_key,
+    )
+    devices = DeviceAuthority(device_db, enrollment_code="")
+    assert not authority.verify_recovered_keypair(
+        new_root_public, new_device_public,
+    )["committed"]
+    assert devices.verify_registered_public_key(
+        new_device_public, owner_subject=owner,
+    )
+
     # Retry uses DeviceAuthority's idempotent same-owner replacement path.
     result = authority.complete_operator_recovery(
         challenge["challenge"], root_signature, device_signature,
@@ -1199,6 +1212,9 @@ def test_recovery_retries_after_device_commit_and_identity_transaction_failure(t
     assert result["key_version"] == 2
     assert authority.primary_device_public_key() == new_device_public
     assert devices.verify_registered_public_key(new_device_public, owner_subject=owner)
+    assert authority.verify_recovered_keypair(
+        new_root_public, new_device_public,
+    )["committed"]
     with pytest.raises(OperatorIdentityError, match="INVALID_ROOT_SIGNATURE"):
         authority.verify_root_signature(
             identity_id, b"old-root-probe", sign(old_root, b"old-root-probe"),
