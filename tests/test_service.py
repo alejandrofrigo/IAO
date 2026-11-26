@@ -170,7 +170,7 @@ class PolicyToolTests(Base):
         ]).encode()
         signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
         proof = {
-            "device_id": device_id,
+            "device_id": enrolled["device_id"],
             "nonce": challenge["nonce"],
             "timestamp": timestamp,
             "request_digest": digest,
