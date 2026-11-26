@@ -47,9 +47,13 @@ capability is cleared from the input and is not persisted. This browser path
 has not yet passed target-mobile-browser end-to-end testing.
 
 This is still not an end-to-end operator identity system. Trusted deployment
-provisioning, a usable non-guest authentication/session provider, device-to-root
-binding, enforcement of the association on protected device/task routes, and
-safe recovery remain unimplemented. The current public session remains guest-only, and the current
+provisioning, a usable non-guest authentication/session provider, enforcement
+of the association on protected device/task routes, and safe recovery remain
+unimplemented. A read-only API route now allows the exact already-enrolled
+DeviceAuthority public key to be bound only by a root signature presented from
+the exact bearer session previously associated with that root. This binding
+route does not itself establish a device challenge, grant task authority, or
+prove mobile-browser end-to-end operation. The current public session remains guest-only, and the current
 device proof proves possession of one separately enrolled device key only.
 The new status is explicitly READ_ONLY and does not grant scopes or task
 authority. No command authority may be claimed until those integrations and
@@ -146,10 +150,18 @@ in source control, public build artifacts, URLs, analytics or logs. The runtime 
 construction and clears the in-memory capability after successful bootstrap;
 the database also enforces single-use consumption.
 
-**Still pending:** verify this flow in the target mobile browser, provide a
-non-guest authentication/session provider, cryptographically cross-check the
-enrolled device key against the root-signed device binding, and enforce current
-session association plus device binding on protected device/task routes. The
+**Implemented:** the read-only POST /v1/operator/device/bind route requires
+a non-guest bearer session, verifies the exact bearer token's existing root
+association, checks that the submitted P-256 public key is already enrolled
+and active for the same server-authenticated subject in DeviceAuthority, and
+then verifies a root signature over the canonical key/version/PRIMARY binding
+statement. It stores no submitted raw subject or token and returns no device
+identifier or public key. A key that is not the exact enrolled key is rejected.
+
+**Still pending:** add an expiring one-time device-binding challenge to the
+root-signed statement, verify this flow in the target mobile browser, provide
+a non-guest authentication/session provider, and enforce current session
+association plus device binding on protected device/task routes. The
 public chat currently creates guest sessions only, which are intentionally
 rejected by session association. Until the remaining gates pass, the endpoint
 is informational/read-only and must not be treated as command authority.
