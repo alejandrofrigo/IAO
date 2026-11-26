@@ -213,6 +213,36 @@ class OmegaService:
                 "status": "ROOT_REGISTERED",
             }
 
+        if method == "POST" and p == "/v1/operator/recovery/status":
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_RECOVERY_UNAVAILABLE")
+            data = self._json(body)
+            root_public = data.get("new_root_public_key_pem")
+            device_public = data.get("new_device_public_key_pem")
+            if (
+                not isinstance(root_public, str) or not 1 <= len(root_public) <= 4096
+                or not isinstance(device_public, str) or not 1 <= len(device_public) <= 4096
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_RECOVERY_STATUS")
+            try:
+                result = self.operator_identity_authority.verify_recovered_keypair(
+                    root_public, device_public,
+                )
+                if result["committed"]:
+                    self.device_authority.verify_registered_public_key(
+                        device_public,
+                        owner_subject="operator:" + result["identity_id"],
+                    )
+            except (DeviceAuthorityError, OperatorIdentityError):
+                result = {"committed": False}
+            if not result["committed"]:
+                return 200, {"committed": False, "authority": "RECOVERY_NOT_COMMITTED"}
+            return 200, {
+                "committed": True,
+                "authority": "RECOVERY_COMMITTED_READ_ONLY",
+                "key_version": result["key_version"],
+            }
+
         if method == "POST" and p == "/v1/operator/recovery/challenge":
             if self.operator_identity_authority is None:
                 raise ApiError(503, "OPERATOR_RECOVERY_UNAVAILABLE")
