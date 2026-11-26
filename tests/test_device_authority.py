@@ -121,7 +121,7 @@ def test_signed_request_is_bound_to_method_path_and_exact_digest(tmp_path):
         proof, method="POST", path="/v1/tasks", request_digest=digest
     ) == {"authority": "DEVICE_REQUEST_VERIFIED"}
 
-    with pytest.raises(DeviceAuthorityError, match="DEVICE_OR_CHALLENGE_NOT_FOUND|CHALLENGE_EXPIRED_OR_REPLAYED"):
+    with pytest.raises(DeviceAuthorityError, match="INVALID_REQUEST"):
         authority.verify_request(
             proof, method="POST", path="/v1/tasks", request_digest="0" * 64
         )
@@ -146,9 +146,10 @@ def test_signed_request_rejects_method_path_or_body_substitution(
         original_digest,
     )
 
+    substituted = {**proof, "request_digest": digest}
     with pytest.raises(DeviceAuthorityError, match="INVALID_DEVICE_SIGNATURE"):
         authority.verify_request(
-            proof, method=method, path=path, request_digest=digest
+            substituted, method=method, path=path, request_digest=digest
         )
 
 
