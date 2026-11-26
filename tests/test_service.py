@@ -127,19 +127,52 @@ class Base(unittest.TestCase):
             b"IAO-OPERATOR-RECOVERY-DEVICE-V1\x00" + payload,
             ec.ECDSA(hashes.SHA256()),
         )
-        status, result = self.call(
-            "POST", "/v1/operator/recovery/complete", {},
+        # Before commit, the public status endpoint must fail closed.
+        status, pending = self.call(
+            "POST", "/v1/operator/recovery/status", {},
             {
-                "challenge": challenge["challenge"],
-                "root_signature": base64.urlsafe_b64encode(root_signature).decode().rstrip("="),
-                "device_signature": base64.urlsafe_b64encode(device_signature).decode().rstrip("="),
+                "new_root_public_key_pem": new_root_public,
+                "new_device_public_key_pem": new_device_public,
             },
         )
         self.assertEqual(status, 200)
-        self.assertEqual(result["authority"], "OPERATOR_RECOVERED_READ_ONLY")
-        self.assertEqual(result["key_version"], 2)
-        self.assertTrue(result["recovery_code_rotated"])
-        self.assertTrue(self.svc.device_authority.verify_registered_public_key(
+        self.assertFalse(pending["committed"])
+        self.assertEqual(pending["authority"], "RECOVERY_NOT_COMMITTED")
+
+        # Simulate the server losing the HTTP response after both durable
+        # authority writes have committed. The caller sees 500 and must
+        # reconcile, not replay the one-time recovery challenge.
+        complete = authority.complete_operator_recovery
+        def commit_then_drop_response(*args, **kwargs):
+            complete(*args, **kwargs)
+            raise RuntimeError("injected_lost_http_response")
+        with patch.object(
+            authority, "complete_operator_recovery",
+            side_effect=commit_then_drop_response,
+        ):
+            status, lost_response = self.call(
+                "POST", "/v1/operator/recovery/complete", {},
+                {
+                    "challenge": challenge["challenge"],
+                    "root_signature": base64.urlsafe_b64encode(root_signature).decode().rstrip("="),
+                    "device_signature": base64.urlsafe_b64encode(device_signature).decode().rstrip("="),
+                },
+            )
+        self.assertEqual(status, 500)
+        self.assertEqual(lost_response["error"], "INTERNAL_ERROR")
+
+        # Reconstruct both authorities from disk to model a fresh API process.
+        identity_authority = OperatorIdentityAuthority(
+            self.state / "api-recovery-identity.sqlite3",
+            subject_digest_key=hashlib.sha256(b"api-recovery-session-key").digest(),
+        )
+        device_authority = DeviceAuthority(
+            self.state / "api-recovery-device-authority.sqlite3",
+            enrollment_code="",
+        )
+        self.svc.operator_identity_authority = identity_authority
+        self.svc.device_authority = device_authority
+        self.assertTrue(device_authority.verify_registered_public_key(
             new_device_public, owner_subject="operator:" + identity["identity_id"]
         ))
         status, reconciled = self.call(
@@ -152,6 +185,17 @@ class Base(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(reconciled["authority"], "RECOVERY_COMMITTED_READ_ONLY")
         self.assertEqual(reconciled["key_version"], 2)
+        # The one-time challenge is consumed: reconciliation, not replay,
+        # is the only safe way to recover the lost response.
+        replay = self.call(
+            "POST", "/v1/operator/recovery/complete", {},
+            {
+                "challenge": challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(root_signature).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(device_signature).decode().rstrip("="),
+            },
+        )
+        self.assertEqual((replay[0], replay[1]["error"]), (409, "OPERATOR_RECOVERY_REPLAYED"))
         # The identity DB alone is insufficient: reconciliation must also
         # confirm that DeviceAuthority still enrolls this exact key to the owner.
         with device_authority._database() as db:
