@@ -62,6 +62,18 @@ def test_discovery_url_requires_https_public_default_port_and_no_userinfo():
             transport.validate_discovery_url(url)
 
 
+def test_loopback_message_endpoint_requires_valid_port():
+    assert transport.validate_message_endpoint(
+        "http://127.0.0.1:8080/fed/v1/message"
+    )[0] == "http"
+    with pytest.raises(
+        transport.FederationTransportError, match="PUBLIC_HTTPS_REQUIRED"
+    ):
+        transport.validate_message_endpoint(
+            "http://127.0.0.1:0/fed/v1/message"
+        )
+
+
 def test_dns_resolution_rejects_private_and_mixed_public_private(monkeypatch):
     def answer(address):
         return (2, 1, 6, "", (address, 443))
