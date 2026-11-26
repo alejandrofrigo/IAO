@@ -198,7 +198,7 @@ def test_device_proofs_are_bound_to_the_enrolling_operator(tmp_path):
 
 
 def test_operator_owner_binding_is_atomic_and_rejects_old_owner(tmp_path):
-    authority, _, device_id = _enrolled_authority(tmp_path)
+    authority, _, _ = _enrolled_authority(tmp_path)
     with authority._database() as db:
         pem = db.execute(
             "SELECT public_key_pem FROM devices WHERE device_id=?", (device_id,)
@@ -239,8 +239,8 @@ def test_recovery_replaces_only_same_operator_device_and_invalidates_pending_pro
     enrolled = authority.enroll(code, old_public, owner_subject=owner)
     challenge = authority.challenge(enrolled["device_id"], owner_subject=owner)
 
-    new_private = ec.generate_private_key(ec.SECP256R1())
-    new_public = new_private.public_key().public_bytes(
+    new_public_key = ec.generate_private_key(ec.SECP256R1())
+    new_public = new_public_key.public_key().public_bytes(
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
