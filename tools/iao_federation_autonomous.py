@@ -463,6 +463,21 @@ def run_cycle(dry_run=False, discover=True):
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
         discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
         discovery_summary["candidates_discovered"] = len(candidates)
+        try:
+            from omega.libp2p_discovery import discover_sync
+            p2p = discover_sync()
+            discovery_summary["libp2p"] = {
+                "status": p2p.get("status"),
+                "connected_bootstrappers": p2p.get("connected_bootstrappers", 0),
+                "routing_peers_discovered": p2p.get("routing_peers_discovered", 0),
+                "persisted_new_peers": p2p.get("persisted_new_peers", 0),
+                "enrollment_performed": False,
+                "capabilities_granted": [],
+            }
+            audit("libp2p_dht_discovery_cycle", **discovery_summary["libp2p"])
+        except Exception as exc:
+            discovery_summary["libp2p"] = {"status": "UNAVAILABLE", "error_type": type(exc).__name__}
+            audit("libp2p_dht_discovery_unavailable", error_type=type(exc).__name__)
     items = [n for n in load(NODES, {"nodes": []}).get("nodes", []) if isinstance(n, dict)]
     node = make_node(policy) if not dry_run else None
     results = []
