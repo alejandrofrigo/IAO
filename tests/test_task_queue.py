@@ -101,7 +101,6 @@ class DurableTaskQueueTests(unittest.TestCase):
         claimed = self.store.claim_next_task(
             "worker-a",
             lease_seconds=30,
-            now="2026-11-26T12:00:00+00:00",
         )
         self.assertIsNotNone(claimed)
         self.assertTrue(
@@ -111,7 +110,7 @@ class DurableTaskQueueTests(unittest.TestCase):
         )
 
         recovered = self.store.recover_interrupted_tasks(
-            now="2026-11-26T12:01:00+00:00"
+            now="2999-01-01T00:00:00+00:00"
         )
 
         self.assertEqual(recovered, [{"id": "task-1", "owner": "owner-a"}])
