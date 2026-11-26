@@ -160,8 +160,8 @@ class PolicyToolTests(Base):
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
-        enrolled = authority.enroll(authority.enrollment_code, public_pem)
-        challenge = authority.challenge(enrolled["device_id"])
+        enrolled = authority.enroll(authority.enrollment_code, public_pem, owner_subject="queued-user")
+        challenge = authority.challenge(enrolled["device_id"], owner_subject="queued-user")
         raw_body = json.dumps(queued_retry).encode()
         timestamp = int(time.time())
         digest = hashlib.sha256(raw_body).hexdigest()
@@ -242,13 +242,14 @@ class QueuedTaskApiTests(Base):
             "unit-test-device-enrollment-secret-long-enough"
         )
         enrolled = self.svc.device_authority.enroll(
-            self.svc.device_authority.enrollment_code, public_pem
+            self.svc.device_authority.enrollment_code, public_pem,
+            owner_subject="queued-user",
         )
         self.device_id = enrolled["device_id"]
 
     def queued_headers(self, payload: dict) -> dict[str, str]:
         body = json.dumps(payload).encode()
-        challenge = self.svc.device_authority.challenge(self.device_id)
+        challenge = self.svc.device_authority.challenge(self.device_id, owner_subject="queued-user")
         timestamp = int(time.time())
         digest = hashlib.sha256(body).hexdigest()
         signed = "\n".join(
