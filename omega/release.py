@@ -216,7 +216,8 @@ def smoke_runtime(release: Path, timeout: float = 15.0) -> bool:
     key = os.urandom(16).hex()
     state = tempfile.mkdtemp(prefix="smoke-")
     env = {**os.environ, "OMEGA_DEV_TOKEN_KEY": key, "OMEGA_STATE_DIR": state, "OMEGA_CORPUS_DIR": str(release / "docs/corpus"),
-           "PORT": str(port), "HOST": "127.0.0.1", "APP_ENV": "development", "PYTHONPATH": str(release)}
+           "PORT": str(port), "HOST": "127.0.0.1", "APP_ENV": "development", "PYTHONPATH": str(release),
+           "AUDIT_HMAC_KEY": os.urandom(32).hex()}
     p = subprocess.Popen([sys.executable, "-m", "omega.server"], cwd=release, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         base = f"http://127.0.0.1:{port}"
