@@ -12,12 +12,12 @@ Provide a passwordless operator sign-in that is cryptographically tied to the en
 
 ### 1. Start challenge
 
-Unauthenticated client sends `POST /v1/operator/login/challenge` with only the public device key (or its canonical public-key digest). The server:
+Unauthenticated client sends an empty `POST /v1/operator/login/challenge`. The server obtains the primary public key from its own root-bound registry; the client cannot choose a device, owner, subject, role or authority. It:
 
-- Requires an active root identity and an active, already-enrolled primary device binding.
-- Confirms that the submitted public key is the exact enrolled primary device key; it must not accept a caller-supplied owner, subject, role, or authority.
-- Creates a cryptographically random challenge handle and nonce, stored only as a digest where possible.
-- Persists a canonical signing payload containing protocol, fixed purpose `OPERATOR_LOGIN`, root key version, device-key digest, nonce, issued-at and short expiry (maximum 90 seconds).
+- Requires an active root identity and a current primary-device binding.
+- Confirms that the exact root-bound public key is currently enrolled and active in DeviceAuthority.
+- Creates a cryptographically random challenge handle and nonce; stores only a digest of the handle.
+- Persists a canonical signing payload containing protocol, fixed purpose `OPERATOR_LOGIN`, root key version, device-key digest, nonce and short expiry (maximum 90 seconds).
 - Applies per-source and global rate limits without writing raw IP addresses into audit events.
 - Returns the opaque challenge handle, payload and expiry only. Never return internal identity IDs, device IDs, key material or existing session tokens.
 
