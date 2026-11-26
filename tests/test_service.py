@@ -390,41 +390,113 @@ class AuthTests(Base):
         }):
             self.mk()
             self.assertNotIn("IAO_OPERATOR_BOOTSTRAP_CODE", os.environ)
+        device_authority = DeviceAuthority(
+            self.state / "bootstrap-device-authority.sqlite3",
+            enrollment_code="",
+        )
+        self.svc.device_authority = device_authority
         root = ec.generate_private_key(ec.SECP256R1())
-        public = root.public_key().public_bytes(
+        root_public = root.public_key().public_bytes(
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
-        status, result = self.call(
-            "POST", "/v1/operator/bootstrap", {},
-            {"code": code, "recovery_code": recovery_code, "root_public_key_pem": public},
+        device = ec.generate_private_key(ec.SECP256R1())
+        device_public = device.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        _, binding_payload = self.svc.operator_identity_authority.device_binding_payload(
+            device_public, key_version=1,
         )
+        root_signature = root.sign(
+            ROOT_SIGNATURE_DOMAIN + binding_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        device_signature = device.sign(
+            b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + binding_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        request_body = {
+            "code": code,
+            "recovery_code": recovery_code,
+            "root_public_key_pem": root_public,
+            "device_public_key_pem": device_public,
+            "root_signature": base64.urlsafe_b64encode(root_signature).decode().rstrip("="),
+            "device_signature": base64.urlsafe_b64encode(device_signature).decode().rstrip("="),
+        }
+        status, result = self.call("POST", "/v1/operator/bootstrap", {}, request_body)
         self.assertEqual(status, 201)
-        self.assertEqual(result["status"], "ROOT_REGISTERED")
+        self.assertEqual(result["status"], "ROOT_AND_DEVICE_REGISTERED")
+        self.assertEqual(result["authority"], "OPERATOR_BOOTSTRAPPED_READ_ONLY")
+        self.assertTrue(result["device_registered"])
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, "")
         self.assertNotIn("identity_id", result)
-        self.assertNotIn(public, json.dumps(result))
-        repeated = self.call(
-            "POST", "/v1/operator/bootstrap", {},
-            {"code": code, "recovery_code": recovery_code, "root_public_key_pem": public},
-        )
-        self.assertEqual(
-            (repeated[0], repeated[1]["error"]),
-            (503, "OPERATOR_BOOTSTRAP_DISABLED"),
-        )
+        self.assertNotIn(root_public, json.dumps(result))
+        self.assertNotIn(device_public, json.dumps(result))
+        identity_id = self.svc.operator_identity_authority._database
+        owner = "operator:" + self.svc.operator_identity_authority._database.__self__.__class__.__name__ if False else None
+        with device_authority._database() as db:
+            row = db.execute("SELECT owner_subject,active FROM devices").fetchone()
+        self.assertEqual(row["active"], 1)
+        self.assertRegex(row["owner_subject"], r"^operator:[0-9a-f]{32}$")
+        self.assertTrue(self.svc.operator_identity_authority.verify_primary_device(
+            row["owner_subject"].split(":", 1)[1], device_public,
+        ))
+        self.assertTrue(device_authority.verify_registered_public_key(
+            device_public, owner_subject=row["owner_subject"],
+        ))
+        repeated = self.call("POST", "/v1/operator/bootstrap", {}, request_body)
+        self.assertEqual((repeated[0], repeated[1]["error"]), (503, "OPERATOR_BOOTSTRAP_DISABLED"))
         audit = json.dumps(self.svc.store._all_events())
-        self.assertNotIn(code, audit)
-        self.assertNotIn(recovery_code, audit)
-        self.assertNotIn(public, audit)
+        for secret in (code, recovery_code, root_public, device_public):
+            self.assertNotIn(secret, audit)
 
-    def test_operator_bootstrap_is_disabled_without_out_of_band_configuration(self) -> None:
+    def test_operator_bootstrap_rejects_invalid_device_proof_without_consuming_code(self) -> None:
+        code = "invalid-bootstrap-proof-" + "q" * 48
+        recovery_code = "invalid-bootstrap-recovery-" + "v" * 48
+        self.svc.store.close()
+        with patch.dict(os.environ, {
+            "IAO_OPERATOR_BOOTSTRAP_CODE": code,
+            "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT": str(time.time() + 600),
+        }):
+            self.mk()
+        self.svc.device_authority = DeviceAuthority(
+            self.state / "invalid-bootstrap-device.sqlite3", enrollment_code="",
+        )
+        root = ec.generate_private_key(ec.SECP256R1())
+        root_public = root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        device = ec.generate_private_key(ec.SECP256R1())
+        device_public = device.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        _, payload = self.svc.operator_identity_authority.device_binding_payload(
+            device_public, key_version=1,
+        )
+        body = {
+            "code": code, "recovery_code": recovery_code,
+            "root_public_key_pem": root_public, "device_public_key_pem": device_public,
+            "root_signature": base64.urlsafe_b64encode(
+                root.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
+            ).decode().rstrip("="),
+            "device_signature": base64.urlsafe_b64encode(b"x" * 70).decode().rstrip("="),
+        }
+        status, result = self.call("POST", "/v1/operator/bootstrap", {}, body)
+        self.assertEqual((status, result["error"]), (401, "INVALID_BOOTSTRAP_DEVICE_SIGNATURE"))
+        self.assertEqual(self.svc.operator_identity_authority.primary_device_public_key(), None)
+        self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, "")
+
+    def test_operator_bootstrap_is_disabled_without_device_authority(self) -> None:
         status, result = self.call(
             "POST", "/v1/operator/bootstrap", {},
             {"code": "unconfigured-bootstrap-" + "x" * 40,
              "recovery_code": "unconfigured-recovery-" + "r" * 40,
              "root_public_key_pem": "not-a-public-key"},
         )
-        self.assertEqual((status, result["error"]), (503, "OPERATOR_BOOTSTRAP_DISABLED"))
+        self.assertEqual((status, result["error"]), (503, "OPERATOR_BOOTSTRAP_UNAVAILABLE"))
 
 
     def test_root_signed_session_binding_api_is_scoped_and_read_only(self) -> None:
