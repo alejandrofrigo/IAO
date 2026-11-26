@@ -182,3 +182,30 @@ def test_discover_feed_fails_closed_on_transport_error(monkeypatch):
 
     monkeypatch.setattr(federation, "fetch_public_json", fail)
     assert federation.discover_feed("https://directory.example.org/feed") == []
+
+
+def test_mtls_required_configuration_fails_closed_without_client_identity(monkeypatch):
+    monkeypatch.setenv("IAO_TLS_REQUIRE_CLIENT_CERT", "true")
+    monkeypatch.delenv("IAO_TLS_CLIENT_CERT_FILE", raising=False)
+    monkeypatch.delenv("IAO_TLS_CLIENT_KEY_FILE", raising=False)
+    with pytest.raises(
+        transport.FederationTransportError, match="CLIENT_CERT_REQUIRED"
+    ):
+        transport._client_tls_context()
+
+
+def test_mtls_client_private_key_permissions_are_enforced(tmp_path, monkeypatch):
+    import os
+
+    cert = tmp_path / "client.crt"
+    key = tmp_path / "client.key"
+    cert.write_text("test-certificate", encoding="utf-8")
+    key.write_text("test-private-key", encoding="utf-8")
+    os.chmod(key, 0o644)
+    monkeypatch.setenv("IAO_TLS_CLIENT_CERT_FILE", str(cert))
+    monkeypatch.setenv("IAO_TLS_CLIENT_KEY_FILE", str(key))
+    with pytest.raises(
+        transport.FederationTransportError,
+        match="CLIENT_KEY_PERMISSIONS_TOO_OPEN",
+    ):
+        transport._client_tls_context()
