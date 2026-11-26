@@ -275,3 +275,23 @@ def test_recovery_cannot_replace_an_unrelated_active_device(tmp_path):
             new_public, owner_subject="operator:" + "b" * 32,
         )
     assert authority.verify_active_public_key(original_public)
+
+
+def test_recovery_never_reactivates_a_previously_revoked_device_key(tmp_path):
+    owner = "operator:" + "c" * 32
+    code = "revoked-device-recovery-code-" + "r" * 40
+    authority = DeviceAuthority(
+        tmp_path / "revoked-recovery-device.sqlite3", enrollment_code=code
+    )
+    old_private = ec.generate_private_key(ec.SECP256R1())
+    old_public = old_private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    authority.enroll(code, old_public, owner_subject=owner)
+    with authority.revoke_active_key(old_public):
+        pass
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_KEY_PREVIOUSLY_ENROLLED"):
+        authority.replace_active_device_for_recovery(
+            old_public, owner_subject=owner,
+        )
