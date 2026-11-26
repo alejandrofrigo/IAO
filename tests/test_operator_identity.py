@@ -636,7 +636,9 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
     with pytest.raises(OperatorIdentityError, match="OPERATOR_RECOVERY_REPLAYED"):
         authority.complete_operator_recovery(
             challenge["challenge"], root_signature, device_signature,
-            device_replacement=lambda public, subject, old=None: None,
+            device_replacement=lambda public, subject, old=None: devices.replace_active_device_for_recovery(
+            public, owner_subject=subject, expected_old_public_key_pem=old,
+        ),
         )
 
 
@@ -1118,10 +1120,26 @@ def test_recovery_rolls_back_identity_when_device_authority_fails_before_commit(
         subject_digest_key=b"device-failure-digest-key-" + b"k" * 32,
     )
     old_root, old_root_public = keypair()
+    old_device, old_device_public = keypair()
     new_root, new_root_public = keypair()
     new_device, new_device_public = keypair()
     identity = authority.bootstrap(
         bootstrap, old_root_public, recovery_code=recovery,
+    )
+    owner = "operator:" + identity["identity_id"]
+    devices = DeviceAuthority(
+        tmp_path / "device-failure-device.sqlite3",
+        enrollment_code="device-failure-enrollment-" + "e" * 40,
+    )
+    devices.enroll(
+        devices.enrollment_code, old_device_public, owner_subject=owner,
+    )
+    _, old_binding_payload = authority.device_binding_payload(
+        old_device_public, key_version=1,
+    )
+    authority.bind_primary_device(
+        identity["identity_id"], old_device_public,
+        sign(old_root, old_binding_payload), expected_key_version=1,
     )
     challenge = authority.create_operator_recovery_challenge(
         recovery, new_root_public, new_device_public, rotated,
@@ -1151,7 +1169,7 @@ def test_recovery_rolls_back_identity_when_device_authority_fails_before_commit(
         identity["identity_id"], b"old-root-still-active",
         sign(old_root, b"old-root-still-active"), expected_key_version=1,
     )
-    assert authority.primary_device_public_key() is None
+    assert authority.primary_device_public_key() == old_device_public
     with authority._database() as db:
         row = db.execute(
             "SELECT key_version,recovery_code_digest FROM operator_identities"
