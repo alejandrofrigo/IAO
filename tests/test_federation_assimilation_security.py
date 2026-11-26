@@ -83,6 +83,25 @@ class FederationEndpointSafetyTests(unittest.TestCase):
                 registry.authorize(item["candidate_id"])
             self.assertFalse(registry.get(item["candidate_id"])["authorized"])
 
+    def test_operator_approval_cannot_bypass_missing_transport_attestation(self):
+        with tempfile.TemporaryDirectory() as td:
+            registry = CandidateRegistry(Path(td) / "candidates.json")
+            item = registry.discover(
+                "https://federation.example.org/fed/v1/message",
+                "unit-test",
+            )["candidate"]
+            with registry._lock:
+                data = registry._load()
+                candidate = data["candidates"][0]
+                candidate["status"] = "AUTHORIZATION_PENDING"
+                candidate["node_id"] = "0123456789abcdef"
+                registry._save(data)
+            with self.assertRaisesRegex(
+                AssimilationError, "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
+            ):
+                registry.authorize(item["candidate_id"], operator_id="local-operator")
+            self.assertFalse(registry.get(item["candidate_id"])["authorized"])
+
     def test_valid_signed_identity_does_not_bypass_untrusted_transport_gate(self):
         """La revalidación usa la firma Ed25519, nonce y nodo esperado."""
         import hashlib
