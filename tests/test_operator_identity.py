@@ -1187,7 +1187,7 @@ def test_recovery_rolls_back_identity_when_device_authority_fails_before_commit(
         ),
     )
     assert result["key_version"] == 2
-    assert devices.verify_registered_public_key(new_device_public, owner)
+    assert devices.verify_registered_public_key(new_device_public, owner_subject=owner)
     assert authority.verify_root_signature(
         identity["identity_id"], b"new-root-active",
         sign(new_root, b"new-root-active"), expected_key_version=2,
