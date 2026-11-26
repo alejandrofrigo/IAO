@@ -2,7 +2,7 @@
 
 ## Status
 
-Design contract only. No login endpoint or production operator authentication is implemented by this document. The current public-session endpoint remains guest-only. The existing session-association routes require a previously authenticated non-guest bearer token, and the current development HMAC token issuer is not an external identity provider. Do not describe the operator as logged in until a separate implementation and its tests exist.
+The first implementation slice is now present in `omega/operator_identity.py`, `omega/device_authority.py`, `omega/service.py`, `web/device-authority.js`, `web/operator-identity.js` and `web/index.html`. It implements a one-time 90-second challenge signed by both the active root key and the currently bound primary device key, atomic challenge consumption, a 15-minute bearer session with an empty scope set, a keyed session-token digest, and a separate browser operator-login action. The public guest-session route remains guest-only. The implementation is not yet production-authenticated: CI is pending, target Android browser E2E is unverified, device ownership is not yet transactionally unified with the operator principal, and device revocation is checked across two separate databases. Do not describe the full operator command channel as production-ready.
 
 ## Goal
 
@@ -71,14 +71,22 @@ The login result is read-only. It must not add WRITE, EXECUTE, DEPLOY, CREDENTIA
 - No bearer token is sent to an origin other than the configured API origin; API origin must be HTTPS outside local development.
 - Browser E2E must exercise the deployed API, not a mocked success response.
 
-## Release gate
+## Implementation details and remaining gates
 
-Until the protocol is implemented and independently tested:
+Implemented endpoints:
 
-- report operator login as NOT IMPLEMENTED;
-- keep the public chat guest-only;
-- keep privileged scopes disabled and worker startup blocked;
-- keep the pull request open and in draft;
-- do not claim phone-to-server operator authentication or production command capability.
+- `POST /v1/operator/login/challenge`: rate-limited; requires an active root, current primary-device binding and currently active enrolled device public key. It returns an opaque one-time challenge and canonical payload without identifiers or keys.
+- `POST /v1/operator/login/complete`: requires both root and device ECDSA signatures over their distinct domain-separated messages; validates current root/device binding and active device key; atomically consumes the challenge and stores a keyed digest of the newly issued session token. The response contains a 15-minute token, empty scopes and a fixed read-only authority label.
+- The browser signs locally with the stored non-exportable root and device CryptoKeys, then switches to a separate operator chat conversation. The guest chat flow is not upgraded automatically.
 
-The existing OIDC requirement remains BLOCKED_EXTERNAL unless a real issuer is configured. This protocol is a separate proposed device-bound authentication path and must receive its own security review before implementation.
+Tests were added for valid dual-signature login, wrong device signature, one-time replay rejection, API token scopes, status verification and audit privacy. CI for the latest commit must still complete successfully before this slice is considered validated.
+
+Remaining security/production gates:
+
+- DeviceAuthority currently stores a separate owner subject. Login validates that the exact primary key is active, but does not atomically migrate or prove that the device enrollment owner equals the new opaque operator principal. Existing task/device routes will therefore continue to fail closed where the owner binding does not match.
+- Root/device state and device enrollment/revocation live in separate SQLite databases. The service checks device active status immediately before login completion, but cross-database revocation races are not yet made atomic.
+- Add explicit logout, token revocation and server-side session expiry/revocation handling; verify expiry and revocation under restart and concurrent requests.
+- Complete target Android browser E2E and HTTPS/CORS deployment verification.
+- Keep worker production startup blocked, privileged scopes disabled, public guest chat guest-only, and PR open in draft.
+
+The existing OIDC requirement remains BLOCKED_EXTERNAL unless a real issuer is configured. This device-bound path is a distinct implementation and still grants no command capability.
