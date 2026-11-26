@@ -64,7 +64,10 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     )
     kw.setdefault(
         "operator_identity_authority",
-        OperatorIdentityAuthority(state_dir / "operator-identity.sqlite3"),
+        OperatorIdentityAuthority(
+            state_dir / "operator-identity.sqlite3",
+            subject_digest_key=token_key,
+        ),
     )
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
