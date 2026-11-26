@@ -43,9 +43,10 @@ jobs:
           trap 'docker stop iao-api-qualification >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 20); do
             if curl --fail --silent http://127.0.0.1:18080/health/live; then
-              exit 0
+              break
             fi
             sleep 2
           done
+          curl --fail --silent http://127.0.0.1:18080/health/live
+          docker exec iao-api-qualification python -c "from pathlib import Path; p=Path('/app/knowledge'); files=sorted(p.glob('*.txt')); assert len(files) >= 1, 'production knowledge corpus missing'; assert (p/'omega-overview.txt').is_file(), 'required corpus document missing'; print('knowledge_corpus_files=' + str(len(files)))"
           docker logs iao-api-qualification
-          exit 1
