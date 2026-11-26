@@ -55,3 +55,26 @@ Todo nodo HTTP queda \`DISCOVERED_UNVERIFIED\`, \`identity_verified=false\`, \`e
 \`python -m pytest\`
 
 El CI comprueba código y contratos; no sustituye pruebas externas de conectividad.
+
+
+## Incorporación federada automática por consentimiento remoto
+
+El ciclo del servidor ahora enlaza el inventario externo con `omega.federation_autonomous`.
+Por cada ciclo se examinan hasta 20 candidatos HTTP descubiertos. Un peer solo se incorpora si publica
+`/fed/v1/publication` con una firma Ed25519 válida y `consent: true`, anuncia el mismo origen
+y endpoint, mantiene una concesión vigente, supera el desafío nonce firmado y ofrece una capacidad
+READ_ONLY que IAO ya sirve. El transporte HTTPS fija las direcciones DNS públicas, valida TLS,
+rechaza redirecciones y limita cuerpos y tiempos.
+
+La publicación pública de cada instalación está desactivada por defecto. Para ofrecer participación
+voluntaria, el operador del peer debe configurar `IAO_FEDERATION_PUBLIC_PEERING=true` y
+`IAO_FEDERATION_PUBLIC_ORIGIN=https://su-dominio-publico.example`. El servidor publica entonces
+`GET /fed/v1/publication`; sin ambas opciones responde 404. El anuncio no permite ejecución remota,
+acceso privado ni concede permisos de entrada. IAO incorpora al peer con lista de permisos entrantes
+vacía. La conexión operativa requiere además que el endpoint público sea alcanzable y que el peer
+mantenga el protocolo y el consentimiento anunciados.
+
+El trabajador de red ejecuta este proceso automáticamente tras cada ciclo de descubrimiento.
+El inventario conserva el resultado y el registro de auditoría local. El transporte federado onion-only
+y el enlace libp2p de mensajes de aplicación siguen siendo fronteras separadas: descubrir peers Tor o
+DHT no los incorpora como peers federados HTTP.

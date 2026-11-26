@@ -302,3 +302,32 @@ def test_fetch_onion_json_rejects_redirect(monkeypatch):
     monkeypatch.setattr(transport, "_TorOnionHTTPConnection", Connection)
     with pytest.raises(transport.FederationTransportError, match="REDIRECT_REFUSED"):
         transport.fetch_onion_json("http://" + "c"*56 + ".onion/feed")
+
+
+def test_post_public_json_uses_pinned_public_https_and_no_redirect(monkeypatch):
+    calls = []
+    monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
+    def factory(hostname, address, *, port=443, timeout, context):
+        conn = FakeConnection(hostname, address, port=port, timeout=timeout, context=context)
+        calls.append(conn)
+        return conn
+    monkeypatch.setattr(transport, "_PinnedHTTPSConnection", factory)
+    FakeConnection.response = FakeResponse(body=b'{"ok":true}')
+    status, payload = transport.post_public_json(
+        "https://peer.example.org/fed/v1/handshake", {"nonce": "a" * 64}
+    )
+    assert status == 200
+    assert payload == {"ok": True}
+    assert calls[0].request_args[0:2] == ("POST", "/fed/v1/handshake")
+    assert calls[0].closed
+
+
+def test_post_public_json_rejects_redirect(monkeypatch):
+    monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
+    monkeypatch.setattr(
+        transport, "_PinnedHTTPSConnection",
+        lambda *args, **kwargs: FakeConnection(*args, **kwargs),
+    )
+    FakeConnection.response = FakeResponse(status=307, headers={"Location": "https://other.example/"})
+    with pytest.raises(transport.FederationTransportError, match="REDIRECT_REFUSED"):
+        transport.post_public_json("https://peer.example.org/fed/v1/handshake", {"x": 1})

@@ -226,10 +226,11 @@ def _request_json(
     timeout: float,
     max_bytes: int,
     allow_loopback_http: bool,
+    allow_public_post: bool = False,
 ) -> tuple[int, object]:
     if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
         raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
-    if method == "GET":
+    if method == "GET" or (method == "POST" and allow_public_post):
         tls_host, host, port, target = _parse_https_url(url)
         scheme = "https"
     else:
@@ -419,6 +420,20 @@ def fetch_public_json(
     if status != 200:
         raise FederationTransportError("HTTP_STATUS_NOT_OK")
     return data
+
+
+def post_public_json(
+    url: str,
+    payload: dict,
+    *,
+    timeout: float = 8.0,
+    max_bytes: int = 65_536,
+) -> tuple[int, object]:
+    """POST bounded JSON to a public HTTPS endpoint with pinned DNS and no redirects."""
+    return _request_json(
+        "POST", url, payload, timeout=timeout, max_bytes=max_bytes,
+        allow_loopback_http=False, allow_public_post=True,
+    )
 
 
 def post_federation_json(

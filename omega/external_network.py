@@ -470,7 +470,7 @@ def build_network(state_dir: str | Path | None = None) -> ExternalNetwork:
     return ExternalNetwork(state, sources)
 
 
-def start_external_network(state_dir: str | Path | None = None) -> bool:
+def start_external_network(state_dir: str | Path | None = None, fed_node=None) -> bool:
     """Start one bounded discovery worker inside the IAO server process."""
     global _THREAD
     with _LOCK:
@@ -489,6 +489,19 @@ def start_external_network(state_dir: str | Path | None = None) -> bool:
                 while True:
                     try:
                         result = network.run_cycle()
+                        if fed_node is not None:
+                            try:
+                                from omega.federation_autonomous import run_discovered_cycle
+                                result["federation"] = run_discovered_cycle(
+                                    fed_node, network.state_dir,
+                                    network.registry_path,
+                                )
+                            except Exception as federation_error:
+                                network._audit(
+                                    "FEDERATION_AUTOJOIN_CYCLE_FAILED",
+                                    error_type=type(federation_error).__name__,
+                                )
+                                result["federation"] = {"status": "DEGRADED"}
                         print("IAO_EXTERNAL_NETWORK " + json.dumps(result, sort_keys=True), flush=True)
                     except Exception as exc:
                         network._audit("EXTERNAL_NETWORK_WORKER_FAILED",

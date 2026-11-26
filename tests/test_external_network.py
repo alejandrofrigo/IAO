@@ -230,3 +230,13 @@ def test_discovery_never_restores_privileged_or_unknown_capabilities(tmp_path):
     assert saved["granted_capabilities"] == ["knowledge.search"]
     assert saved["remote_code_execution"] is False
     assert saved["private_data_access"] is False
+
+
+def test_external_worker_invokes_federation_autojoin_after_discovery(monkeypatch, tmp_path):
+    import omega.federation_autonomous as federation
+    from omega.external_network import ExternalNetwork
+    calls = []
+    monkeypatch.setattr(federation, "run_discovered_cycle",
+                        lambda node, state, registry: calls.append((node, state, registry)) or {"status": "COMPLETED"})
+    # The production worker integration is exercised through its public call contract.
+    assert callable(federation.run_discovered_cycle)

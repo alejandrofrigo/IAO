@@ -161,6 +161,38 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self._send_fed_json(200, fed_node.contract_for_self(sorted(fed_node.served)))
                 return
 
+            if route == "/fed/v1/publication":
+                if self.command != "GET":
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    return
+                if fed_node is None:
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                # Public federation participation is opt-in per installation.
+                # A discovery listing or reachable endpoint alone is not consent.
+                origin = os.environ.get("IAO_FEDERATION_PUBLIC_ORIGIN", "").strip().rstrip("/")
+                if os.environ.get("IAO_FEDERATION_PUBLIC_PEERING", "").lower() != "true" or not origin:
+                    self._send_fed_json(404, {"error": "PUBLIC_PEERING_NOT_OFFERED"})
+                    return
+                try:
+                    from urllib.parse import urlsplit
+                    parsed = urlsplit(origin)
+                    if (parsed.scheme != "https" or not parsed.hostname
+                            or parsed.username or parsed.password
+                            or parsed.port not in (None, 443)
+                            or parsed.path or parsed.query or parsed.fragment):
+                        raise ValueError("INVALID_PUBLIC_ORIGIN")
+                    publication = fed_node.identity_publication(
+                        origin + "/fed/v1/message",
+                        capabilities=sorted(fed_node.served),
+                        consent=True,
+                    )
+                except Exception:
+                    self._send_fed_json(503, {"error": "PUBLIC_PEERING_CONFIG_INVALID"})
+                    return
+                self._send_fed_json(200, publication)
+                return
+
             if route == "/fed/v1/identity":
                 if self.command != "GET":
                     self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
@@ -353,7 +385,7 @@ def main() -> None:
     from omega.federation_discovery import start_federation_discovery
     start_federation_discovery(state)
     from omega.external_network import start_external_network
-    start_external_network(state / "external-network")
+    start_external_network(state / "external-network", fed_node=fed_node)
     httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
     (state / "server.pid").write_text(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())

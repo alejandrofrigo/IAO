@@ -323,7 +323,8 @@ class Node:
 
     def identity_publication(self, endpoint: str, *,
                               capabilities: list[str] | None = None,
-                              lease_seconds: int = 3600) -> dict[str, Any]:
+                              lease_seconds: int = 3600,
+                              consent: bool = False) -> dict[str, Any]:
         """Firmado, publicable en /.well-known/iao-federation.json.
 
         Incluye identidad, endpoint público, capabilities, y una firma
@@ -339,6 +340,7 @@ class Node:
             "public_key": self.pub.hex(),
             "endpoint": endpoint,
             "capabilities": sorted(capabilities or sorted(self.served)),
+            "consent": consent is True,
             "lease_expires_at": float(self.clock() + lease_seconds),
             "issued_at": float(self.clock()),
         }
