@@ -48,6 +48,7 @@ button:disabled{opacity:.5}
   const connectBtn = document.querySelector("#connect");
   const sendBtn = document.querySelector("#send");
   let token = null, conversationId = null, busy = false;
+  window.iaoGetSessionToken = () => token;
 
   function status(s) { statusEl.textContent = s; }
 
