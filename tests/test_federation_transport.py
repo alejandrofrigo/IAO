@@ -223,3 +223,82 @@ def test_mtls_client_private_key_permissions_are_enforced(tmp_path, monkeypatch)
         match="CLIENT_KEY_PERMISSIONS_TOO_OPEN",
     ):
         transport._client_tls_context()
+
+
+def test_onion_transport_accepts_only_v3_onion_http():
+    host = "a" * 56 + ".onion"
+    assert transport._parse_onion_url(f"http://{host}/directory.json") == (
+        host, 80, "/directory.json"
+    )
+    for url in (
+        "https://"+host+"/directory.json",
+        "http://short.onion/feed",
+        "http://"+host+":8080/feed",
+        "http://"+host+"/feed?target=internal",
+        "http://127.0.0.1/feed",
+        "http://user:pass@"+host+"/feed",
+    ):
+        with pytest.raises(transport.FederationTransportError):
+            transport._parse_onion_url(url)
+
+
+def test_tor_proxy_must_be_loopback(monkeypatch):
+    monkeypatch.setenv("IAO_TOR_SOCKS_HOST", "192.0.2.10")
+    with pytest.raises(
+        transport.FederationTransportError, match="TOR_SOCKS_PROXY_MUST_BE_LOOPBACK"
+    ):
+        transport._tor_proxy()
+
+
+def test_fetch_onion_json_uses_configured_socks_and_bounds_response(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "socks", SimpleNamespace(SOCKS5=2))
+    monkeypatch.setenv("IAO_TOR_SOCKS_HOST", "127.0.0.1")
+    monkeypatch.setenv("IAO_TOR_SOCKS_PORT", "9050")
+    calls = []
+
+    class Response:
+        status = 200
+        def getheader(self, name):
+            return {"Content-Type": "application/json", "Content-Length": "12"}.get(name)
+        def read(self, size=-1):
+            return b'{"peers": []}'
+
+    class Connection:
+        def __init__(self, hostname, *, timeout, proxy_host, proxy_port):
+            calls.append((hostname, timeout, proxy_host, proxy_port))
+        def request(self, method, target, headers=None):
+            calls.append((method, target, headers["Host"]))
+        def getresponse(self):
+            return Response()
+        def close(self):
+            calls.append(("closed",))
+
+    monkeypatch.setattr(transport, "_TorOnionHTTPConnection", Connection)
+    host = "b" * 56 + ".onion"
+    assert transport.fetch_onion_json(f"http://{host}/feed") == {"peers": []}
+    assert calls[0] == (host, 15.0, "127.0.0.1", 9050)
+    assert calls[1][0:2] == ("GET", "/feed")
+    assert calls[-1] == ("closed",)
+
+
+def test_fetch_onion_json_rejects_redirect(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "socks", SimpleNamespace(SOCKS5=2))
+    class Response:
+        status = 302
+        def getheader(self, name):
+            return "application/json"
+        def read(self, size=-1):
+            return b'{}'
+    class Connection:
+        def __init__(self, *args, **kwargs): pass
+        def request(self, *args, **kwargs): pass
+        def getresponse(self): return Response()
+        def close(self): pass
+    monkeypatch.setattr(transport, "_TorOnionHTTPConnection", Connection)
+    with pytest.raises(transport.FederationTransportError, match="REDIRECT_REFUSED"):
+        transport.fetch_onion_json("http://" + "c"*56 + ".onion/feed")

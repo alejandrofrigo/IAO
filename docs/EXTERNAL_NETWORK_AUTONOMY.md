@@ -9,6 +9,7 @@ El servidor inicia un worker de baja frecuencia que repite el descubrimiento cad
 - Búsqueda pública de repositorios GitHub como fuente opcional, nunca como autoridad o registro central.
 - Feeds HTTPS públicos configurados.
 - Directorios HTTPS firmados con claves Ed25519 previamente configuradas.
+- Directorios públicos `.onion` v3 mediante Tor SOCKS5 local, con DNS remoto, sin redirecciones y límites de respuesta.
 - Cliente Kademlia libp2p outbound-only cuando está instalada la dependencia opcional `p2p`, además de leer el inventario local. Los peers se almacenan por separado de los nodos HTTP.
 
 Los fallos de una fuente no detienen las demás. El registro se actualiza atómicamente, con permisos privados, límites, deduplicación, first_seen/last_seen y observaciones. El worker no necesita APIs comerciales.
@@ -21,6 +22,7 @@ Archivo opcional \`~/.config/iao/network-discovery.json\`:
 {
   "github": {"enabled": true},\n  "libp2p": {"enabled": true},
   "https_feeds": ["https://directory.example.org/iao/peers.json"],
+  "tor_onion_feeds": ["http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion/iao/peers.json"],
   "signed_directories": [
     {
       "url": "https://directory.example.org/iao/signed.json",
@@ -42,7 +44,8 @@ Todo nodo HTTP queda \`DISCOVERED_UNVERIFIED\`, \`identity_verified=false\`, \`e
 
 - La búsqueda GitHub y los feeds necesitan conectividad saliente; GitHub puede aplicar límites de API.
 - La conexión DHT real se inicia automáticamente solo si está instalada la dependencia opcional `p2p` (`pip install -e '.[p2p]'`); necesita bootstrappers accesibles. Sin esa dependencia, se conserva el inventario local, pero no se afirma conectividad DHT.
-- No se ha integrado todavía un transporte Tor/SOCKS ni acceso onion. La interfaz DiscoverySource permite añadirlo como adaptador sin modificar el registro ni la política de confianza.
+- El adaptador Tor se limita a lectura de directorios onion públicos; no configura ni inicia Tor por sí mismo. Sin daemon Tor y el extra `.[tor]`, esa fuente fallará de forma aislada y las demás seguirán funcionando.
+- Los directorios onion no se consideran confiables por ser onion: las identidades y anuncios deben verificarse independientemente antes de cualquier federación.
 - No se ha probado intercambio real entre instalaciones independientes, ejecución federada ni despliegue persistente. El worker solo se ejecuta mientras el proceso servidor está activo.
 
 ## Verificación

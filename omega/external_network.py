@@ -174,6 +174,28 @@ class SignedHTTPSDirectories:
         return found
 
 
+class TorOnionDirectories:
+    """Read public peer advertisements from v3 onion directories over Tor."""
+    name = "tor_onion_directories"
+
+    def __init__(self, urls: list[str]):
+        self.urls = urls[:MAX_ITEMS]
+
+    def discover(self) -> list[dict[str, Any]]:
+        from omega.federation_transport import fetch_onion_json
+        found: list[dict[str, Any]] = []
+        for url in self.urls:
+            try:
+                payload = fetch_onion_json(url, timeout=15, max_bytes=500_000)
+            except Exception:
+                continue
+            items = payload.get("peers", []) if isinstance(payload, dict) else payload
+            if isinstance(items, list):
+                found.extend(item for item in items[:MAX_ITEMS] if isinstance(item, dict))
+        return found
+
+
+
 class GitHubPublicDiscovery:
     """GitHub is an optional discovery adapter, not the network's authority."""
     name = "github_public_search"
@@ -384,6 +406,9 @@ def build_network(state_dir: str | Path | None = None) -> ExternalNetwork:
     directories = config.get("signed_directories", [])
     if isinstance(directories, list) and directories:
         sources.append(SignedHTTPSDirectories(directories))
+    onion_feeds = config.get("tor_onion_feeds", [])
+    if isinstance(onion_feeds, list) and onion_feeds:
+        sources.append(TorOnionDirectories(onion_feeds))
     sources.append(LocalP2PInventory(state))
     p2p = config.get("libp2p", {})
     if not isinstance(p2p, dict):

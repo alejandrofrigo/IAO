@@ -301,6 +301,113 @@ def _request_json(
     raise FederationTransportError("HTTPS_REQUEST_FAILED") from last_error
 
 
+
+def _parse_onion_url(url: str) -> tuple[str, int, str]:
+    """Accept only Tor v3 onion HTTP endpoints; never resolve onion names locally."""
+    if not isinstance(url, str) or not 1 <= len(url) <= 2048:
+        raise FederationTransportError("INVALID_ONION_URL")
+    try:
+        parsed = urlsplit(url)
+        host, port = parsed.hostname, parsed.port
+    except ValueError as exc:
+        raise FederationTransportError("INVALID_ONION_URL") from exc
+    if (
+        parsed.scheme != "http" or not isinstance(host, str)
+        or not host.endswith(".onion")
+        or len(host) != 62
+        or any(char not in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
+        or parsed.username is not None or parsed.password is not None
+        or port not in (None, 80) or not parsed.path.startswith("/")
+        or parsed.fragment or parsed.query
+        or any(ord(char) < 33 or ord(char) == 127 for char in url)
+    ):
+        raise FederationTransportError("V3_ONION_HTTP_ENDPOINT_REQUIRED")
+    return host, 80, parsed.path or "/"
+
+
+def _tor_proxy() -> tuple[str, int]:
+    host = os.environ.get("IAO_TOR_SOCKS_HOST", "127.0.0.1")
+    raw_port = os.environ.get("IAO_TOR_SOCKS_PORT", "9050")
+    try:
+        address = ipaddress.ip_address(host)
+        port = int(raw_port)
+    except (ValueError, TypeError) as exc:
+        raise FederationTransportError("TOR_SOCKS_PROXY_INVALID") from exc
+    if not address.is_loopback or not 1 <= port <= 65535:
+        raise FederationTransportError("TOR_SOCKS_PROXY_MUST_BE_LOOPBACK")
+    return str(address), port
+
+
+class _TorOnionHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, hostname: str, *, timeout: float, proxy_host: str, proxy_port: int):
+        super().__init__(hostname, 80, timeout=timeout)
+        self._proxy_host = proxy_host
+        self._proxy_port = proxy_port
+
+    def connect(self) -> None:
+        try:
+            import socks
+        except ImportError as exc:
+            raise FederationTransportError("TOR_SOCKS_DEPENDENCY_MISSING") from exc
+        # PySocks SOCKS5 remote DNS: the .onion name is sent through Tor,
+        # never resolved by the local DNS resolver.
+        self.sock = socks.create_connection(
+            (self.host, self.port), timeout=self.timeout,
+            proxy_type=socks.SOCKS5, proxy_addr=self._proxy_host,
+            proxy_port=self._proxy_port, proxy_rdns=True,
+        )
+
+
+def fetch_onion_json(
+    url: str, *, timeout: float = 15.0, max_bytes: int = MAX_DISCOVERY_BYTES
+):
+    """Fetch bounded JSON from a v3 onion service via a local SOCKS5 Tor proxy."""
+    if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
+        raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
+    host, port, target = _parse_onion_url(url)
+    proxy_host, proxy_port = _tor_proxy()
+    try:
+        import socks  # noqa: F401 - fail closed before opening a connection
+    except ImportError as exc:
+        raise FederationTransportError("TOR_SOCKS_DEPENDENCY_MISSING") from exc
+    connection = _TorOnionHTTPConnection(
+        host, timeout=timeout, proxy_host=proxy_host, proxy_port=proxy_port
+    )
+    try:
+        connection.request("GET", target, headers={
+            "Host": host, "Accept": "application/json",
+            "Connection": "close", "User-Agent": "IAO-tor-discovery/1",
+        })
+        response = connection.getresponse()
+        if 300 <= response.status < 400:
+            raise FederationTransportError("REDIRECT_REFUSED")
+        if response.status != 200:
+            raise FederationTransportError("HTTP_STATUS_NOT_OK")
+        content_type = (response.getheader("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json" and not content_type.endswith("+json"):
+            raise FederationTransportError("JSON_CONTENT_TYPE_REQUIRED")
+        length = response.getheader("Content-Length")
+        if length is not None:
+            try:
+                if int(length) < 0 or int(length) > max_bytes:
+                    raise FederationTransportError("RESPONSE_TOO_LARGE")
+            except ValueError as exc:
+                raise FederationTransportError("INVALID_CONTENT_LENGTH") from exc
+        raw = response.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise FederationTransportError("RESPONSE_TOO_LARGE")
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
+    except FederationTransportError:
+        raise
+    except (OSError, http.client.HTTPException) as exc:
+        raise FederationTransportError("TOR_ONION_REQUEST_FAILED") from exc
+    finally:
+        connection.close()
+
+
 def fetch_public_json(
     url: str, *, timeout: float = 8.0, max_bytes: int = MAX_DISCOVERY_BYTES
 ):

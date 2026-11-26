@@ -109,3 +109,16 @@ def test_libp2p_adapter_uses_existing_outbound_discovery(monkeypatch):
     found = Libp2pDHTDiscovery().discover()
     assert found[0]["peer_id"] == "12D3KooWJ5xExamplePeerIdentifier"
     assert found[0]["multiaddr"][0].startswith("/")
+
+
+def test_tor_onion_directory_adapter_discovers_candidates(monkeypatch):
+    from omega import federation_transport
+    from omega.external_network import TorOnionDirectories
+
+    calls = []
+    monkeypatch.setattr(federation_transport, "fetch_onion_json", lambda url, **kw: (
+        calls.append((url, kw)) or {"peers": [record()]}
+    ))
+    source = TorOnionDirectories(["http://" + "d"*56 + ".onion/peers.json"])
+    assert source.discover() == [record()]
+    assert calls[0][1] == {"timeout": 15, "max_bytes": 500_000}
