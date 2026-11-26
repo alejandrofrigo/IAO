@@ -313,6 +313,11 @@ def make_node(policy):
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
+def _remote_handshake_allowed(url):
+    """Only loopback may be probed until trusted public transport is integrated."""
+    return _peer_is_loopback(url)
+
+
 def _peer_is_loopback(url):
     from urllib.parse import urlsplit
     try:
@@ -521,6 +526,15 @@ def run_cycle(dry_run=False, discover=True):
             verified = {"ok": True, "peer_id": contract["peer_id"], "verified": True}
             results.append({"addr": addr, "protocol": "nostr",
                             **enroll_if_consented(node, "nostr", candidate, verified, item, policy)})
+            continue
+        if not _remote_handshake_allowed(addr):
+            results.append({
+                "addr": addr,
+                "status": "BLOCKED_TRUSTED_TRANSPORT_NOT_INTEGRATED",
+                "handshake_performed": False,
+                "enrollment_performed": False,
+                "capabilities_granted": [],
+            })
             continue
         probed = probe_and_verify(addr)
         if not probed:
