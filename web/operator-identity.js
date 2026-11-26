@@ -39,15 +39,6 @@
       tx.onabort = () => { db.close(); reject(tx.error); };
     });
   }
-  async function deleteIdentity() {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).delete("root");
-      tx.oncomplete = () => { db.close(); resolve(); };
-      tx.onerror = () => { db.close(); reject(tx.error); };
-    });
-  }
   function b64url(bytes) {
     let binary = "";
     for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -157,7 +148,7 @@
     section.style.cssText = "margin:18px auto;padding:16px;max-width:680px;border:1px solid #8886;border-radius:14px;font:inherit;";
     const title = document.createElement("h3"); title.textContent = "Identidad raíz del operador";
     const description = document.createElement("p");
-    description.textContent = "La clave privada se genera en este navegador y se guarda como CryptoKey no exportable. El código de bootstrap se usa una sola vez y no se conserva.";
+    description.textContent = "La clave privada se genera en este navegador y se guarda como CryptoKey no exportable. El código de bootstrap se usa una sola vez y no se conserva. La sesión pública de visitante no puede asociarse: se requiere una sesión autenticada de operador.";
     const code = document.createElement("input");
     code.type = "password"; code.autocomplete = "off"; code.placeholder = "Código de bootstrap fuera de banda";
     code.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
@@ -191,7 +182,7 @@
     section.append(title, description, code, bootstrapButton, associateButton, statusButton, output);
     document.body.appendChild(section);
     readIdentity().then(identity => show(
-      identity ? "Clave raíz local disponible en este navegador." : "No hay identidad raíz registrada en este navegador.", false
+      identity ? (identity.bootstrapPending ? "Clave raíz local conservada; confirma el bootstrap o consulta su estado." : "Clave raíz local disponible en este navegador.") : "No hay identidad raíz registrada en este navegador.", false
     )).catch(error => show("Almacenamiento no disponible: " + error.message, true));
   }
   window.IAOOperatorIdentity = Object.freeze({ associateSession, status });
