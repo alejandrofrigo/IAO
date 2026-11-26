@@ -228,15 +228,18 @@ class OmegaService:
             recovery_code = data.get("recovery_code")
             root_public = data.get("new_root_public_key_pem")
             device_public = data.get("new_device_public_key_pem")
+            new_recovery_code = data.get("new_recovery_code")
             if (
                 not isinstance(recovery_code, str) or not 32 <= len(recovery_code) <= 512
+                or not isinstance(new_recovery_code, str) or not 32 <= len(new_recovery_code) <= 512
+                or hmac.compare_digest(recovery_code, new_recovery_code)
                 or not isinstance(root_public, str) or not 1 <= len(root_public) <= 4096
                 or not isinstance(device_public, str) or not 1 <= len(device_public) <= 4096
             ):
                 raise ApiError(400, "INVALID_OPERATOR_RECOVERY")
             try:
                 challenge = self.operator_identity_authority.create_operator_recovery_challenge(
-                    recovery_code, root_public, device_public,
+                    recovery_code, root_public, device_public, new_recovery_code,
                 )
             except OperatorIdentityError as exc:
                 raise ApiError(exc.status, exc.code) from None
