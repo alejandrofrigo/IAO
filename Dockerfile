@@ -1,11 +1,13 @@
-# Reproducible container build for CI and deployment qualification.
-# Do not expose publicly until device authorization and API admission controls pass.
+# Reproducible, non-root container for external deployment qualification.
+# A persistent volume and secret environment variables are mandatory at runtime.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
-    PORT=8080
+    PORT=8080 \
+    IAO_STATE_DIR=/var/lib/iao \
+    IAO_CORPUS_DIR=/app/knowledge
 
 WORKDIR /app
 
@@ -14,7 +16,14 @@ COPY apps ./apps
 COPY omega ./omega
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir .
+    && python -m pip install --no-cache-dir . \
+    && groupadd --system iao \
+    && useradd --system --gid iao --home-dir /home/iao --create-home iao \
+    && mkdir -p /var/lib/iao /app/knowledge \
+    && chown -R iao:iao /var/lib/iao /app
+
+VOLUME ["/var/lib/iao"]
+USER iao
 
 EXPOSE 8080
 
