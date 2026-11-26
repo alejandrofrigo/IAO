@@ -1182,9 +1182,12 @@ def test_recovery_rolls_back_identity_when_device_authority_fails_before_commit(
 
     result = authority.complete_operator_recovery(
         challenge["challenge"], root_signature, device_signature,
-        device_replacement=lambda public, subject, old=None: None,
+        device_replacement=lambda public, subject, old=None: devices.replace_active_device_for_recovery(
+            public, owner_subject=subject, expected_old_public_key_pem=old,
+        ),
     )
     assert result["key_version"] == 2
+    assert devices.verify_registered_public_key(new_device_public, owner)
     assert authority.verify_root_signature(
         identity["identity_id"], b"new-root-active",
         sign(new_root, b"new-root-active"), expected_key_version=2,
