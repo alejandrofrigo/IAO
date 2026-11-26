@@ -366,6 +366,9 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
         )
     assert "identity_id" not in challenge
     assert identity["identity_id"] not in challenge["signing_payload"]
+    assert token_a not in challenge["signing_payload"]
+    assert token_a.encode("utf-8") not in db.read_bytes()
+    assert "verified-subject-A" not in challenge["signing_payload"]
 
 
 def test_session_binding_rejects_invalid_signature_guest_and_expiry(tmp_path, monkeypatch):
