@@ -120,7 +120,7 @@
     const result = await request("/v1/operator/bootstrap", "POST", {
       code, root_public_key_pem: stored.publicKeyPem
     });
-    await writeIdentity({ ...stored, keyVersion: result.key_version, bootstrapPending: false });
+    await writeIdentity({ ...stored, identityId: result.identity_id, keyVersion: result.key_version, bootstrapPending: false });
     return result;
   }
   async function associateSession() {
@@ -138,6 +138,40 @@
     ));
     return request("/v1/operator/session/bind", "POST", {
       challenge: challenge.challenge, signature: b64url(rawEcdsaToDer(raw))
+    });
+  }
+  async function revokeIdentity() {
+    const identity = await readIdentity();
+    if (!identity || !identity.privateKey || !identity.identityId || !identity.keyVersion) {
+      throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
+    }
+    if (!window.confirm("Revocar permanentemente la identidad raíz y desactivar el dispositivo primario? Esta acción requiere un nuevo proceso de bootstrap para recuperar el acceso.")) {
+      return { cancelled: true };
+    }
+    const payload = encoder.encode("revoke-root-v1\\n" + identity.identityId);
+    const message = new Uint8Array(ROOT_DOMAIN.length + payload.length);
+    message.set(ROOT_DOMAIN); message.set(payload, ROOT_DOMAIN.length);
+    const raw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, identity.privateKey, message
+    ));
+    const result = await request("/v1/operator/identity/revoke", "POST", {
+      key_version: identity.keyVersion,
+      signature: b64url(rawEcdsaToDer(raw))
+    });
+    await deleteIdentity();
+    if (typeof window.iaoClearOperatorSession === "function") {
+      window.iaoClearOperatorSession();
+    }
+    return result;
+  }
+  async function deleteIdentity() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).delete("root");
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.onabort = () => { db.close(); reject(tx.error); };
     });
   }
   async function login() {
@@ -232,6 +266,8 @@
     associateButton.type = "button"; associateButton.textContent = "Asociar sesión autenticada";
     const statusButton = document.createElement("button");
     statusButton.type = "button"; statusButton.textContent = "Consultar asociación";
+    const revokeButton = document.createElement("button");
+    revokeButton.type = "button"; revokeButton.textContent = "Revocar identidad y dispositivo";
     const bindDeviceButton = document.createElement("button");
     bindDeviceButton.type = "button"; bindDeviceButton.textContent = "Vincular dispositivo primario";
     const output = document.createElement("pre");
@@ -279,13 +315,17 @@
     statusButton.addEventListener("click", () => run(statusButton, status,
       result => "Asociada: " + (result.associated ? "sí" : "no") + "\nAutoridad: " + result.authority
     ));
+    revokeButton.addEventListener("click", () => run(
+      revokeButton, revokeIdentity,
+      result => result.cancelled ? "Revocación cancelada." : "IDENTIDAD REVOCADA\\nDispositivo desactivado: " + result.device_revoked
+    ));
     bindDeviceButton.addEventListener("click", () => run(bindDeviceButton, async () => {
       if (!window.IAODeviceAuthority || typeof window.IAODeviceAuthority.publicKeyPem !== "function") {
         throw new Error("DEVICE_AUTHORITY_NOT_AVAILABLE");
       }
       return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
-    section.append(title, description, code, bootstrapButton, loginButton, associateButton, statusButton, bindDeviceButton, output);
+    section.append(title, description, code, bootstrapButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
     document.body.appendChild(section);
     window.addEventListener("iao-session-changed", refreshSessionGates);
     refreshSessionGates();
@@ -293,7 +333,7 @@
       identity ? (identity.bootstrapPending ? "Clave raíz local conservada; confirma el bootstrap o consulta su estado." : "Clave raíz local disponible en este navegador.") : "No hay identidad raíz registrada en este navegador.", false
     )).catch(error => show("Almacenamiento no disponible: " + error.message, true));
   }
-  window.IAOOperatorIdentity = Object.freeze({ login, associateSession, bindPrimaryDevice, status });
+  window.IAOOperatorIdentity = Object.freeze({ login, associateSession, bindPrimaryDevice, revokeIdentity, status });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", panel, { once: true });
   else panel();
 })();
