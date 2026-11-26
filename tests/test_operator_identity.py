@@ -668,7 +668,9 @@ def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_sig
     with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_RECOVERY_SIGNATURE"):
         authority.complete_operator_recovery(
             challenge["challenge"], root_signature, b"x" * 70,
-            device_replacement=lambda public, subject, old=None: None,
+            device_replacement=lambda public, subject, old=None: devices.replace_active_device_for_recovery(
+            public, owner_subject=subject, expected_old_public_key_pem=old,
+        ),
         )
     device_signature = device_private.sign(
         b"IAO-OPERATOR-RECOVERY-DEVICE-V1\x00" + payload,
