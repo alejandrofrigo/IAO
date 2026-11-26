@@ -1,4 +1,5 @@
 """Tests for the isolated durable operator root-key registry."""
+import base64
 import time
 
 import pytest
@@ -566,3 +567,99 @@ def test_dual_signature_operator_login_rejects_wrong_device_signature(tmp_path):
         valid_device_signature, "operator-login-token-key-" + "u" * 40,
     )
     assert result["scopes"] == []
+
+
+def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp_path):
+    bootstrap = "bootstrap-secret-" + "b" * 40
+    recovery = "offline-recovery-secret-" + "r" * 48
+    old_private, old_public = keypair()
+    new_root_private, new_root_public = keypair()
+    new_device_private, new_device_public = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "recover.sqlite3", bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+    )
+    identity = authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
+    identity_id = identity["identity_id"]
+    authority.revoke(
+        identity_id,
+        sign(old_private, b"revoke-root-v1\\n" + identity_id.encode("ascii")),
+        expected_key_version=1,
+    )
+
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, new_root_public, new_device_public,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = new_root_private.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    device_signature = new_device_private.sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    replacements = []
+    result = authority.complete_operator_recovery(
+        challenge["challenge"], root_signature, device_signature,
+        device_replacement=lambda public, subject: replacements.append((public, subject)),
+    )
+    assert result == {
+        "authority": "OPERATOR_RECOVERED_READ_ONLY",
+        "key_version": 2,
+        "device_replaced": True,
+    }
+    assert replacements == [(new_device_public, "operator:" + identity_id)]
+    assert authority.primary_device_public_key() == new_device_public
+    assert authority.verify_root_signature(
+        identity_id, b"post-recovery", sign(new_root_private, b"post-recovery"),
+        expected_key_version=2,
+    )
+    with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_RECOVERY_CODE"):
+        authority.create_operator_recovery_challenge(
+            recovery, new_root_public, new_device_public,
+        )
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_RECOVERY_REPLAYED"):
+        authority.complete_operator_recovery(
+            challenge["challenge"], root_signature, device_signature,
+            device_replacement=lambda public, subject: None,
+        )
+
+
+def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_signature(tmp_path):
+    bootstrap = "bootstrap-secret-" + "c" * 40
+    recovery = "offline-recovery-secret-" + "s" * 48
+    _, old_public = keypair()
+    root_private, root_public = keypair()
+    device_private, device_public = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "recover-signatures.sqlite3", bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+    )
+    authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, root_public, device_public,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = root_private.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_RECOVERY_SIGNATURE"):
+        authority.complete_operator_recovery(
+            challenge["challenge"], root_signature, b"x" * 70,
+            device_replacement=lambda public, subject: None,
+        )
+    device_signature = device_private.sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    result = authority.complete_operator_recovery(
+        challenge["challenge"], root_signature, device_signature,
+        device_replacement=lambda public, subject: None,
+    )
+    assert result["key_version"] == 2
