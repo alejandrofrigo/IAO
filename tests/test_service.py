@@ -134,6 +134,22 @@ class PolicyToolTests(Base):
         c = self.task("bob", "knowledge.search", **{"idempotency-key": "k1"})[1]
         self.assertNotEqual(c["task_id"], a["task_id"])
 
+    def test_idempotency_key_rejects_different_payload(self) -> None:
+        headers = {**self.tok("alice"), "idempotency-key": "same-key"}
+        first = self.call("POST", "/v1/tasks", headers, {
+            "goal": "first goal", "capability": "knowledge.search",
+            "input": {"query": "audit"},
+        })
+        self.assertEqual(first[0], 200)
+        changed = self.call("POST", "/v1/tasks", headers, {
+            "goal": "different goal", "capability": "knowledge.search",
+            "input": {"query": "audit"},
+        })
+        self.assertEqual(
+            (changed[0], changed[1]["error"]),
+            (409, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST"),
+        )
+
     def test_invalid_json_and_oversize(self) -> None:
         self.assertEqual(self.svc.handle("POST", "/v1/tasks", self.tok("alice"), b"{bad")[0], 400)
         self.assertEqual(self.svc.handle("POST", "/v1/tasks", self.tok("alice"), b"x" * 70000)[0], 413)
