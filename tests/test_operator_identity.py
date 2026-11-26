@@ -584,7 +584,7 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
     identity_id = identity["identity_id"]
     authority.revoke(
         identity_id,
-        sign(old_private, b"revoke-root-v1\\n" + identity_id.encode("ascii")),
+        sign(old_private, b"revoke-root-v1\n" + identity_id.encode("ascii")),
         expected_key_version=1,
     )
 
@@ -611,6 +611,7 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
         "authority": "OPERATOR_RECOVERED_READ_ONLY",
         "key_version": 2,
         "device_replaced": True,
+        "recovery_code_rotated": True,
     }
     assert replacements == [(new_device_public, "operator:" + identity_id)]
     assert authority.primary_device_public_key() == new_device_public
@@ -620,7 +621,7 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
     )
     with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_RECOVERY_CODE"):
         authority.create_operator_recovery_challenge(
-            recovery, new_root_public, new_device_public,
+            recovery, new_root_public, new_device_public, "unused-next-recovery-" + "u" * 40,
         )
     next_challenge = authority.create_operator_recovery_challenge(
         next_recovery, new_root_public, new_device_public,
