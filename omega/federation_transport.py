@@ -102,7 +102,7 @@ def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
         except UnicodeError as exc:
             raise FederationTransportError("INVALID_ENDPOINT") from exc
         return "https", ascii_host, port or 443, parsed.path, ascii_host
-    if parsed.scheme == "http" and port is not None:
+    if parsed.scheme == "http" and port is not None and 1 <= port <= 65535:
         try:
             address = ipaddress.ip_address(host)
         except ValueError as exc:
