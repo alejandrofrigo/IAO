@@ -92,7 +92,12 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
         args=(send_conn, run, verify, payload, timeout_seconds),
         daemon=True,
     )
-    process.start()
+    try:
+        process.start()
+    except BaseException:
+        receive_conn.close()
+        send_conn.close()
+        raise
     send_conn.close()
     try:
         if not receive_conn.poll(timeout_seconds):
