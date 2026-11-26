@@ -87,3 +87,25 @@ def test_libp2p_inventory_fails_closed_on_corrupt_registry(tmp_path):
     (tmp_path / "peers.json").write_text("not-json", encoding="utf-8")
     with pytest.raises(RuntimeError, match="P2P_REGISTRY_INVALID_FAIL_CLOSED"):
         persist_discovered_peers([], state_dir=tmp_path)
+
+
+def test_existing_libp2p_identity_permissions_are_restricted(tmp_path):
+    import os
+    import stat
+    from omega.libp2p_discovery import _secure_identity_file
+    key_path = tmp_path / "peer-identity.key"
+    key_path.write_bytes(b"test-private-key-material")
+    os.chmod(key_path, 0o644)
+    _secure_identity_file(key_path)
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+
+
+def test_libp2p_identity_refuses_symlink(tmp_path):
+    import pytest
+    from omega.libp2p_discovery import _secure_identity_file
+    target = tmp_path / "target.key"
+    target.write_bytes(b"private")
+    link = tmp_path / "peer-identity.key"
+    link.symlink_to(target)
+    with pytest.raises(RuntimeError, match="P2P_IDENTITY_PATH_REFUSED"):
+        _secure_identity_file(link)
