@@ -96,7 +96,7 @@ def test_device_authority_rejects_expired_timestamp(tmp_path):
 
 def _signed_request(private_key, device_id, nonce, method, path, request_digest):
     timestamp = int(time.time())
-    signed_text = "\\n".join(
+    signed_text = "\n".join(
         [method, path, str(timestamp), nonce, request_digest]
     ).encode("utf-8")
     signature = private_key.sign(signed_text, ec.ECDSA(hashes.SHA256()))
