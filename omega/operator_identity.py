@@ -145,10 +145,15 @@ class OperatorIdentityAuthority:
         _, public_pem = self._public_key(root_public_key_pem)
         code_digest = self._digest(code)
         identity_id = uuid.uuid4().hex
-        now = time.time()
         with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
+                # Re-check the expiry after acquiring the write transaction.
+                # A bootstrap that waited on SQLite must not become valid
+                # after its configured authorization window has elapsed.
+                now = time.time()
+                if now >= expiry:
+                    raise OperatorIdentityError("OPERATOR_BOOTSTRAP_DISABLED", 503)
                 if db.execute(
                     "SELECT 1 FROM consumed_bootstrap_codes WHERE code_digest=?",
                     (code_digest,),
