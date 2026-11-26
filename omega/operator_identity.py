@@ -1,8 +1,8 @@
-"""Durable operator root-key registry.
+"""Durable operator root-key registry and read-only session association.
 
-This module is intentionally not wired to API authorization yet. It provides
-an independently testable, fail-closed persistence primitive for the staged
-root-identity protocol. A registered root key does not grant API capabilities.
+Root enrollment and session association do not grant API capabilities.
+Protected device/task routes must independently enforce the full identity,
+device, request-proof and policy chain before any future command authority.
 """
 from __future__ import annotations
 
