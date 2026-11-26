@@ -307,3 +307,115 @@ def test_revocation_releases_primary_slot_for_explicit_new_root_recovery(tmp_pat
     assert recovered.verify_primary_device(new_id, new_device_public)
     with pytest.raises(OperatorIdentityError, match="PRIMARY_DEVICE_NOT_AUTHORIZED"):
         recovered.verify_primary_device(old_id, old_device_public)
+
+
+
+def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_path):
+    import base64
+
+    code = "session-bootstrap-" + "s" * 40
+    root_private, root_public = keypair()
+    db = tmp_path / "identity.sqlite3"
+    authority = OperatorIdentityAuthority(
+        db, code, bootstrap_expires_at=time.time() + 600
+    )
+    identity = authority.bootstrap(code, root_public)
+    challenge = authority.create_session_challenge("verified-subject-A")
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    signature = sign(root_private, payload)
+
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_SESSION_MISMATCH"):
+        authority.bind_authenticated_session(
+            challenge["challenge"], "verified-subject-B", signature
+        )
+    assert authority.bind_authenticated_session(
+        challenge["challenge"], "verified-subject-A", signature
+    ) == {"key_version": 1}
+    assert authority.verify_authenticated_session("verified-subject-A")
+    assert not authority.verify_authenticated_session("verified-subject-B")
+
+    restarted = OperatorIdentityAuthority(db)
+    assert restarted.verify_authenticated_session("verified-subject-A")
+    with pytest.raises(OperatorIdentityError, match="SESSION_CHALLENGE_REPLAYED"):
+        restarted.bind_authenticated_session(
+            challenge["challenge"], "verified-subject-A", signature
+        )
+    assert "identity_id" not in challenge
+    assert identity["identity_id"] not in challenge["signing_payload"]
+
+
+def test_session_binding_rejects_invalid_signature_guest_and_expiry(tmp_path, monkeypatch):
+    import base64
+
+    code = "session-bootstrap-" + "t" * 40
+    root_private, root_public = keypair()
+    attacker, _ = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "identity.sqlite3", code,
+        bootstrap_expires_at=time.time() + 600,
+    )
+    authority.bootstrap(code, root_public)
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_SESSION_REQUIRED"):
+        authority.create_session_challenge("guest:anonymous")
+    challenge = authority.create_session_challenge("verified-subject")
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    with pytest.raises(OperatorIdentityError, match="INVALID_ROOT_SIGNATURE"):
+        authority.bind_authenticated_session(
+            challenge["challenge"], "verified-subject", sign(attacker, payload)
+        )
+
+    expired = authority.create_session_challenge("verified-subject")
+    expired_payload = base64.urlsafe_b64decode(
+        expired["signing_payload"] + "=" * (-len(expired["signing_payload"]) % 4)
+    )
+    monkeypatch.setattr("omega.operator_identity.time.time", lambda: time.time() + 1000)
+    with pytest.raises(OperatorIdentityError, match="SESSION_CHALLENGE_EXPIRED"):
+        authority.bind_authenticated_session(
+            expired["challenge"], "verified-subject", sign(root_private, expired_payload)
+        )
+
+
+def test_session_binding_is_invalidated_by_root_rotation_and_revocation(tmp_path):
+    import base64
+    import hashlib
+
+    code = "session-bootstrap-" + "u" * 40
+    old_root, old_public = keypair()
+    new_root, new_public = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "identity.sqlite3", code,
+        bootstrap_expires_at=time.time() + 600,
+    )
+    identity = authority.bootstrap(code, old_public)
+    challenge = authority.create_session_challenge("verified-subject")
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    authority.bind_authenticated_session(
+        challenge["challenge"], "verified-subject", sign(old_root, payload)
+    )
+    assert authority.verify_authenticated_session("verified-subject")
+
+    canonical_new = serialization.load_pem_public_key(new_public.encode()).public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    rotate_payload = (
+        b"rotate-root-v1\\n" + identity["identity_id"].encode("ascii") + b"\\n"
+        + b"2\\n" + hashlib.sha256(canonical_new.encode("ascii")).hexdigest().encode("ascii")
+    )
+    authority.rotate_root(
+        identity["identity_id"], new_public, sign(old_root, rotate_payload)
+    )
+    assert not authority.verify_authenticated_session("verified-subject")
+
+    revoke_payload = b"revoke-root-v1\\n" + identity["identity_id"].encode("ascii")
+    authority.revoke(
+        identity["identity_id"], sign(new_root, revoke_payload),
+        expected_key_version=2,
+    )
+    assert not authority.verify_authenticated_session("verified-subject")
