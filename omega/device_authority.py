@@ -173,6 +173,72 @@ class DeviceAuthority:
                 raise
         return {"device_id": device_id, "algorithm": "ECDSA-P256-SHA256"}
 
+    def enroll_bootstrap_primary_device(
+        self, public_key_pem: Any, *, owner_subject: str, signature: bytes,
+    ) -> dict[str, str]:
+        """Enroll the first device only with proof of its private key over the root binding statement."""
+        if (
+            not isinstance(owner_subject, str)
+            or not re.fullmatch(r"operator:[0-9a-f]{32}", owner_subject)
+        ):
+            raise DeviceAuthorityError("INVALID_OPERATOR_SUBJECT", 403)
+        if not isinstance(public_key_pem, str) or not 1 <= len(public_key_pem) <= 4096:
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY")
+        if not isinstance(signature, bytes) or not 64 <= len(signature) <= 80:
+            raise DeviceAuthorityError("INVALID_BOOTSTRAP_DEVICE_SIGNATURE", 401)
+        try:
+            key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        except (ValueError, TypeError, UnicodeEncodeError):
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY") from None
+        if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+            raise DeviceAuthorityError("UNSUPPORTED_PUBLIC_KEY")
+        der = key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        device_id = hashlib.sha256(der).hexdigest()
+        payload = json.dumps({
+            "device_id": device_id,
+            "key_version": 1,
+            "protocol": "IAO-DEVICE-BINDING-V1",
+            "public_key_sha256": device_id,
+            "role": "PRIMARY",
+        }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        try:
+            key.verify(
+                signature,
+                b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + payload,
+                ec.ECDSA(hashes.SHA256()),
+            )
+        except (InvalidSignature, ValueError, TypeError):
+            raise DeviceAuthorityError("INVALID_BOOTSTRAP_DEVICE_SIGNATURE", 401) from None
+        canonical = key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        now = time.time()
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                if db.execute("SELECT 1 FROM devices WHERE active=1").fetchone():
+                    raise DeviceAuthorityError("PRIMARY_DEVICE_ALREADY_ENROLLED", 409)
+                if db.execute(
+                    "SELECT 1 FROM devices WHERE device_id=?", (device_id,)
+                ).fetchone():
+                    raise DeviceAuthorityError("DEVICE_KEY_PREVIOUSLY_ENROLLED", 409)
+                db.execute(
+                    """INSERT INTO devices
+                    (device_id,public_key_pem,owner_subject,active,created_at)
+                    VALUES(?,?,?,1,?)""",
+                    (device_id, canonical, owner_subject, now),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        return {"device_id": device_id, "algorithm": "ECDSA-P256-SHA256"}
+
     def verify_registered_public_key(
         self, public_key_pem: Any, *, owner_subject: str,
     ) -> bool:
