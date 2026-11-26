@@ -46,10 +46,14 @@ class OmegaService:
     def __init__(self, store: Store, registry: ToolRegistry, token_key: str, *, rate_limit_per_min: int = 120,
                  daily_task_quota: int = 1000, task_ttl_seconds: int = 300, model_adapter: Any = None,
                  clock: Any = time.time, device_authority: DeviceAuthority | None = None,
-                 operator_identity_authority: OperatorIdentityAuthority | None = None) -> None:
+                 operator_identity_authority: OperatorIdentityAuthority | None = None,
+                 identity_rollback_anchor: Any = None,
+                 identity_state_supplier: Any = None) -> None:
         self.store, self.registry, self.token_key = store, registry, token_key
         self.device_authority = device_authority
         self.operator_identity_authority = operator_identity_authority
+        self.identity_rollback_anchor = identity_rollback_anchor
+        self.identity_state_supplier = identity_state_supplier
         self.rate, self.quota, self.ttl, self.model, self.clock = rate_limit_per_min, daily_task_quota, task_ttl_seconds, model_adapter, clock
 
         self._hits: dict[str, deque[float]] = defaultdict(deque)
@@ -82,18 +86,35 @@ class OmegaService:
         try:
             if len(body) > MAX_BODY:
                 raise ApiError(413, "PAYLOAD_TOO_LARGE")
-            status, payload = self._route(method.upper(), path, headers, body)
+            normalized_method = method.upper()
+            route_path = urlsplit(path).path.rstrip("/") or "/"
+            anchor_exempt = route_path in {
+                "/health/live", "/health/ready", "/v1/public/session",
+            }
+            if self.identity_rollback_anchor is not None and not anchor_exempt:
+                if self.identity_state_supplier is None:
+                    raise ApiError(503, "IDENTITY_ROLLBACK_ANCHOR_UNAVAILABLE")
+                status, payload = self.identity_rollback_anchor.execute(
+                    self.identity_state_supplier,
+                    lambda: self._route(normalized_method, path, headers, body),
+                )
+            else:
+                status, payload = self._route(normalized_method, path, headers, body)
         except ApiError as e:
             status, payload = e.status, {"error": e.code}
         except Exception as exc:  # never expose internals to the caller
-            try:
-                self.store.audit(
-                    "system", "API_INTERNAL_ERROR", path,
-                    error_type=type(exc).__name__,
-                )
-            except Exception:
-                pass
-            status, payload = 500, {"error": "INTERNAL_ERROR"}
+            from omega.identity_rollback_anchor import IdentityRollbackAnchorError
+            if isinstance(exc, IdentityRollbackAnchorError):
+                status, payload = 503, {"error": "IDENTITY_ROLLBACK_ANCHOR_BLOCKED"}
+            else:
+                try:
+                    self.store.audit(
+                        "system", "API_INTERNAL_ERROR", path,
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    pass
+                status, payload = 500, {"error": "INTERNAL_ERROR"}
         payload["correlation_id"] = cid
         return status, payload
 

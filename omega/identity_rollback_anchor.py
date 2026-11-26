@@ -160,6 +160,7 @@ class IdentityRollbackAnchor:
             raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_PATH_INVALID")
         self.parent = self.anchor_path.parent
         self.lock_path = self.parent / (self.anchor_path.name + ".lock")
+        self.pending_path = self.parent / (self.anchor_path.name + ".pending")
         self._ensure_parent()
 
     def _ensure_parent(self) -> None:
@@ -295,13 +296,73 @@ class IdentityRollbackAnchor:
             self._write_record(1, state, key)
         return {"initialized": True, "sequence": 1}
 
+    def _write_pending(self, sequence: int, state: dict[str, Any], key: bytes) -> None:
+        body = {
+            "format_version": ANCHOR_FORMAT_VERSION,
+            "sequence": sequence,
+            "state_digest": hashlib.sha256(STATE_DOMAIN + _canonical(state)).hexdigest(),
+        }
+        mac = hmac.new(key, b"IAO-IDENTITY-ROLLBACK-PENDING-V1\x00" + _canonical(body), hashlib.sha256).hexdigest()
+        fd, temp_name = tempfile.mkstemp(prefix=".identity-pending-", dir=self.parent)
+        temp_path = Path(temp_name)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(_canonical({**body, "mac": mac}) + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_path, self.pending_path)
+            self._fsync_parent()
+        except Exception:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise
+
+    def _clear_pending(self) -> None:
+        try:
+            self.pending_path.unlink()
+        except FileNotFoundError:
+            return
+        self._fsync_parent()
+
     def verify(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Fail closed unless the external anchor exactly matches the live DB pair."""
+        """Fail closed unless no transition is pending and the anchor matches live state."""
         with self._locked():
+            if self.pending_path.exists() or self.pending_path.is_symlink():
+                raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_TRANSITION_PENDING")
             record = self._read_record()
             if not hmac.compare_digest(_canonical(record["state"]), _canonical(state)):
                 raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_STATE_MISMATCH")
             return {"valid": True, "sequence": record["sequence"]}
+
+    def execute(self, state_supplier, operation):
+        """Serialize a live operation behind a durable write-ahead transition marker."""
+        with self._locked():
+            if self.pending_path.exists() or self.pending_path.is_symlink():
+                raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_TRANSITION_PENDING")
+            before = state_supplier()
+            record = self._read_record()
+            if not hmac.compare_digest(_canonical(record["state"]), _canonical(before)):
+                raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_STATE_MISMATCH")
+            key = self._read_key()
+            self._write_pending(record["sequence"], before, key)
+            try:
+                result = operation()
+            except BaseException:
+                after = state_supplier()
+                if hmac.compare_digest(_canonical(before), _canonical(after)):
+                    self._clear_pending()
+                else:
+                    self._write_record(record["sequence"] + 1, after, key)
+                    self._clear_pending()
+                raise
+            after = state_supplier()
+            if not hmac.compare_digest(_canonical(before), _canonical(after)):
+                self._write_record(record["sequence"] + 1, after, key)
+            self._clear_pending()
+            return result
 
     def advance(
         self, state: dict[str, Any], *, expected_sequence: int,

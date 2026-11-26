@@ -13,6 +13,7 @@ from omega.config import load_settings
 from omega.service import MAX_BODY, OmegaService
 from omega.device_authority import DeviceAuthority
 from omega.operator_identity import OperatorIdentityAuthority
+from omega.identity_rollback_anchor import IdentityRollbackAnchor, capture_identity_state
 from omega.store import Store
 from omega.federation import MAX_MSG, Node
 from omega.federation_identity import load_or_create_key
@@ -81,6 +82,40 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     )
     bootstrap_code = ""
     kw.setdefault("operator_identity_authority", operator_identity_authority)
+    if kw.pop("identity_rollback_anchor_enabled", False):
+        trust_dir = Path(os.environ.get(
+            "IAO_IDENTITY_ROLLBACK_DIR",
+            str(Path.home() / ".config" / "iao" / "identity-trust"),
+        )).expanduser()
+        anchor = IdentityRollbackAnchor(
+            trust_dir / "identity.anchor",
+            trust_dir / "identity.key",
+        )
+        device_authority = kw["device_authority"]
+        state_supplier = lambda: capture_identity_state(
+            operator_identity_authority.database,
+            device_authority.database,  # type: ignore[union-attr]
+        )
+        current_state = state_supplier()
+        anchor_file = trust_dir / "identity.anchor"
+        key_file = trust_dir / "identity.key"
+        if not anchor_file.exists() and not anchor_file.is_symlink() and not key_file.exists() and not key_file.is_symlink():
+            empty_state = (
+                current_state["active_root_count"] == 0
+                and current_state["active_device_count"] == 0
+                and current_state["revoked_root_count"] == 0
+                and current_state["inactive_device_count"] == 0
+                and current_state["root_fingerprint"] is None
+                and current_state["primary_device_fingerprint"] is None
+                and current_state["root_key_version"] == 0
+            )
+            if not empty_state:
+                raise RuntimeError("IDENTITY_ROLLBACK_ANCHOR_MISSING_FOR_EXISTING_IDENTITY")
+            anchor.initialize(current_state)
+        else:
+            anchor.verify(current_state)
+        kw["identity_rollback_anchor"] = anchor
+        kw["identity_state_supplier"] = state_supplier
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
 
@@ -294,8 +329,11 @@ def main() -> None:
     if len(key) < 16:
         sys.exit("OMEGA_DEV_TOKEN_KEY (>=16 chars) required")
     state = Path(os.environ.get("OMEGA_STATE_DIR", ".state"))
-    svc = build_service(state, key, Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
-                        rate_limit_per_min=int(os.environ.get("OMEGA_RATE_LIMIT", "120")))
+    svc = build_service(
+        state, key, Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
+        rate_limit_per_min=int(os.environ.get("OMEGA_RATE_LIMIT", "120")),
+        identity_rollback_anchor_enabled=True,
+    )
     fed_key = load_or_create_key(state / "federation-node-ed25519.key")
     fed_ledger = FederationLedger(
         state / "federation-audit.jsonl",
