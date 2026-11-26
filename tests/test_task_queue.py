@@ -96,6 +96,35 @@ class DurableTaskQueueTests(unittest.TestCase):
         self.assertIsNone(failed["lease_until"])
         self.assertEqual(self.store.claim_next_task("worker-b"), None)
 
+    def test_interrupted_verifying_task_fails_closed_and_is_not_requeued(self) -> None:
+        self._queue_one()
+        claimed = self.store.claim_next_task(
+            "worker-a",
+            lease_seconds=30,
+            now="2026-11-26T12:00:00+00:00",
+        )
+        self.assertIsNotNone(claimed)
+        self.assertTrue(
+            self.store.update_claimed_task(
+                "task-1", "worker-a", "VERIFYING"
+            )
+        )
+
+        recovered = self.store.recover_interrupted_tasks(
+            now="2026-11-26T12:01:00+00:00"
+        )
+
+        self.assertEqual(recovered, [{"id": "task-1", "owner": "owner-a"}])
+        failed = self.store.get_task("task-1", "owner-a")
+        self.assertEqual(failed["state"], "FAILED")
+        self.assertEqual(
+            failed["result_json"],
+            '{"decision": "INTERRUPTED", "error": "PROCESS_INTERRUPTED"}',
+        )
+        self.assertIsNone(failed["lease_owner"])
+        self.assertIsNone(failed["lease_until"])
+        self.assertIsNone(self.store.claim_next_task("worker-b"))
+
     def test_only_current_unexpired_lease_owner_can_finish(self) -> None:
         self._queue_one()
         claimed = self.store.claim_next_task("worker-a", lease_seconds=300)
