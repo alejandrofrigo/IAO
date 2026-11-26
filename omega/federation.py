@@ -12,8 +12,6 @@ import math
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
-import urllib.error
-import urllib.request
 from collections import defaultdict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
