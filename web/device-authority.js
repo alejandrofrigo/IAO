@@ -295,14 +295,23 @@
     return b64url(rawEcdsaToDer(raw));
   }
 
-  async function activateRecoveryIdentity() {
-    const identity = await dbGetPending();
-    if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
+  async function activateRecoveryIdentity(expectedPublicKeyPem) {
+    if (typeof expectedPublicKeyPem !== "string" || !expectedPublicKeyPem) {
       throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
     }
-    await dbPut({ ...identity, recoveryPending: false, enrolledAt: Date.now() });
-    await dbDeletePending();
-    return { activated: true };
+    const identity = await dbGetPending();
+    if (identity && identity.recoveryPending === true && identity.privateKey &&
+        identity.publicKeyPem === expectedPublicKeyPem) {
+      await dbPut({ ...identity, recoveryPending: false, enrolledAt: Date.now() });
+      await dbDeletePending();
+      return { activated: true };
+    }
+    const active = await dbGet();
+    if (active && active.recoveryPending !== true &&
+        active.privateKey && active.publicKeyPem === expectedPublicKeyPem) {
+      return { activated: true, reconciled: true };
+    }
+    throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
   }
 
   async function signOperatorLoginPayload(payloadBase64) {
