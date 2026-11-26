@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import sqlite3
 import stat
@@ -38,7 +39,10 @@ class OperatorIdentityError(RuntimeError):
 class OperatorIdentityAuthority:
     """Stores only root public keys; bootstrap secrets are consumed once."""
 
-    def __init__(self, database: str | Path, bootstrap_code: str = "") -> None:
+    def __init__(
+        self, database: str | Path, bootstrap_code: str = "",
+        *, bootstrap_expires_at: float | None = None,
+    ) -> None:
         self.database = Path(database)
         parent = self.database.parent
         parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -56,6 +60,7 @@ class OperatorIdentityAuthority:
         finally:
             os.close(fd)
         self.bootstrap_code = bootstrap_code
+        self.bootstrap_expires_at = bootstrap_expires_at
         self.lock = threading.RLock()
         with self._database() as db:
             db.executescript(
@@ -126,7 +131,12 @@ class OperatorIdentityAuthority:
     def bootstrap(self, code: Any, root_public_key_pem: Any) -> dict[str, Any]:
         """Create the sole active root identity using an out-of-band secret."""
         configured = self.bootstrap_code
-        if not isinstance(configured, str) or len(configured) < 32:
+        expiry = self.bootstrap_expires_at
+        if (
+            not isinstance(configured, str) or len(configured) < 32
+            or isinstance(expiry, bool) or not isinstance(expiry, (int, float))
+            or not math.isfinite(expiry) or expiry <= time.time()
+        ):
             raise OperatorIdentityError("OPERATOR_BOOTSTRAP_DISABLED", 503)
         if not isinstance(code, str) or len(code) < 32 or not hmac.compare_digest(
             self._digest(code), self._digest(configured)
