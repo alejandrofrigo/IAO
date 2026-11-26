@@ -21,7 +21,7 @@ from omega.env_loader import load_env_files
 from omega.config import load_settings
 from omega.service import POLICY_VERSION, _digest
 from omega.store import Store
-from omega.tools.registry import ToolRegistry
+from omega.tools.registry import QUEUED_TOOL_ALLOWLIST, ToolRegistry
 
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="iao-task")
@@ -102,6 +102,11 @@ class TaskWorker:
                 return self._finish(
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "WORKER_READ_ONLY_ONLY"},
+                )
+            if capability not in QUEUED_TOOL_ALLOWLIST:
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "WORKER_TOOL_NOT_ALLOWLISTED"},
                 )
 
             try:
