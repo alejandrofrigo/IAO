@@ -21,8 +21,10 @@ required, and recovery remains outside the API/session flow.
 
 The registry implements persistent session-association primitives. The
 service exposes challenge, bind and read-only status routes, plus a
-rate-limited one-time bootstrap endpoint that is disabled unless deployment
-configuration supplies an out-of-band secret and expiry.
+rate-limited one-time dual-key bootstrap endpoint that is disabled unless
+deployment configuration supplies an out-of-band secret and expiry. The first
+device is enrolled and root-bound during bootstrap, eliminating the previous
+login/enrollment dependency cycle.
 A challenge is bound to the server-supplied authenticated subject digest,
 the HMAC digest of the exact bearer token, active root identity digest, root
 key version, one-time nonce, expiry and fixed protocol purpose; the root
@@ -39,14 +41,15 @@ subject and token substitution, guest rejection, invalid signature, replay, expi
 restart persistence, rotation and revocation. The production service stores
 the registry in its persistent state directory.
 
-Browser support now exists in web/operator-identity.js: it generates a P-256
-key in the browser, imports the private component as a non-extractable
-WebCrypto key, stores that CryptoKey in IndexedDB, submits only the public key
-for bootstrap, signs the session challenge locally, and can sign the canonical
-primary-device binding statement locally. web/device-authority.js retains the
-public device key in IndexedDB and exposes it only to the local root-binding
-flow. The bootstrap capability is cleared from the input and is not persisted.
-This browser path has not yet passed target-mobile-browser end-to-end testing.
+Browser support now generates separate P-256 root and device keys in the
+browser, imports their private components as non-extractable WebCrypto keys,
+and stores them in IndexedDB. Initial bootstrap submits both public keys and
+two independent domain-separated signatures over the canonical PRIMARY-device
+binding statement. The server verifies both proofs before consuming the
+one-time bootstrap capability, binds the root and enrolls the exact device key;
+bootstrap grants no operator bearer session or privileged scope. The bootstrap
+capability and offline recovery code are cleared from their inputs and are not
+persisted. This browser path has not yet passed target-mobile-browser E2E.
 
 This is still not an end-to-end operator identity system. Trusted deployment
 provisioning, a usable non-guest authentication/session provider, browser
@@ -100,7 +103,9 @@ fixed route, timestamp, nonce and digest of the exact request bytes.
 
 - Initial root enrollment must require a one-time high-entropy bootstrap
   capability supplied out-of-band by the deployment operator. It must be
-  disabled by default, consumed atomically, rate-limited and never logged.
+  disabled by default, rate-limited and never logged. Before consuming it,
+  the server must verify independent root-key and device-key signatures over
+  the exact canonical PRIMARY binding statement.
 - The first root public key creates an opaque operator record. Do not derive
   subjects from names, email addresses, IP addresses or device fingerprints.
 - Recovery must not be based on a guest session, email-only reset, public
@@ -138,8 +143,10 @@ subject argument is designed to come from a server-verified principal, never
 from a caller-supplied field. Guest principals are rejected. A root signature
 does not create a session or grant scopes; it only authorizes association.
 
-**Implemented:** one-time bootstrap API; bootstrap rate limit; explicit
-deployment-only secret and expiry configuration; authenticated challenge,
+**Implemented:** one-time dual-key bootstrap API; root/device proof
+validation before bootstrap-code consumption; primary-device enrollment under
+the opaque root-derived subject; bootstrap rate limit; explicit deployment-only
+secret and expiry configuration; authenticated challenge,
 bind and read-only status API routes; subject taken only from the verified
 bearer principal; guest rejection; atomic challenge consumption; persistent
 registry; browser-side P-256 key generation, non-extractable private-key
