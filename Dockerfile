@@ -16,7 +16,7 @@ COPY apps ./apps
 COPY omega ./omega
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir . \
+    && python -m pip install --no-cache-dir '.[p2p]' \
     && groupadd --system iao \
     && useradd --system --gid iao --home-dir /home/iao --create-home iao \
     && mkdir -p /var/lib/iao /app/knowledge \
