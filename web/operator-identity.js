@@ -140,6 +140,31 @@
       challenge: challenge.challenge, signature: b64url(rawEcdsaToDer(raw))
     });
   }
+  async function bindPrimaryDevice(publicKeyPem) {
+    const identity = await readIdentity();
+    if (!identity || !identity.privateKey || !identity.keyVersion) throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
+    if (typeof publicKeyPem !== "string" || publicKeyPem.length > 4096) throw new Error("DEVICE_PUBLIC_KEY_REQUIRED");
+    const encoded = publicKeyPem.replace(/-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\s/g, "");
+    const der = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", der));
+    const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+    const deviceId = hex(digest);
+    const payload = encoder.encode(JSON.stringify({
+      device_id: deviceId,
+      key_version: identity.keyVersion,
+      protocol: "IAO-DEVICE-BINDING-V1",
+      public_key_sha256: deviceId,
+      role: "PRIMARY"
+    }));
+    const message = new Uint8Array(ROOT_DOMAIN.length + payload.length);
+    message.set(ROOT_DOMAIN); message.set(payload, ROOT_DOMAIN.length);
+    const raw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, identity.privateKey, message
+    ));
+    return request("/v1/operator/device/bind", "POST", {
+      public_key_pem: publicKeyPem, signature: b64url(rawEcdsaToDer(raw))
+    });
+  }
   async function status() { return request("/v1/operator/session/status", "GET"); }
   function panel() {
     if (document.getElementById("iao-operator-identity-panel")) return;
@@ -158,6 +183,8 @@
     associateButton.type = "button"; associateButton.textContent = "Asociar sesión autenticada";
     const statusButton = document.createElement("button");
     statusButton.type = "button"; statusButton.textContent = "Consultar asociación";
+    const bindDeviceButton = document.createElement("button");
+    bindDeviceButton.type = "button"; bindDeviceButton.textContent = "Vincular dispositivo primario";
     const output = document.createElement("pre");
     output.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;";
     function show(message, failed) { output.textContent = message; output.style.color = failed ? "#c44" : "inherit"; }
@@ -179,13 +206,19 @@
     statusButton.addEventListener("click", () => run(statusButton, status,
       result => "Asociada: " + (result.associated ? "sí" : "no") + "\nAutoridad: " + result.authority
     ));
-    section.append(title, description, code, bootstrapButton, associateButton, statusButton, output);
+    bindDeviceButton.addEventListener("click", () => run(bindDeviceButton, async () => {
+      if (!window.IAODeviceAuthority || typeof window.IAODeviceAuthority.publicKeyPem !== "function") {
+        throw new Error("DEVICE_AUTHORITY_NOT_AVAILABLE");
+      }
+      return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
+    }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
+    section.append(title, description, code, bootstrapButton, associateButton, statusButton, bindDeviceButton, output);
     document.body.appendChild(section);
     readIdentity().then(identity => show(
       identity ? (identity.bootstrapPending ? "Clave raíz local conservada; confirma el bootstrap o consulta su estado." : "Clave raíz local disponible en este navegador.") : "No hay identidad raíz registrada en este navegador.", false
     )).catch(error => show("Almacenamiento no disponible: " + error.message, true));
   }
-  window.IAOOperatorIdentity = Object.freeze({ associateSession, status });
+  window.IAOOperatorIdentity = Object.freeze({ associateSession, bindPrimaryDevice, status });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", panel, { once: true });
   else panel();
 })();
