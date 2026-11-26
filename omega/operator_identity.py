@@ -640,13 +640,17 @@ class OperatorIdentityAuthority:
             expected_key_version=row["key_version"],
         )
 
-    def verify_primary_device_for_session(
-        self, authenticated_subject: Any, authenticated_session_token: Any,
-        device_id: Any,
+    def session_credential_digest(self, authenticated_session_token: Any) -> str:
+        """Return the server-keyed digest for durable internal task binding only."""
+        return self._session_credential_digest(authenticated_session_token)
+
+    def verify_primary_device_for_session_digest(
+        self, authenticated_subject: Any, session_digest: Any, device_id: Any,
     ) -> bool:
-        """Require the exact active session and its single root-bound primary device."""
+        """Revalidate current root, exact session digest and primary device without storing a bearer token."""
         subject_digest = self._session_subject_digest(authenticated_subject)
-        session_digest = self._session_credential_digest(authenticated_session_token)
+        if not isinstance(session_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", session_digest):
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
         if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{64}", device_id):
             raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
         with self._database() as db:
@@ -669,6 +673,17 @@ class OperatorIdentityAuthority:
         ):
             raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
         return True
+
+    def verify_primary_device_for_session(
+        self, authenticated_subject: Any, authenticated_session_token: Any,
+        device_id: Any,
+    ) -> bool:
+        """Require the exact active session and its single root-bound primary device."""
+        return self.verify_primary_device_for_session_digest(
+            authenticated_subject,
+            self._session_credential_digest(authenticated_session_token),
+            device_id,
+        )
 
     def verify_authenticated_session(
         self, authenticated_subject: Any, authenticated_session_token: Any,
