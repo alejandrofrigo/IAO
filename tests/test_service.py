@@ -58,13 +58,12 @@ class Base(unittest.TestCase):
 class AuthTests(Base):
     def test_operator_bootstrap_endpoint_consumes_out_of_band_capability_once(self) -> None:
         code = "out-of-band-bootstrap-" + "q" * 48
-        authority = OperatorIdentityAuthority(
-            self.state / "bootstrap-api.sqlite3",
-            code,
-            bootstrap_expires_at=time.time() + 600,
-            subject_digest_key=hashlib.sha256(b"bootstrap-api-test-key").digest(),
-        )
-        self.svc.operator_identity_authority = authority
+        self.svc.store.close()
+        with patch.dict(os.environ, {
+            "IAO_OPERATOR_BOOTSTRAP_CODE": code,
+            "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT": str(time.time() + 600),
+        }):
+            self.mk()
         root = ec.generate_private_key(ec.SECP256R1())
         public = root.public_key().public_bytes(
             serialization.Encoding.PEM,
