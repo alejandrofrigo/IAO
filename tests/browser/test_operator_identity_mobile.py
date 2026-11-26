@@ -535,7 +535,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                         credentials: 'omit', cache: 'no-store'
                       });
                       const pem = await window.IAODeviceAuthority.publicKeyPem();
-                      const encoded = pem.replace(/-----[^-]+-----/g, '').replace(/\s/g, '');
+                      const encoded = pem.replace(/-----[^-]+-----/g, '').replace(/\\s/g, '');
                       const der = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
                       const digest = await crypto.subtle.digest('SHA-256', der);
                       const deviceId = Array.from(new Uint8Array(digest),
