@@ -433,8 +433,6 @@ class AuthTests(Base):
         self.assertNotIn("identity_id", result)
         self.assertNotIn(root_public, json.dumps(result))
         self.assertNotIn(device_public, json.dumps(result))
-        identity_id = self.svc.operator_identity_authority._database
-        owner = "operator:" + self.svc.operator_identity_authority._database.__self__.__class__.__name__ if False else None
         with device_authority._database() as db:
             row = db.execute("SELECT owner_subject,active FROM devices").fetchone()
         self.assertEqual(row["active"], 1)
