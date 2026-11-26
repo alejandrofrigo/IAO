@@ -115,10 +115,12 @@ def capture_identity_state(
     active_root = active_roots[0] if active_roots else None
     active_binding = binding_by_id.get(active_root["identity_id"]) if active_root else None
     active_device = active_devices[0] if active_devices else None
-    if active_root and active_binding:
+    if active_root:
+        if active_binding is None or active_device is None:
+            raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_AUTHORITY_STATE_INVALID")
         if active_binding["key_version"] != active_root["key_version"]:
             raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_AUTHORITY_STATE_INVALID")
-        if active_device is None or active_device["device_id"] != active_binding["device_id"]:
+        if active_device["device_id"] != active_binding["device_id"]:
             raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_AUTHORITY_STATE_INVALID")
         if active_device["public_key_pem"] != active_binding["device_public_key_pem"]:
             raise IdentityRollbackAnchorError("IDENTITY_ANCHOR_AUTHORITY_STATE_INVALID")
