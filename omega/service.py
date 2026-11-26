@@ -3,6 +3,7 @@ The same logic can be mounted under FastAPI later; the stdlib server in omega/se
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import os
 import re
