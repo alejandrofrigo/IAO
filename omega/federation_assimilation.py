@@ -496,6 +496,10 @@ class CandidateRegistry:
             if not item.get("node_id"):
                 raise AssimilationError("VERIFIED_NODE_ID_REQUIRED")
 
+            # No se permite enrolar con evidencia de transporte declarativa,
+            # incluso si un registro antiguo ya estaba en AUTHORIZATION_PENDING.
+            raise AssimilationError("TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED")
+
             if autonomous:
                 evidence = item.get("verification_evidence")
                 if not isinstance(evidence, dict):
