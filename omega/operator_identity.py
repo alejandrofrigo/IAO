@@ -181,6 +181,13 @@ class OperatorIdentityAuthority:
     def _digest(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
+    def _recovery_digest(self, value: str) -> str:
+        key = self.subject_digest_key
+        if not isinstance(key, bytes) or len(key) < 32:
+            raise OperatorIdentityError("OPERATOR_RECOVERY_UNAVAILABLE", 503)
+        message = b"IAO-OPERATOR-RECOVERY-CODE-V1\\x00" + value.encode("utf-8")
+        return hmac.new(key, message, hashlib.sha256).hexdigest()
+
     @staticmethod
     def _public_key(value: Any):
         if not isinstance(value, str) or not value or len(value) > MAX_PUBLIC_KEY_BYTES:
@@ -221,7 +228,7 @@ class OperatorIdentityAuthority:
             or hmac.compare_digest(self._digest(recovery_code), self._digest(code))
         ):
             raise OperatorIdentityError("INVALID_OPERATOR_RECOVERY_CODE")
-        recovery_digest = self._digest(recovery_code) if recovery_code is not None else None
+        recovery_digest = self._recovery_digest(recovery_code) if recovery_code is not None else None
         code_digest = self._digest(code)
         identity_id = uuid.uuid4().hex
         with self.lock, self._database() as db:
@@ -245,7 +252,7 @@ class OperatorIdentityAuthority:
                 if recovery_digest is not None and (
                     db.execute(
                         "SELECT 1 FROM consumed_bootstrap_codes WHERE code_digest=?",
-                        (recovery_digest,),
+                        (self._digest(recovery_code),),
                     ).fetchone()
                     or db.execute(
                         "SELECT 1 FROM operator_identities WHERE recovery_code_digest=?",
@@ -288,10 +295,10 @@ class OperatorIdentityAuthority:
             or hmac.compare_digest(self._digest(new_recovery_code), self._digest(recovery_code))
         ):
             raise OperatorIdentityError("INVALID_NEW_OPERATOR_RECOVERY_CODE")
-        new_recovery_digest = self._digest(new_recovery_code)
+        new_recovery_digest = self._recovery_digest(new_recovery_code)
         _, root_pem = self._public_key(new_root_public_key_pem)
         _, device_pem = self._public_key(new_device_public_key_pem)
-        recovery_digest = self._digest(recovery_code)
+        recovery_digest = self._recovery_digest(recovery_code)
         now = time.time()
         expires_at = now + ttl_seconds
         handle = secrets.token_urlsafe(32)
@@ -313,7 +320,7 @@ class OperatorIdentityAuthority:
                 if (
                     db.execute(
                         "SELECT 1 FROM consumed_bootstrap_codes WHERE code_digest=?",
-                        (new_recovery_digest,),
+                        (self._digest(new_recovery_code),),
                     ).fetchone()
                     or db.execute(
                         "SELECT 1 FROM operator_identities WHERE recovery_code_digest=?",
