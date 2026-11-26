@@ -308,7 +308,17 @@ class DeviceAuthority:
                     for row in active
                 ):
                     raise DeviceAuthorityError("UNRELATED_ACTIVE_DEVICE_BLOCKS_RECOVERY", 409)
+                existing = db.execute(
+                    "SELECT device_id,active,owner_subject FROM devices WHERE device_id=?",
+                    (device_id,),
+                ).fetchone()
+                if existing is not None and not (
+                    existing["active"] == 1 and existing["owner_subject"] == owner_subject
+                ):
+                    raise DeviceAuthorityError("DEVICE_KEY_PREVIOUSLY_ENROLLED", 409)
                 for row in active:
+                    if row["device_id"] == device_id and row["owner_subject"] == owner_subject:
+                        continue
                     db.execute(
                         "UPDATE devices SET active=0 WHERE device_id=?",
                         (row["device_id"],),
@@ -317,22 +327,12 @@ class DeviceAuthority:
                         "DELETE FROM device_challenges WHERE device_id=?",
                         (row["device_id"],),
                     )
-                existing = db.execute(
-                    "SELECT device_id FROM devices WHERE device_id=?",
-                    (device_id,),
-                ).fetchone()
                 if existing is None:
                     db.execute(
                         """INSERT INTO devices
                         (device_id,public_key_pem,owner_subject,active,created_at)
                         VALUES(?,?,?,1,?)""",
                         (device_id, canonical, owner_subject, now),
-                    )
-                else:
-                    db.execute(
-                        """UPDATE devices SET public_key_pem=?,owner_subject=?,
-                        active=1,created_at=? WHERE device_id=?""",
-                        (canonical, owner_subject, now, device_id),
                     )
                 db.execute("COMMIT")
             except Exception:
