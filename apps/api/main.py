@@ -1,14 +1,41 @@
-"""Production API surface. Unverified federation and unauthenticated chat fail closed."""
+"""FastAPI adapter for the persistent IAO service.
+
+The API delegates public sessions, conversations, chat, tasks and audit reads to
+OmegaService. Production state and audit keys must be supplied by the runtime;
+this module never silently creates a replacement audit identity.
+"""
 from __future__ import annotations
 
-import hmac
 import os
+import threading
+from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException
-from omega.adapters.model import ModelError, adapter_from_env
-from apps.api.schemas import ChatRequest, ChatResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-app = FastAPI(title="IAO API", version="11.1.0")
+app = FastAPI(title="IAO API", version="11.2.0")
+_service = None
+_service_lock = threading.Lock()
+
+
+def _get_service():
+    """Create one process-wide service over the configured persistent state."""
+    global _service
+    if _service is not None:
+        return _service
+    with _service_lock:
+        if _service is not None:
+            return _service
+        token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+        audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
+        if len(token_key) < 32 or len(audit_key) < 32:
+            raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
+        from omega.server import build_service
+
+        state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+        corpus_dir = Path(os.environ.get("IAO_CORPUS_DIR", "/app/knowledge"))
+        _service = build_service(state_dir, token_key, corpus_dir)
+        return _service
 
 
 @app.get("/health/live")
@@ -17,71 +44,57 @@ def live() -> dict[str, str]:
 
 
 @app.get("/health/ready")
-def ready() -> dict[str, str]:
-    model_configured = bool(
-        os.environ.get("MODEL_PROVIDER")
-        and os.environ.get("MODEL_ID")
-        and os.environ.get("MODEL_API_KEY")
-    )
-    return {
-        "status": "degraded",
-        "federation": "not_verified",
-        "model_provider": "configured" if model_configured else "not_configured",
-        "chat_authorization": (
-            "configured" if os.environ.get("IAO_API_BEARER_TOKEN") else "not_configured"
-        ),
-    }
-
-
-@app.get("/v1/federation/manifest")
-def get_manifest() -> dict:
-    """Publish only capabilities whose operation has actually been verified."""
-    return {
-        "protocol": "IAO-FEDERATION-v1",
-        "status": "development",
-        "federation_status": "not_verified",
-        "registration_endpoint": "/v1/federation/register",
-        "registration_enabled": False,
-        "capabilities": [],
-    }
-
-
-@app.post("/v1/federation/register")
-def register_node() -> None:
-    # Do not fetch caller-supplied URLs: admission needs signed identity,
-    # challenge-response, capability policy and controlled egress first.
-    raise HTTPException(
-        status_code=503,
-        detail="Federation registration is disabled pending authenticated admission.",
-    )
-
-
-@app.post("/v1/chat", response_model=ChatResponse)
-def chat(
-    request: ChatRequest,
-    authorization: str | None = Header(default=None),
-) -> ChatResponse:
-    expected = os.environ.get("IAO_API_BEARER_TOKEN", "")
-    if not expected:
-        raise HTTPException(status_code=503, detail="Chat authorization is not configured.")
-    supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
-    if not supplied or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="Authentication required.")
-
+def ready():
     try:
-        adapter = adapter_from_env(dict(os.environ))
-        if adapter is None:
-            raise HTTPException(status_code=503, detail="No model provider is configured.")
-        reply = adapter.chat([{"role": "user", "content": request.message}])
-        return ChatResponse(
-            status="success",
-            reply=reply,
-            conversation_id=request.conversation_id,
-            authority="NON_AUTHORITATIVE_MODEL_OUTPUT",
-        )
-    except ModelError:
-        raise HTTPException(status_code=503, detail="The configured model provider is unavailable.") from None
-    except HTTPException:
-        raise
+        status, payload = _get_service().handle("GET", "/health/ready", {}, b"")
     except Exception:
-        raise HTTPException(status_code=503, detail="IAO chat engine is unavailable.") from None
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "reason": "PERSISTENT_RUNTIME_UNAVAILABLE",
+            },
+        )
+    if payload.get("status") == "ready":
+        payload["status"] = "ready"
+    elif payload.get("status") == "degraded":
+        payload["status"] = "degraded"
+    else:
+        payload["status"] = "not_ready"
+    return JSONResponse(status_code=status, content=payload)
+
+
+@app.api_route(
+    "/v1/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+)
+async def api_v1(path: str, request: Request):
+    """Pass the complete v1 API through the audited persistent service."""
+    try:
+        service = _get_service()
+        body = await request.body()
+        headers = {key.lower(): value for key, value in request.headers.items()}
+        # Use the socket peer only for the public-session rate limiter. Never
+        # accept a caller-supplied forwarding header as device identity.
+        if request.client is not None:
+            headers["x-omega-client-ip"] = request.client.host
+        target = request.url.path
+        if request.url.query:
+            target += "?" + request.url.query
+        status, payload = service.handle(
+            request.method,
+            target,
+            headers,
+            body,
+        )
+        return JSONResponse(status_code=status, content=payload)
+    except RuntimeError:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE"},
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "IAO_SERVICE_UNAVAILABLE"},
+        )
