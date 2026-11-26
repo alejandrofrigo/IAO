@@ -1029,11 +1029,11 @@ def test_recovery_challenge_is_single_use_across_independent_authority_instances
         challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
     )
     root_signature = new_root.sign(
-        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        b"IAO-OPERATOR-RECOVERY-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
     device_signature = new_device.sign(
-        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
 
