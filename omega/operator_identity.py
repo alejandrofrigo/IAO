@@ -640,6 +640,36 @@ class OperatorIdentityAuthority:
             expected_key_version=row["key_version"],
         )
 
+    def verify_primary_device_for_session(
+        self, authenticated_subject: Any, authenticated_session_token: Any,
+        device_id: Any,
+    ) -> bool:
+        """Require the exact active session and its single root-bound primary device."""
+        subject_digest = self._session_subject_digest(authenticated_subject)
+        session_digest = self._session_credential_digest(authenticated_session_token)
+        if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{64}", device_id):
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        with self._database() as db:
+            row = db.execute(
+                """SELECT b.subject_digest,b.session_digest,b.key_version,
+                i.key_version AS active_key_version,p.device_id,
+                p.key_version AS device_key_version
+                FROM operator_session_bindings b
+                JOIN operator_identities i ON i.identity_id=b.identity_id
+                JOIN primary_device_bindings p ON p.identity_id=i.identity_id
+                WHERE i.status='ACTIVE'"""
+            ).fetchone()
+        if (
+            row is None or row["key_version"] != row["active_key_version"]
+            or row["device_key_version"] != row["active_key_version"]
+            or not hmac.compare_digest(row["subject_digest"], subject_digest)
+            or not isinstance(row["session_digest"], str)
+            or not hmac.compare_digest(row["session_digest"], session_digest)
+            or not hmac.compare_digest(row["device_id"], device_id)
+        ):
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        return True
+
     def verify_authenticated_session(
         self, authenticated_subject: Any, authenticated_session_token: Any,
     ) -> bool:
