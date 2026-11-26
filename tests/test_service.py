@@ -458,7 +458,7 @@ class QueuedTaskApiTests(Base):
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
         identity.bootstrap(bootstrap, root_pem)
-        self.operator_token = issue_token(KEY, "queued-user", ["knowledge.search"])
+        self.operator_token = issue_token(KEY, "queued-user", ["knowledge.search", "test.write"])
         session_challenge = identity.create_session_challenge("queued-user", self.operator_token)
         session_payload = base64.urlsafe_b64decode(
             session_challenge["signing_payload"]
@@ -551,7 +551,6 @@ class QueuedTaskApiTests(Base):
             "execution_mode": "queued",
         }
         headers = self.queued_headers(payload)
-        headers["authorization"] = self.tok("queued-user", ["test.write"])["authorization"]
         status, response = self.call("POST", "/v1/tasks", headers, payload)
         self.assertEqual(status, 403)
         self.assertEqual(response["state"], "DENIED")
