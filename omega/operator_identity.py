@@ -94,6 +94,17 @@ class OperatorIdentityAuthority:
                     key_version INTEGER NOT NULL CHECK(key_version >= 1),
                     bound_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS operator_login_challenges (
+                    challenge_digest TEXT PRIMARY KEY,
+                    identity_id TEXT NOT NULL REFERENCES operator_identities(identity_id),
+                    device_id TEXT NOT NULL,
+                    signing_payload BLOB NOT NULL,
+                    key_version INTEGER NOT NULL CHECK(key_version >= 1),
+                    expires_at REAL NOT NULL,
+                    consumed_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS operator_login_challenge_expiry
+                    ON operator_login_challenges(expires_at);
                 CREATE TABLE IF NOT EXISTS operator_session_challenges (
                     challenge_digest TEXT PRIMARY KEY,
                     identity_id TEXT NOT NULL REFERENCES operator_identities(identity_id),
@@ -443,6 +454,174 @@ class OperatorIdentityAuthority:
                 db.execute("ROLLBACK")
                 raise
 
+
+
+    def primary_device_public_key(self) -> str:
+        """Return the enrolled primary public key for internal verification only."""
+        with self._database() as db:
+            row = db.execute(
+                """SELECT b.device_public_key_pem
+                FROM primary_device_bindings b
+                JOIN operator_identities i ON i.identity_id=b.identity_id
+                WHERE i.status='ACTIVE' AND b.key_version=i.key_version"""
+            ).fetchone()
+        if row is None:
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        return row["device_public_key_pem"]
+
+    def create_operator_login_challenge(self, *, ttl_seconds: int = 90) -> dict[str, Any]:
+        """Create a short-lived challenge bound to the current root and primary device."""
+        if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 30 <= ttl_seconds <= 90:
+            raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_TTL")
+        now = time.time()
+        expires_at = now + ttl_seconds
+        handle = secrets.token_urlsafe(32)
+        nonce = secrets.token_hex(32)
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    """SELECT i.identity_id,i.key_version,b.device_id,
+                    b.device_public_key_pem
+                    FROM operator_identities i
+                    JOIN primary_device_bindings b ON b.identity_id=i.identity_id
+                    WHERE i.status='ACTIVE' AND b.key_version=i.key_version"""
+                ).fetchone()
+                if row is None:
+                    raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                device_key = serialization.load_pem_public_key(
+                    row["device_public_key_pem"].encode("ascii")
+                )
+                device_der = device_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                payload = json.dumps({
+                    "device_key_digest": hashlib.sha256(device_der).hexdigest(),
+                    "expires_at": int(expires_at),
+                    "key_version": row["key_version"],
+                    "nonce": nonce,
+                    "protocol": "IAO-OPERATOR-LOGIN-V1",
+                    "purpose": "OPERATOR_LOGIN",
+                }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+                db.execute(
+                    """INSERT INTO operator_login_challenges
+                    (challenge_digest,identity_id,device_id,signing_payload,
+                     key_version,expires_at)
+                    VALUES(?,?,?,?,?,?)""",
+                    (self._digest(handle), row["identity_id"], row["device_id"],
+                     payload, row["key_version"], expires_at),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        return {
+            "challenge": handle,
+            "signing_payload": base64.urlsafe_b64encode(payload).decode("ascii").rstrip("="),
+            "expires_at": int(expires_at),
+            "protocol": "IAO-OPERATOR-LOGIN-V1",
+        }
+
+    def complete_operator_login(
+        self, challenge: Any, root_signature: bytes, device_signature: bytes,
+        token_key: str, *, ttl_seconds: int = 900,
+    ) -> dict[str, Any]:
+        """Atomically consume a dual-signed challenge and bind a read-only session."""
+        if not isinstance(challenge, str) or not 32 <= len(challenge) <= 128:
+            raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_CHALLENGE")
+        if (
+            not isinstance(root_signature, bytes) or not 64 <= len(root_signature) <= 80
+            or not isinstance(device_signature, bytes) or not 64 <= len(device_signature) <= 80
+        ):
+            raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_SIGNATURE", 401)
+        if not isinstance(token_key, str) or len(token_key) < 32:
+            raise OperatorIdentityError("OPERATOR_LOGIN_UNAVAILABLE", 503)
+        if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 60 <= ttl_seconds <= 900:
+            raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_TTL")
+        now = time.time()
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    """SELECT c.identity_id,c.device_id,c.signing_payload,
+                    c.key_version,c.expires_at,c.consumed_at,
+                    i.root_public_key_pem,i.key_version AS active_key_version,i.status,
+                    b.device_public_key_pem,b.device_id AS active_device_id,
+                    b.key_version AS device_key_version
+                    FROM operator_login_challenges c
+                    JOIN operator_identities i ON i.identity_id=c.identity_id
+                    JOIN primary_device_bindings b ON b.identity_id=i.identity_id
+                    WHERE c.challenge_digest=?""",
+                    (self._digest(challenge),),
+                ).fetchone()
+                if row is None:
+                    raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_CHALLENGE", 404)
+                if row["consumed_at"] is not None:
+                    raise OperatorIdentityError("OPERATOR_LOGIN_REPLAYED", 409)
+                if row["expires_at"] <= now:
+                    raise OperatorIdentityError("OPERATOR_LOGIN_EXPIRED", 401)
+                if (
+                    row["status"] != "ACTIVE"
+                    or row["key_version"] != row["active_key_version"]
+                    or row["key_version"] != row["device_key_version"]
+                    or row["device_id"] != row["active_device_id"]
+                ):
+                    raise OperatorIdentityError("OPERATOR_LOGIN_AUTHORITY_CHANGED", 403)
+                message = ROOT_SIGNATURE_DOMAIN + row["signing_payload"]
+                device_message = b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + row["signing_payload"]
+                try:
+                    root_key = serialization.load_pem_public_key(
+                        row["root_public_key_pem"].encode("ascii")
+                    )
+                    device_key = serialization.load_pem_public_key(
+                        row["device_public_key_pem"].encode("ascii")
+                    )
+                    root_key.verify(root_signature, message, ec.ECDSA(hashes.SHA256()))
+                    device_key.verify(device_signature, device_message, ec.ECDSA(hashes.SHA256()))
+                except (InvalidSignature, ValueError, TypeError):
+                    raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_SIGNATURE", 401) from None
+                changed = db.execute(
+                    """UPDATE operator_login_challenges SET consumed_at=?
+                    WHERE challenge_digest=? AND consumed_at IS NULL AND expires_at>?""",
+                    (now, self._digest(challenge), now),
+                ).rowcount
+                if changed != 1:
+                    raise OperatorIdentityError("OPERATOR_LOGIN_REPLAYED", 409)
+                subject = "operator:" + row["identity_id"]
+                token = __import__("omega.auth", fromlist=["issue_token"]).issue_token(
+                    token_key, subject, [], ttl=ttl_seconds, now=now
+                )
+                subject_digest = hmac.new(
+                    self.subject_digest_key,
+                    subject.encode("utf-8"), hashlib.sha256
+                ).hexdigest() if isinstance(self.subject_digest_key, bytes) and len(self.subject_digest_key) >= 32 else None
+                session_digest = self._session_credential_digest(token)
+                if subject_digest is None:
+                    raise OperatorIdentityError("OPERATOR_SESSION_BINDING_UNAVAILABLE", 503)
+                db.execute(
+                    """INSERT INTO operator_session_bindings
+                    (identity_id,subject_digest,session_digest,key_version,bound_at)
+                    VALUES(?,?,?,?,?)
+                    ON CONFLICT(identity_id) DO UPDATE SET
+                    subject_digest=excluded.subject_digest,
+                    session_digest=excluded.session_digest,
+                    key_version=excluded.key_version,bound_at=excluded.bound_at""",
+                    (row["identity_id"], subject_digest, session_digest,
+                     row["key_version"], now),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        return {
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": ttl_seconds,
+            "authority": "OPERATOR_AUTHENTICATED_READ_ONLY",
+            "scopes": [],
+            "key_version": row["key_version"],
+        }
 
     def _session_subject_digest(self, subject: Any) -> str:
         if (
