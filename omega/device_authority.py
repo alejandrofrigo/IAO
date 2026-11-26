@@ -368,5 +368,4 @@ class DeviceAuthority:
         return {
             "action": "status",
             "authority": "READ_ONLY_DEVICE_VERIFIED",
-            "device_id": device_id,
         }
