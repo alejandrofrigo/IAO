@@ -1,4 +1,5 @@
 """Stdlib HTTP runtime for IAO. Refuses to start in production with dev auth."""
+import hashlib
 import json
 import os
 import signal
@@ -66,7 +67,9 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         "operator_identity_authority",
         OperatorIdentityAuthority(
             state_dir / "operator-identity.sqlite3",
-            subject_digest_key=token_key,
+            subject_digest_key=hashlib.sha256(
+                b"IAO-OPERATOR-SUBJECT-HMAC-V1\\x00" + token_key.encode("utf-8")
+            ).digest(),
         ),
     )
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
