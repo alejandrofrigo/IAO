@@ -342,6 +342,16 @@ class QueuedTaskApiTests(Base):
             )
         self.assertEqual((denied[0], denied[1]["error"]), (403, "DEVICE_ENROLLMENT_DISABLED"))
 
+        with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "1"}):
+            unauthenticated = self.call(
+                "POST", "/v1/device/enroll", {},
+                {"code": code, "public_key_pem": "invalid"},
+            )
+        self.assertEqual(
+            (unauthenticated[0], unauthenticated[1]["error"]),
+            (401, "AUTHENTICATION_REQUIRED"),
+        )
+
         private_key = ec.generate_private_key(ec.SECP256R1())
         public_pem = private_key.public_key().public_bytes(
             serialization.Encoding.PEM,
@@ -378,7 +388,7 @@ class QueuedTaskApiTests(Base):
         ]).encode()
         signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
         proof = {
-            "device_id": enrolled["device_id"],
+            "device_id": device_id,
             "nonce": challenge["nonce"],
             "timestamp": timestamp,
             "action": "status",
