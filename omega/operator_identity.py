@@ -384,11 +384,11 @@ class OperatorIdentityAuthority:
                 device_key = serialization.load_pem_public_key(row["device_public_key_pem"].encode("ascii"))
                 try:
                     root_key.verify(
-                        root_signature, b"IAO-OPERATOR-RECOVERY-V1\\x00" + row["signing_payload"],
+                        root_signature, b"IAO-OPERATOR-RECOVERY-V1\x00" + row["signing_payload"],
                         ec.ECDSA(hashes.SHA256()),
                     )
                     device_key.verify(
-                        device_signature, b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + row["signing_payload"],
+                        device_signature, b"IAO-OPERATOR-RECOVERY-DEVICE-V1\x00" + row["signing_payload"],
                         ec.ECDSA(hashes.SHA256()),
                     )
                 except (InvalidSignature, ValueError, TypeError):
