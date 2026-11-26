@@ -54,6 +54,7 @@ class OmegaService:
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._public_hits: dict[str, deque[float]] = defaultdict(deque)
         self._operator_bootstrap_hits: deque[float] = deque()
+        self._operator_login_hits: deque[float] = deque()
         self._rl = threading.Lock()
 
         # A RUNNING task after restart has an unknown execution outcome.
