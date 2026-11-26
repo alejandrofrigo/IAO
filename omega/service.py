@@ -381,10 +381,14 @@ class OmegaService:
         if idem is not None and not 1 <= len(idem) <= 128:
             raise ApiError(400, "INVALID_IDEMPOTENCY_KEY")
         goal, cap, tin = d.get("goal"), d.get("capability"), d.get("input", {})
+        execution_mode = d.get("execution_mode", "sync")
+        if not isinstance(execution_mode, str) or execution_mode not in {"sync", "queued"}:
+            raise ApiError(400, "INVALID_EXECUTION_MODE")
         request_digest = _digest({
             "goal": goal,
             "capability": cap,
             "input": tin,
+            "execution_mode": execution_mode,
         })
         # Idempotent retries return the original task even when the owner has
         # since reached the daily quota. A reused key with changed input fails.
@@ -404,9 +408,6 @@ class OmegaService:
                                    ("capability", isinstance(cap, str) and bool(cap)),
                                    ("input", isinstance(tin, dict))) if not ok]
         expires = datetime.fromtimestamp(self.clock() + self.ttl, timezone.utc).isoformat()
-        execution_mode = d.get("execution_mode", "sync")
-        if not isinstance(execution_mode, str) or execution_mode not in {"sync", "queued"}:
-            raise ApiError(400, "INVALID_EXECUTION_MODE")
         intent = {
             "contract_version": "1.0",
             "goal": goal if isinstance(goal, str) else None,
