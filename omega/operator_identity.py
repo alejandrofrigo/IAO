@@ -370,9 +370,11 @@ class OperatorIdentityAuthority:
                 row = db.execute(
                     """SELECT c.*,i.root_public_key_pem AS old_root_key,
                     i.key_version AS old_key_version,i.status AS identity_status,
-                    i.recovery_code_digest AS active_recovery_digest
+                    i.recovery_code_digest AS active_recovery_digest,
+                    b.device_public_key_pem AS old_device_public_key_pem
                     FROM operator_recovery_challenges c
                     JOIN operator_identities i ON i.identity_id=c.identity_id
+                    LEFT JOIN primary_device_bindings b ON b.identity_id=i.identity_id
                     WHERE c.challenge_digest=?""",
                     (self._digest(challenge),),
                 ).fetchone()
@@ -416,7 +418,10 @@ class OperatorIdentityAuthority:
                 # DeviceAuthority commits first. If this DB transaction later
                 # fails, the device is orphaned but cannot authenticate; the
                 # one-time recovery code remains available for a retry.
-                device_replacement(row["device_public_key_pem"], subject)
+                device_replacement(
+                    row["device_public_key_pem"], subject,
+                    row["old_device_public_key_pem"],
+                )
                 changed = db.execute(
                     """UPDATE operator_identities SET root_public_key_pem=?,
                     key_version=?,status='ACTIVE',revoked_at=NULL,recovery_code_digest=?,
