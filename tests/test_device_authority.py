@@ -251,10 +251,11 @@ def test_recovery_replaces_only_same_operator_device_and_invalidates_pending_pro
     assert authority.verify_registered_public_key(new_public, owner_subject=owner)
     with pytest.raises(DeviceAuthorityError, match="DEVICE_KEY_NOT_ACTIVE"):
         authority.verify_active_public_key(old_public)
-    with pytest.raises(DeviceAuthorityError, match="DEVICE_OR_CHALLENGE_NOT_FOUND"):
-        authority.verify_request(
-            _signed_status(old_private, enrolled["device_id"], challenge["nonce"])
-        )
+    with authority._database() as db:
+        assert db.execute(
+            "SELECT 1 FROM device_challenges WHERE nonce=?",
+            (challenge["nonce"],),
+        ).fetchone() is None
 
 
 def test_recovery_cannot_replace_an_unrelated_active_device(tmp_path):
