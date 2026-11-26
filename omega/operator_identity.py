@@ -185,7 +185,7 @@ class OperatorIdentityAuthority:
         key = self.subject_digest_key
         if not isinstance(key, bytes) or len(key) < 32:
             raise OperatorIdentityError("OPERATOR_RECOVERY_UNAVAILABLE", 503)
-        message = b"IAO-OPERATOR-RECOVERY-CODE-V1\\x00" + value.encode("utf-8")
+        message = b"IAO-OPERATOR-RECOVERY-CODE-V1\x00" + value.encode("utf-8")
         return hmac.new(key, message, hashlib.sha256).hexdigest()
 
     @staticmethod
