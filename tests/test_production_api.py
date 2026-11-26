@@ -205,3 +205,15 @@ def test_device_challenge_endpoint_caps_outstanding_challenges(monkeypatch, tmp_
     )
     assert limited.status_code == 429
     assert limited.json()["error"] == "DEVICE_CHALLENGE_RATE_LIMITED"
+
+def test_federation_status_does_not_claim_unverified_network_is_active(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/v1/federation/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "unknown"
+    assert body["mode"] == "discovery_only"
+    assert body["network_nodes"] == []
+    assert body["trusted_peer_count"] is None
+    assert body["remote_enrollment"] == "disabled"
+
