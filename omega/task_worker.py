@@ -10,7 +10,6 @@ import os
 import signal
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,9 +21,7 @@ from omega.config import load_settings
 from omega.service import POLICY_VERSION, _digest
 from omega.store import Store
 from omega.tools.registry import QUEUED_TOOL_ALLOWLIST, ToolRegistry
-
-
-_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="iao-task")
+from omega.tools.process_runner import ToolProcessTimeout, run_tool_isolated
 
 
 class TaskWorker:
@@ -37,10 +34,12 @@ class TaskWorker:
         lease_seconds: int = 60,
         poll_seconds: float = 1.0,
         operator_identity_authority: Any = None,
+        tool_executor: Any = None,
     ) -> None:
         self.store = store
         self.registry = registry
         self.operator_identity_authority = operator_identity_authority
+        self.tool_executor = tool_executor or run_tool_isolated
         self.worker_id = worker_id or ("worker-" + uuid.uuid4().hex)
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
@@ -156,11 +155,11 @@ class TaskWorker:
                 float(spec.timeout_seconds),
                 float(intent.get("budget", {}).get("timeout_seconds", 20)),
             )
-            future = _EXECUTOR.submit(spec.run, clean)
             try:
-                output = future.result(timeout=timeout)
-            except FutureTimeout:
-                future.cancel()
+                output, verdict = self.tool_executor(
+                    spec.run, spec.verify, clean, timeout
+                )
+            except ToolProcessTimeout:
                 self.store.add_tool_execution(
                     task_id, spec.name, spec.version, "TIMED_OUT",
                     digest_in, None, "TIMED_OUT", started,
@@ -198,10 +197,6 @@ class TaskWorker:
                 owner, "TASK_STATE", task_id, to="VERIFYING",
                 worker=self.worker_id,
             )
-            try:
-                verdict = spec.verify(output)
-            except Exception:
-                verdict = "UNKNOWN"
             result: dict[str, Any] = {
                 "decision": "ALLOW",
                 "verification": verdict,
@@ -298,7 +293,6 @@ def main() -> None:
     finally:
         service.store.audit("system", "TASK_WORKER_STOP", "task_worker")
         service.store.close()
-        _EXECUTOR.shutdown(wait=False, cancel_futures=True)
 
 
 if __name__ == "__main__":
