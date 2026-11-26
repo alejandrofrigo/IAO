@@ -37,7 +37,7 @@ _FEDERATION_MODULES: List[str] = _discover_federation_modules()
 
 # Exportar explícitamente los nombres descubiertos para que ``from omega import *``
 # incluya los módulos federados.
-__all__ = _FEDERATION_MODULES.copy()
+__all__: List[str] = []
 
 def __getattr__(name: str) -> ModuleType:
     """Carga perezosamente el sub‑módulo solicitado.
@@ -62,5 +62,7 @@ def __dir__() -> List[str]:
     Combina los atributos estándar del módulo con los nombres de los módulos
     federados descubiertos.
     """
-    standard_attrs = list(globals().keys())
-    return sorted(standard_attrs + _FEDERATION_MODULES)
+    # Do not advertise every optional federation module as a package attribute:
+    # some legacy adapters have independent dependencies and must not be
+    # imported implicitly by unittest discovery or wildcard imports.
+    return sorted(globals().keys())
