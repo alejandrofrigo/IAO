@@ -200,6 +200,8 @@ class OperatorIdentityAuthority:
             except Exception:
                 db.execute("ROLLBACK")
                 raise
+        # Do not retain the one-time capability after successful enrollment.
+        self.bootstrap_code = ""
         # The opaque identifier is for trusted internal orchestration only;
         # public API responses must not expose it.
         return {"identity_id": identity_id, "key_version": 1}
