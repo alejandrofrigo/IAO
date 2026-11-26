@@ -321,7 +321,9 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
         subject_digest_key="operator-session-test-key-" + "a" * 40,
     )
     identity = authority.bootstrap(code, root_public)
-    challenge = authority.create_session_challenge("verified-subject-A")
+    token_a = "session-token-A-" + "a" * 40
+    token_b = "session-token-B-" + "b" * 40
+    challenge = authority.create_session_challenge("verified-subject-A", token_a)
     payload = base64.urlsafe_b64decode(
         challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
     )
@@ -329,7 +331,7 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
 
     with pytest.raises(OperatorIdentityError, match="OPERATOR_SESSION_MISMATCH"):
         authority.bind_authenticated_session(
-            challenge["challenge"], "verified-subject-B", signature
+            challenge["challenge"], "verified-subject-B", token_a, signature
         )
     assert authority.bind_authenticated_session(
         challenge["challenge"], "verified-subject-A", signature
