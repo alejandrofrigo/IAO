@@ -19,23 +19,27 @@ permanently stranded. This does not itself implement or authorize production
 recovery; a separately provisioned, expiring bootstrap capability is still
 required, and recovery remains outside the API/session flow.
 
-The registry now also implements persistent session-association primitives:
-a challenge is bound to the server-supplied authenticated subject digest,
+The registry implements persistent session-association primitives and the
+authenticated service exposes challenge, bind and read-only status routes.
+A challenge is bound to the server-supplied authenticated subject digest,
 active root identity digest, root key version, one-time nonce, expiry and
 fixed protocol purpose; the root signature is verified and the challenge is
 consumed atomically before a single durable subject binding is recorded.
 Session verification fails closed after root rotation or revocation. The
 challenge response contains an opaque one-time handle and canonical signing
-payload, not the internal identity identifier or raw subject. Unit tests cover
+payload, not the internal identity identifier or raw subject. API tests cover
 subject substitution, guest rejection, invalid signature, replay, expiry,
-restart persistence, rotation and revocation.
+restart persistence, rotation and revocation. The production service stores
+the registry in its persistent state directory.
 
-This remains a foundation, not an end-to-end operator identity system. These
-primitives are not yet wired to API sessions, device enrollment/binding, task
-authorization, recovery, or the browser key lifecycle. The current public
-session remains guest-only. The current device proof proves possession of one
-enrolled device key only. No durable operator identity or command authority
-may be claimed until those integrations and their end-to-end tests pass.
+This is still not an end-to-end operator identity system. The browser root-key
+lifecycle, trusted bootstrap provisioning, device-to-root binding, enforcement
+of the association on protected device/task routes, and safe recovery remain
+unimplemented. The current public session remains guest-only, and the current
+device proof proves possession of one separately enrolled device key only.
+The new status is explicitly READ_ONLY and does not grant scopes or task
+authority. No command authority may be claimed until those integrations and
+their end-to-end tests pass.
 
 ## Security objectives
 
@@ -113,12 +117,18 @@ subject argument is designed to come from a server-verified principal, never
 from a caller-supplied field. Guest principals are rejected. A root signature
 does not create a session or grant scopes; it only authorizes association.
 
-**Still pending:** expose the challenge/bind operations through the
-authenticated API, inject the persistent authority into the production
-service, associate the browser-held non-extractable root key with the
-challenge, verify the binding on protected routes, and test the complete
-mobile-browser flow. Until then the primitive is not an active authorization
-control and no device/task route may rely on it.
+**Implemented:** authenticated challenge, bind and read-only status API
+routes; the authenticated subject is always taken from the verified bearer
+principal, guest sessions are rejected, challenge consumption is atomic, and
+the persistent registry is injected by the production service.
+
+**Still pending:** provision the bootstrap capability safely, generate and
+retain the root private key in browser WebCrypto as non-extractable material,
+complete mobile-browser signing, cryptographically cross-check the enrolled
+device key against the root-signed device binding, and enforce current session
+association plus device binding on protected device/task routes. Until those
+gates pass, the association endpoint is informational/read-only and must not
+be treated as command authority.
 
 ## Authorization and task flow
 
