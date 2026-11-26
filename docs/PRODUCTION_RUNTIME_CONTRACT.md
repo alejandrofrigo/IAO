@@ -9,7 +9,10 @@ that the autonomous or federated system is operational.
 The container runs as the unprivileged `iao` user. Mount a durable volume at
 `/var/lib/iao`; the service stores the SQLite database, task records and device
 authority database there. Back up this volume before upgrades. Do not use an
-ephemeral container filesystem as the only copy of operational state.
+ephemeral container filesystem as the only copy of operational state. The
+runtime enforces mode `0700` on the state directory and `0600` on the SQLite
+main database, and refuses a symlink at the database path. The mounted volume
+must be writable by the unprivileged `iao` user.
 
 Required secret environment variables:
 
