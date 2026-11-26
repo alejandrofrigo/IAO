@@ -43,6 +43,39 @@
     });
   }
 
+  async function dbGetPending() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const req = tx.objectStore(STORE).get("recovery-pending");
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+
+  async function dbPutPending(value) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).put(value, "recovery-pending");
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+      tx.onabort = () => { db.close(); reject(tx.error); };
+    });
+  }
+
+  async function dbDeletePending() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).delete("recovery-pending");
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  }
+
   async function dbPut(value) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -222,7 +255,7 @@
   async function prepareRecoveryIdentity() {
     if (!crypto.subtle || !indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
     const identity = await createIdentity();
-    await dbPut({
+    await dbPutPending({
       deviceId: identity.deviceId,
       privateKey: identity.privateKey,
       publicKeyPem: identity.publicKeyPem,
@@ -233,7 +266,7 @@
   }
 
   async function recoveryPublicKeyPem() {
-    const identity = await dbGet();
+    const identity = await dbGetPending();
     if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
       throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
     }
@@ -268,6 +301,7 @@
       throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
     }
     await dbPut({ ...identity, recoveryPending: false, enrolledAt: Date.now() });
+    await dbDeletePending();
     return { activated: true };
   }
 
