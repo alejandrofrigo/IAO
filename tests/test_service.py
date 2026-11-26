@@ -243,13 +243,13 @@ class QueuedTaskApiTests(Base):
         )
         enrolled = self.svc.device_authority.enroll(
             self.svc.device_authority.enrollment_code, public_pem,
-            owner_subject="alice",
+            owner_subject="queued-user",
         )
         self.device_id = enrolled["device_id"]
 
     def queued_headers(self, payload: dict) -> dict[str, str]:
         body = json.dumps(payload).encode()
-        challenge = self.svc.device_authority.challenge(self.device_id, owner_subject="alice")
+        challenge = self.svc.device_authority.challenge(self.device_id, owner_subject="queued-user")
         timestamp = int(time.time())
         digest = hashlib.sha256(body).hexdigest()
         signed = "\n".join(
