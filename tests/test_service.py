@@ -352,6 +352,21 @@ class QueuedTaskApiTests(Base):
             (401, "AUTHENTICATION_REQUIRED"),
         )
 
+        guest_status, guest_session = self.call(
+            "POST", "/v1/public/session", {}, {}
+        )
+        self.assertEqual(guest_status, 201)
+        guest_headers = {"authorization": "Bearer " + guest_session["access_token"]}
+        with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "1"}):
+            guest_enroll = self.call(
+                "POST", "/v1/device/enroll", guest_headers,
+                {"code": code, "public_key_pem": "invalid"},
+            )
+        self.assertEqual(
+            (guest_enroll[0], guest_enroll[1]["error"]),
+            (403, "OPERATOR_SESSION_REQUIRED"),
+        )
+
         private_key = ec.generate_private_key(ec.SECP256R1())
         public_pem = private_key.public_key().public_bytes(
             serialization.Encoding.PEM,
@@ -372,6 +387,14 @@ class QueuedTaskApiTests(Base):
             )
         ).hexdigest()
 
+        guest_challenge = self.call(
+            "POST", "/v1/device/challenge", guest_headers,
+            {"device_id": device_id},
+        )
+        self.assertEqual(
+            (guest_challenge[0], guest_challenge[1]["error"]),
+            (403, "OPERATOR_SESSION_REQUIRED"),
+        )
         status, challenge = self.call(
             "POST", "/v1/device/challenge", self.tok("device-owner"),
             {"device_id": device_id},
@@ -410,6 +433,12 @@ class QueuedTaskApiTests(Base):
         audit = json.dumps(self.svc.store._all_events())
         self.assertNotIn(code, audit)
         self.assertNotIn(device_id, audit)
+        enrollment_events = [
+            event for event in self.svc.store._all_events()
+            if event["event_type"] == "DEVICE_ENROLLED"
+        ]
+        self.assertEqual(len(enrollment_events), 1)
+        self.assertEqual(enrollment_events[0]["subject"], "device-owner")
 
     def test_queued_submission_requires_primary_device_proof(self) -> None:
         payload = {
