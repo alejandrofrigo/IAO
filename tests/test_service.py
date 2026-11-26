@@ -445,6 +445,41 @@ class QueuedTaskApiTests(Base):
             owner_subject="queued-user",
         )
         self.device_id = enrolled["device_id"]
+        bootstrap = "queued-root-bootstrap-" + "r" * 40
+        identity = OperatorIdentityAuthority(
+            self.state / "queued-root-identity.sqlite3", bootstrap,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"queued-root-session-test-key").digest(),
+        )
+        self.svc.operator_identity_authority = identity
+        self.root_private_key = ec.generate_private_key(ec.SECP256R1())
+        root_pem = self.root_private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        identity.bootstrap(bootstrap, root_pem)
+        self.operator_token = issue_token(KEY, "queued-user", ["knowledge.search"])
+        session_challenge = identity.create_session_challenge("queued-user", self.operator_token)
+        session_payload = base64.urlsafe_b64decode(
+            session_challenge["signing_payload"]
+            + "=" * (-len(session_challenge["signing_payload"]) % 4)
+        )
+        session_signature = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + session_payload, ec.ECDSA(hashes.SHA256())
+        )
+        identity.bind_authenticated_session(
+            session_challenge["challenge"], "queued-user", self.operator_token,
+            session_signature,
+        )
+        _, device_payload = OperatorIdentityAuthority.device_binding_payload(
+            public_pem, key_version=1,
+        )
+        device_signature = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + device_payload, ec.ECDSA(hashes.SHA256())
+        )
+        identity.bind_primary_device_for_session(
+            "queued-user", self.operator_token, public_pem, device_signature,
+        )
 
     def queued_headers(self, payload: dict) -> dict[str, str]:
         body = json.dumps(payload).encode()
@@ -465,7 +500,7 @@ class QueuedTaskApiTests(Base):
             "signature": base64.urlsafe_b64encode(signature).decode().rstrip("="),
         }
         return {
-            **self.tok("queued-user"),
+            "authorization": "Bearer " + self.operator_token,
             "x-iao-device-proof": json.dumps(proof, separators=(",", ":")),
         }
 
