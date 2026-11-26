@@ -394,7 +394,16 @@ class QueuedTaskApiTests(Base):
             "action": "status",
             "signature": base64.urlsafe_b64encode(signature).decode().rstrip("="),
         }
-        status, result = self.call("POST", "/v1/device/command", {}, proof)
+        unauthenticated_status, unauthenticated_result = self.call(
+            "POST", "/v1/device/command", {}, proof
+        )
+        self.assertEqual(
+            (unauthenticated_status, unauthenticated_result["error"]),
+            (401, "AUTHENTICATION_REQUIRED"),
+        )
+        status, result = self.call(
+            "POST", "/v1/device/command", self.tok("device-owner"), proof
+        )
         self.assertEqual(status, 200)
         self.assertEqual(result["authority"], "READ_ONLY_DEVICE_VERIFIED")
         self.assertNotIn("device_id", result)
