@@ -14,6 +14,7 @@ def configured_client(monkeypatch, tmp_path):
     monkeypatch.setenv("MODEL_ADAPTER", "disabled")
     monkeypatch.delenv("IAO_LLM_ROUTER", raising=False)
     monkeypatch.setenv("IAO_DEVICE_ENROLLMENT_CODE", "one-time-enrollment-code-" + "z" * 32)
+    monkeypatch.setenv("IAO_DEVICE_ENROLLMENT_ENABLED", "1")
     main._service = None
     main._device_authority = None
     return TestClient(main.app)
