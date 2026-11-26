@@ -400,6 +400,43 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 assert recovered_session["body"]["subject"].startswith("operator:"), recovered_session
                 assert recovered_session["body"]["scopes"] == [], recovered_session
 
+                # The device enrolled before recovery must no longer obtain
+                # challenges; the replacement device must still be accepted.
+                stale_device_checks = page.evaluate(
+                    """async (oldDevicePem) => {
+                      async function deviceId(pem) {
+                        const encoded = pem.replace(/-----[^-]+-----/g, '').replace(/\\s/g, '');
+                        const der = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
+                        const digest = await crypto.subtle.digest('SHA-256', der);
+                        return Array.from(new Uint8Array(digest),
+                          byte => byte.toString(16).padStart(2, '0')).join('');
+                      }
+                      const token = window.iaoGetSessionToken();
+                      async function requestChallenge(pem) {
+                        const response = await fetch(window.iaoApiUrl('/v1/device/challenge'), {
+                          method: 'POST',
+                          headers: {
+                            Authorization: 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                          },
+                          body: JSON.stringify({device_id: await deviceId(pem)}),
+                          credentials: 'omit', cache: 'no-store'
+                        });
+                        return {status: response.status, body: await response.json()};
+                      }
+                      return {
+                        stale: await requestChallenge(oldDevicePem),
+                        current: await requestChallenge(
+                          await window.IAODeviceAuthority.publicKeyPem()
+                        )
+                      };
+                    }""",
+                    after_reload["devicePublicKeyPem"],
+                )
+                assert stale_device_checks["stale"]["status"] == 404, stale_device_checks
+                assert stale_device_checks["stale"]["body"]["error"] == "DEVICE_NOT_FOUND", stale_device_checks
+                assert stale_device_checks["current"]["status"] == 200, stale_device_checks
+
                 # Exercise the ordinary successful completion path as well.
                 # This catches local activation errors that reconciliation can mask.
                 page.get_by_placeholder("Código de recuperación offline actual").fill(
