@@ -64,6 +64,7 @@ class AuthTests(Base):
             "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT": str(time.time() + 600),
         }):
             self.mk()
+            self.assertNotIn("IAO_OPERATOR_BOOTSTRAP_CODE", os.environ)
         root = ec.generate_private_key(ec.SECP256R1())
         public = root.public_key().public_bytes(
             serialization.Encoding.PEM,
@@ -75,6 +76,7 @@ class AuthTests(Base):
         )
         self.assertEqual(status, 201)
         self.assertEqual(result["status"], "ROOT_REGISTERED")
+        self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, "")
         self.assertNotIn("identity_id", result)
         self.assertNotIn(public, json.dumps(result))
         repeated = self.call(
