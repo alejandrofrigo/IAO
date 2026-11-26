@@ -170,7 +170,7 @@ class PolicyToolTests(Base):
         ]).encode()
         signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
         proof = {
-            "device_id": enrolled["device_id"],
+            "device_id": device_id,
             "nonce": challenge["nonce"],
             "timestamp": timestamp,
             "request_digest": digest,
@@ -349,15 +349,22 @@ class QueuedTaskApiTests(Base):
         ).decode("ascii")
         with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "1"}):
             status, enrolled = self.call(
-                "POST", "/v1/device/enroll", {},
+                "POST", "/v1/device/enroll", self.tok("device-owner"),
                 {"code": code, "public_key_pem": public_pem},
             )
         self.assertEqual(status, 201)
         self.assertEqual(enrolled["algorithm"], "ECDSA-P256-SHA256")
+        self.assertNotIn("device_id", enrolled)
+        device_id = hashlib.sha256(
+            private_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        ).hexdigest()
 
         status, challenge = self.call(
             "POST", "/v1/device/challenge", self.tok("device-owner"),
-            {"device_id": enrolled["device_id"]},
+            {"device_id": device_id},
         )
         self.assertEqual(status, 200)
         timestamp = int(time.time())
@@ -383,7 +390,7 @@ class QueuedTaskApiTests(Base):
         self.assertNotIn("device_id", result)
         audit = json.dumps(self.svc.store._all_events())
         self.assertNotIn(code, audit)
-        self.assertNotIn(enrolled["device_id"], audit)
+        self.assertNotIn(device_id, audit)
 
     def test_queued_submission_requires_primary_device_proof(self) -> None:
         payload = {
