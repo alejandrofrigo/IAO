@@ -177,6 +177,86 @@ class AuthTests(Base):
         self.assertNotIn(encoded, audit)
 
 
+    def test_root_associated_session_binds_only_exact_enrolled_device_key(self) -> None:
+        bootstrap = "root-device-bootstrap-" + "r" * 40
+        identity = OperatorIdentityAuthority(
+            self.state / "root-device-identity.sqlite3", bootstrap,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"root-device-session-key").digest(),
+        )
+        devices = DeviceAuthority(
+            self.state / "root-device-authority.sqlite3",
+            enrollment_code="device-enrollment-" + "d" * 40,
+        )
+        self.svc.operator_identity_authority = identity
+        self.svc.device_authority = devices
+        root = ec.generate_private_key(ec.SECP256R1())
+        root_pem = root.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        identity.bootstrap(bootstrap, root_pem)
+        device = ec.generate_private_key(ec.SECP256R1())
+        device_pem = device.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        devices.enroll(
+            "device-enrollment-" + "d" * 40, device_pem,
+            owner_subject="root-device-operator",
+        )
+        headers = self.tok("root-device-operator")
+        status, challenge = self.call(
+            "POST", "/v1/operator/session/challenge", headers, {},
+        )
+        self.assertEqual(status, 200)
+        payload = base64.urlsafe_b64decode(
+            challenge["signing_payload"]
+            + "=" * (-len(challenge["signing_payload"]) % 4)
+        )
+        session_signature = root.sign(
+            ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()),
+        )
+        encoded_session = base64.urlsafe_b64encode(session_signature).decode().rstrip("=")
+        self.assertEqual(self.call(
+            "POST", "/v1/operator/session/bind", headers,
+            {"challenge": challenge["challenge"], "signature": encoded_session},
+        )[0], 200)
+
+        _, binding_payload = OperatorIdentityAuthority.device_binding_payload(
+            device_pem, key_version=1,
+        )
+        binding_signature = root.sign(
+            ROOT_SIGNATURE_DOMAIN + binding_payload, ec.ECDSA(hashes.SHA256()),
+        )
+        encoded_device = base64.urlsafe_b64encode(binding_signature).decode().rstrip("=")
+        bound = self.call(
+            "POST", "/v1/operator/device/bind", headers,
+            {"public_key_pem": device_pem, "signature": encoded_device},
+        )
+        self.assertEqual(bound, (200, {
+            "authority": "PRIMARY_DEVICE_BOUND_READ_ONLY", "key_version": 1,
+        }))
+        self.assertTrue(identity.verify_primary_device(
+            identity._active_identity_id_for_test() if hasattr(identity, "_active_identity_id_for_test") else
+            __import__("sqlite3").connect(identity.database).execute(
+                "SELECT identity_id FROM operator_identities WHERE status='ACTIVE'"
+            ).fetchone()[0], device_pem,
+        ))
+
+        other = ec.generate_private_key(ec.SECP256R1())
+        other_pem = other.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        rejected = self.call(
+            "POST", "/v1/operator/device/bind", headers,
+            {"public_key_pem": other_pem, "signature": encoded_device},
+        )
+        self.assertEqual((rejected[0], rejected[1]["error"]),
+                         (403, "DEVICE_KEY_NOT_ENROLLED_FOR_OWNER"))
+        self.assertEqual(bound[1]["authority"], "PRIMARY_DEVICE_BOUND_READ_ONLY")
+
     def test_AUTH01_no_session_401(self) -> None:
         s, p = self.call("GET", "/v1/me")
         self.assertEqual((s, p["error"]), (401, "AUTHENTICATION_REQUIRED"))
