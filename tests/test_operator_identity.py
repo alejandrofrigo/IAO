@@ -982,3 +982,129 @@ def test_recovery_retries_after_device_commit_and_identity_transaction_failure(t
     assert final["key_version"] == 2
     assert final["recovery_code_digest"] == authority._recovery_digest(rotated_recovery)
     assert consumed["consumed_at"] is not None
+
+def test_recovery_challenge_is_single_use_across_independent_authority_instances(tmp_path):
+    """Two server workers cannot commit the same recovery challenge twice."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Lock
+
+    bootstrap = "concurrent-bootstrap-" + "b" * 40
+    recovery = "concurrent-recovery-" + "r" * 48
+    rotated = "concurrent-rotated-recovery-" + "n" * 48
+    digest_key = b"concurrent-recovery-digest-key-" + b"k" * 32
+    old_root, old_root_public = keypair()
+    _, old_device_public = keypair()
+    new_root, new_root_public = keypair()
+    new_device, new_device_public = keypair()
+    identity_db = tmp_path / "concurrent-identity.sqlite3"
+    device_db = tmp_path / "concurrent-device.sqlite3"
+
+    authority = OperatorIdentityAuthority(
+        identity_db, bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=digest_key,
+    )
+    identity = authority.bootstrap(
+        bootstrap, old_root_public, recovery_code=recovery,
+    )
+    identity_id = identity["identity_id"]
+    owner = "operator:" + identity_id
+    devices = DeviceAuthority(
+        device_db, enrollment_code="concurrent-enrollment-" + "e" * 40,
+    )
+    devices.enroll(
+        devices.enrollment_code, old_device_public, owner_subject=owner,
+    )
+    _, binding_payload = authority.device_binding_payload(
+        old_device_public, key_version=1,
+    )
+    authority.bind_primary_device(
+        identity_id, old_device_public, sign(old_root, binding_payload),
+        expected_key_version=1,
+    )
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, new_root_public, new_device_public, rotated,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = new_root.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    device_signature = new_device.sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+
+    # Distinct objects model separate API worker processes, not a shared
+    # in-process threading lock. Both target the same durable SQLite files.
+    workers = [
+        OperatorIdentityAuthority(identity_db, subject_digest_key=digest_key),
+        OperatorIdentityAuthority(identity_db, subject_digest_key=digest_key),
+    ]
+    device_workers = [
+        DeviceAuthority(device_db, enrollment_code=""),
+        DeviceAuthority(device_db, enrollment_code=""),
+    ]
+    gate = Barrier(2)
+    replacement_calls = []
+    calls_lock = Lock()
+
+    def attempt(index):
+        def replace(public, subject, old=None):
+            with calls_lock:
+                replacement_calls.append((public, subject))
+            return device_workers[index].replace_active_device_for_recovery(
+                public, owner_subject=subject, expected_old_public_key_pem=old,
+            )
+
+        gate.wait(timeout=10)
+        try:
+            result = workers[index].complete_operator_recovery(
+                challenge["challenge"], root_signature, device_signature,
+                device_replacement=replace,
+            )
+            return ("committed", result["key_version"])
+        except OperatorIdentityError as exc:
+            return ("rejected", exc.code)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, range(2)))
+
+    assert sorted(outcomes) == [
+        ("committed", 2),
+        ("rejected", "OPERATOR_RECOVERY_REPLAYED"),
+    ]
+    assert replacement_calls == [(new_device_public, owner)]
+    assert workers[0].primary_device_public_key() == new_device_public
+    assert devices.verify_registered_public_key(
+        new_device_public, owner_subject=owner,
+    )
+    with workers[0]._database() as db:
+        identities = db.execute(
+            "SELECT status,key_version,recovery_code_digest FROM operator_identities"
+        ).fetchall()
+        bindings = db.execute(
+            "SELECT device_public_key_pem,key_version FROM primary_device_bindings"
+        ).fetchall()
+        consumed = db.execute(
+            "SELECT consumed_at FROM operator_recovery_challenges WHERE challenge_digest=?",
+            (workers[0]._digest(challenge["challenge"]),),
+        ).fetchone()
+    assert len(identities) == 1
+    assert identities[0]["status"] == "ACTIVE"
+    assert identities[0]["key_version"] == 2
+    assert identities[0]["recovery_code_digest"] == workers[0]._recovery_digest(rotated)
+    assert len(bindings) == 1
+    assert bindings[0]["device_public_key_pem"] == new_device_public
+    assert bindings[0]["key_version"] == 2
+    assert consumed["consumed_at"] is not None
+    with devices._database() as db:
+        active = db.execute(
+            "SELECT public_key_pem,owner_subject FROM devices WHERE active=1"
+        ).fetchall()
+    assert len(active) == 1
+    assert active[0]["public_key_pem"] == new_device_public
+    assert active[0]["owner_subject"] == owner
+
