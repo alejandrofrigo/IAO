@@ -17,6 +17,12 @@ def configured_client(monkeypatch, tmp_path):
     monkeypatch.setenv("IAO_DEVICE_ENROLLMENT_ENABLED", "1")
     main._service = None
     main._device_authority = None
+    main._federation_node = None
+    main._federation_worker_status.update({
+        "autojoin": False, "discovery": False, "external_network": False,
+    })
+    # API contract tests must not launch real network workers.
+    monkeypatch.setattr(main, "_ensure_federation", lambda service: None)
     return TestClient(main.app)
 
 
@@ -167,3 +173,51 @@ def test_federation_status_does_not_claim_unverified_network_is_active(monkeypat
     assert body["trusted_peer_count"] is None
     assert body["remote_enrollment"] == "disabled"
 
+
+
+def test_federation_publication_is_exposed_only_with_explicit_opt_in(monkeypatch, tmp_path):
+    class StubNode:
+        served = {"knowledge.search"}
+
+        def identity_document(self):
+            return {"node_id": "0123456789abcdef", "public_key": "a" * 64}
+
+        def contract_for_self(self, capabilities):
+            return {"node_id": "0123456789abcdef", "capabilities": capabilities}
+
+        def identity_publication(self, endpoint, capabilities, consent):
+            return {
+                "node_id": "0123456789abcdef",
+                "endpoint": endpoint,
+                "capabilities": capabilities,
+                "consent": consent,
+            }
+
+    client = configured_client(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "_ensure_federation", lambda service: StubNode())
+    assert client.get("/fed/v1/identity").status_code == 200
+    assert client.get("/fed/v1/contract").status_code == 200
+
+    withheld = client.get("/fed/v1/publication")
+    assert withheld.status_code == 404
+    assert withheld.json()["error"] == "PUBLIC_PEERING_NOT_OFFERED"
+
+    monkeypatch.setenv("IAO_FEDERATION_PUBLIC_PEERING", "true")
+    monkeypatch.setenv("IAO_FEDERATION_PUBLIC_ORIGIN", "https://node.example.org")
+    offered = client.get("/fed/v1/publication")
+    assert offered.status_code == 200
+    assert offered.json()["consent"] is True
+    assert offered.json()["endpoint"] == "https://node.example.org/fed/v1/message"
+
+
+def test_federation_handshake_enforces_bounded_content_length(monkeypatch, tmp_path):
+    class StubNode:
+        def answer_challenge(self, body):
+            return 200, {"accepted": True}
+
+    client = configured_client(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "_ensure_federation", lambda service: StubNode())
+    missing_length = client.post("/fed/v1/handshake", content=b"{}",
+                                 headers={"Transfer-Encoding": "chunked"})
+    assert missing_length.status_code == 400
+    assert missing_length.json()["error"] == "INVALID_TRANSFER_ENCODING"
