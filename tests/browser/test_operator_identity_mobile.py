@@ -122,6 +122,32 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 ).fill("browser-e2e-recovery-" + "r" * 48)
                 panel.get_by_role("button", name="Registrar identidad raíz").click()
                 page.get_by_text("IDENTIDAD RAÍZ REGISTRADA", exact=False).wait_for(timeout=20000)
+                local_identity = page.evaluate(
+                    """async () => new Promise((resolve, reject) => {
+                      const request = indexedDB.open('iao-operator-root', 1);
+                      request.onerror = () => reject(request.error);
+                      request.onsuccess = () => {
+                        const db = request.result;
+                        const tx = db.transaction('identity', 'readonly');
+                        const get = tx.objectStore('identity').get('root');
+                        get.onsuccess = () => {
+                          const value = get.result;
+                          resolve({
+                            present: Boolean(value),
+                            keyVersion: value && value.keyVersion,
+                            privateKey: Boolean(value && value.privateKey),
+                            extractable: value && value.privateKey ? value.privateKey.extractable : null
+                          });
+                        };
+                        tx.onerror = () => reject(tx.error);
+                        tx.oncomplete = () => db.close();
+                      };
+                    })"""
+                )
+                assert local_identity["present"], local_identity
+                assert local_identity["keyVersion"] == 1, local_identity
+                assert local_identity["privateKey"], local_identity
+                assert local_identity["extractable"] is False, local_identity
 
                 panel.get_by_role("button", name="Iniciar sesión de operador").click()
                 output = panel.locator("pre")
