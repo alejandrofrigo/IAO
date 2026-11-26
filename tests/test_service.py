@@ -72,6 +72,26 @@ class Base(unittest.TestCase):
             subject_digest_key=hashlib.sha256(b"api-recovery-session-key").digest(),
         )
         identity = authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
+        device_code = "api-recovery-device-enrollment-" + "d" * 40
+        device_authority = DeviceAuthority(
+            self.state / "api-recovery-device-authority.sqlite3",
+            enrollment_code=device_code,
+        )
+        device_authority.enroll(
+            device_code, old_public, owner_subject="pre-login-owner",
+        )
+        _, binding_payload = authority.device_binding_payload(
+            old_public, key_version=1,
+        )
+        binding_signature = old_root.sign(
+            ROOT_SIGNATURE_DOMAIN + binding_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        authority.bind_primary_device(
+            identity["identity_id"], old_public, binding_signature,
+            expected_key_version=1,
+        )
+        self.svc.device_authority = device_authority
         self.svc.operator_identity_authority = authority
 
         new_root = ec.generate_private_key(ec.SECP256R1())
@@ -225,9 +245,9 @@ class AuthTests(Base):
             },
         )
         self.assertEqual(status, 200)
-        self.assertEqual(result, {
-            "authority": "OPERATOR_IDENTITY_REVOKED", "device_revoked": True,
-        })
+        self.assertEqual(result["authority"], "OPERATOR_IDENTITY_REVOKED")
+        self.assertTrue(result["device_revoked"])
+        self.assertRegex(result["correlation_id"], r"^[0-9a-f]{32}$")
         with self.assertRaisesRegex(DeviceAuthorityError, "DEVICE_KEY_NOT_ACTIVE"):
             device_authority.verify_active_public_key(device_public)
         self.assertFalse(identity_authority.verify_authenticated_session(
