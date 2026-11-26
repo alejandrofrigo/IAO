@@ -735,7 +735,7 @@ def test_recovery_challenge_and_device_binding_survive_server_restart(tmp_path):
     old_root, old_root_public = keypair()
     _, old_device_public = keypair()
     new_root, new_root_public = keypair()
-    _, new_device_public = keypair()
+    new_device_private, new_device_public = keypair()
 
     identity_db = tmp_path / "operator-identity.sqlite3"
     device_db = tmp_path / "device-authority.sqlite3"
@@ -774,7 +774,7 @@ def test_recovery_challenge_and_device_binding_survive_server_restart(tmp_path):
         b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
-    device_signature = keypair()[0].sign(
+    device_signature = new_device_private.sign(
         b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
@@ -805,10 +805,10 @@ def test_recovery_challenge_and_device_binding_survive_server_restart(tmp_path):
     )
     with pytest.raises(OperatorIdentityError, match="INVALID_OPERATOR_RECOVERY_CODE"):
         restarted.create_operator_recovery_challenge(
-            recovery, *keypair()[1:2], new_device_public,
+            recovery, new_root_public, new_device_public,
             "unused-recovery-after-restart-" + "u" * 40,
         )
-    next_root_private, next_root_public = keypair()
+    _, next_root_public = keypair()
     _, next_device_public = keypair()
     next_challenge = restarted.create_operator_recovery_challenge(
         rotated_recovery, next_root_public, next_device_public,
