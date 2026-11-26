@@ -374,6 +374,75 @@ def test_session_challenge_binds_exact_authenticated_subject_and_persists(tmp_pa
     assert "verified-subject-A" not in challenge["signing_payload"]
 
 
+
+def test_session_challenge_is_single_use_across_independent_authority_instances(tmp_path):
+    """Concurrent API workers cannot bind the same bearer challenge twice."""
+    import base64
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    bootstrap = "session-race-bootstrap-" + "b" * 40
+    token = "session-race-token-" + "t" * 48
+    subject = "verified-subject-session-race"
+    digest_key = b"session-race-digest-key-" + b"k" * 32
+    root_private, root_public = keypair()
+    identity_db = tmp_path / "session-race-identity.sqlite3"
+    authority = OperatorIdentityAuthority(
+        identity_db, bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=digest_key,
+    )
+    authority.bootstrap(bootstrap, root_public)
+    challenge = authority.create_session_challenge(subject, token)
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"]
+        + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    signature = sign(root_private, payload)
+
+    # Separate authority instances model independent API workers sharing
+    # the same durable database, rather than a process-local lock.
+    workers = [
+        OperatorIdentityAuthority(identity_db, subject_digest_key=digest_key)
+        for _ in range(2)
+    ]
+    gate = Barrier(2)
+
+    def attempt(worker):
+        gate.wait(timeout=10)
+        try:
+            result = worker.bind_authenticated_session(
+                challenge["challenge"], subject, token, signature,
+            )
+            return ("committed", result["key_version"])
+        except OperatorIdentityError as exc:
+            return ("rejected", exc.code)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, workers))
+
+    assert sorted(outcomes) == [
+        ("committed", 1),
+        ("rejected", "SESSION_CHALLENGE_REPLAYED"),
+    ]
+    assert workers[0].verify_authenticated_session(subject, token)
+    assert workers[1].verify_authenticated_session(subject, token)
+    with workers[0]._database() as db:
+        challenge_row = db.execute(
+            """SELECT consumed_at FROM operator_session_challenges
+            WHERE challenge_digest=?""",
+            (workers[0]._digest(challenge["challenge"]),),
+        ).fetchone()
+        bindings = db.execute(
+            "SELECT subject_digest,session_digest,key_version FROM operator_session_bindings"
+        ).fetchall()
+    assert challenge_row is not None and challenge_row["consumed_at"] is not None
+    assert len(bindings) == 1
+    assert bindings[0]["subject_digest"] == workers[0]._session_subject_digest(subject)
+    assert bindings[0]["session_digest"] == workers[0]._session_credential_digest(token)
+    assert bindings[0]["key_version"] == 1
+
+
 def test_session_binding_rejects_invalid_signature_guest_and_expiry(tmp_path, monkeypatch):
     import base64
 
