@@ -13,6 +13,11 @@ when an egress allowlist is configured), but those are not queue-executable.
 The API rejects unreviewed tools before enqueueing, and the worker independently
 rechecks the same allowlist before invocation. A read-only label alone is not
 sufficient evidence of safe isolation, bounded execution, or cancellation.
+The worker runs the approved tool's `run` and `verify` callables in a fresh
+spawned child process, removes inherited environment variables before calling
+the tool, enforces a wall-clock deadline, and terminates a timed-out child.
+On POSIX it also attempts CPU, address-space, file-size, open-file, and core
+limits. This is process containment, not a complete security sandbox.
 
 Queued task execution is restricted to registered `READ_ONLY` capabilities.
 Before invoking a tool, the worker validates the persisted policy version,
@@ -45,9 +50,13 @@ mechanism, not proof of exactly-once tool effects.
 - [ ] Tool execution has an explicit idempotency contract. A timeout or worker
       crash after an external side effect must not trigger blind replay.
 - [ ] Lease renewal and maximum execution duration are bounded and tested.
-- [ ] Tool execution is isolated in a killable process with enforceable CPU,
-      memory, filesystem, and network limits. The current thread-future timeout
-      does not terminate a running Python tool function.
+- [x] Queued tool invocation and verification now run in a separate,
+      killable child process with a wall-clock timeout and POSIX CPU, address
+      space, file-size, file-descriptor, and core-dump limits where supported.
+      Tests verify child-process execution and timeout termination.
+- [ ] OS-level filesystem and network isolation are still required. The child
+      runs under the same OS account and is not a container/seccomp sandbox;
+      resource limits are best-effort on platforms that do not support them.
 - [ ] Authorization is revalidated immediately before each externally
       observable side effect, not only when a task is first claimed.
 - [ ] Operator recovery, session expiry, device revocation, and root rotation
