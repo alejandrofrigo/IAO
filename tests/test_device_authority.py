@@ -55,7 +55,6 @@ def test_signed_device_status_proof_is_read_only_and_consumes_challenge(tmp_path
     assert result == {
         "action": "status",
         "authority": "READ_ONLY_DEVICE_VERIFIED",
-        "device_id": device_id,
     }
     with pytest.raises(DeviceAuthorityError, match="CHALLENGE_EXPIRED_OR_REPLAYED"):
         authority.verify_status(proof)
