@@ -673,3 +673,51 @@ def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_sig
         device_replacement=lambda public, subject, old=None: None,
     )
     assert result["key_version"] == 2
+
+
+def test_recovery_invalidates_preexisting_operator_session_binding(tmp_path):
+    bootstrap = "bootstrap-session-recovery-" + "b" * 40
+    recovery = "offline-session-recovery-" + "r" * 48
+    next_recovery = "next-offline-session-recovery-" + "n" * 48
+    digest_key = b"operator-recovery-session-digest-key-" + b"k" * 24
+    old_root, old_public = keypair()
+    new_root, new_root_public = keypair()
+    new_device, new_device_public = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "recovery-session.sqlite3", bootstrap,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=digest_key,
+    )
+    identity = authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
+    subject = "operator:" + identity["identity_id"]
+    token = "operator-session-token-" + "t" * 48
+    session_challenge = authority.create_session_challenge(subject, token)
+    session_payload = base64.urlsafe_b64decode(
+        session_challenge["signing_payload"]
+        + "=" * (-len(session_challenge["signing_payload"]) % 4)
+    )
+    authority.bind_authenticated_session(
+        session_challenge["challenge"], subject, token,
+        sign(old_root, session_payload),
+    )
+    assert authority.verify_authenticated_session(subject, token)
+
+    challenge = authority.create_operator_recovery_challenge(
+        recovery, new_root_public, new_device_public, next_recovery,
+    )
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = new_root.sign(
+        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    device_signature = new_device.sign(
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    authority.complete_operator_recovery(
+        challenge["challenge"], root_signature, device_signature,
+        device_replacement=lambda public, owner, old=None: None,
+    )
+    assert not authority.verify_authenticated_session(subject, token)
