@@ -123,10 +123,13 @@
     await writeIdentity({ ...stored, identityId: result.identity_id, keyVersion: result.key_version, bootstrapPending: false });
     return result;
   }
-  async function recoverIdentity(recoveryCode) {
+  async function recoverIdentity(recoveryCode, newRecoveryCode) {
     if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
     if (typeof recoveryCode !== "string" || recoveryCode.length < 32 || recoveryCode.length > 512) {
       throw new Error("INVALID_OPERATOR_RECOVERY_CODE");
+    }
+    if (typeof newRecoveryCode !== "string" || newRecoveryCode.length < 32 || newRecoveryCode.length > 512 || newRecoveryCode === recoveryCode) {
+      throw new Error("INVALID_NEW_OPERATOR_RECOVERY_CODE");
     }
     if (!window.IAODeviceAuthority ||
         typeof window.IAODeviceAuthority.prepareRecoveryIdentity !== "function" ||
@@ -151,7 +154,8 @@
     const challenge = await request("/v1/operator/recovery/challenge", "POST", {
       recovery_code: recoveryCode,
       new_root_public_key_pem: stored.recoveryPendingPublicKeyPem,
-      new_device_public_key_pem: devicePublicKeyPem
+      new_device_public_key_pem: devicePublicKeyPem,
+      new_recovery_code: newRecoveryCode
     });
     if (challenge.protocol !== "IAO-OPERATOR-RECOVERY-V1" ||
         typeof challenge.challenge !== "string" ||
@@ -326,8 +330,12 @@
     code.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
     const recoveryCode = document.createElement("input");
     recoveryCode.type = "password"; recoveryCode.autocomplete = "off";
-    recoveryCode.placeholder = "Código de recuperación offline (solo una vez)";
+    recoveryCode.placeholder = "Código de recuperación offline actual";
     recoveryCode.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
+    const newRecoveryCode = document.createElement("input");
+    newRecoveryCode.type = "password"; newRecoveryCode.autocomplete = "off";
+    newRecoveryCode.placeholder = "Nuevo código de recuperación offline (mínimo 32 caracteres)";
+    newRecoveryCode.style.cssText = "width:100%;box-sizing:border-box;padding:12px;margin:8px 0;";
     const bootstrapRecoveryCode = document.createElement("input");
     bootstrapRecoveryCode.type = "password"; bootstrapRecoveryCode.autocomplete = "off";
     bootstrapRecoveryCode.placeholder = "Crear código de recuperación offline (mínimo 32 caracteres)";
@@ -378,10 +386,12 @@
     recoveryButton.addEventListener("click", () => run(
       recoveryButton, async () => {
         const secret = recoveryCode.value; recoveryCode.value = "";
+        const nextSecret = newRecoveryCode.value; newRecoveryCode.value = "";
         if (!secret) throw new Error("OPERATOR_RECOVERY_CODE_REQUIRED");
-        return recoverIdentity(secret);
+        if (!nextSecret) throw new Error("NEW_OPERATOR_RECOVERY_CODE_REQUIRED");
+        return recoverIdentity(secret, nextSecret);
       },
-      result => "IDENTIDAD RECUPERADA\\nVersión de clave: " + result.key_version + "\\nDispositivo sustituido: " + result.device_replaced
+      result => "IDENTIDAD RECUPERADA\\nVersión de clave: " + result.key_version + "\\nDispositivo sustituido: " + result.device_replaced + "\\nCódigo offline rotado: " + result.recovery_code_rotated + "\\nGuarda el nuevo código fuera de este dispositivo."
     ));
     bootstrapButton.addEventListener("click", () => run(bootstrapButton, async () => {
       const secret = code.value; code.value = "";
@@ -412,7 +422,7 @@
       }
       return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
-    section.append(title, description, code, bootstrapRecoveryCode, bootstrapButton, recoveryCode, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
+    section.append(title, description, code, bootstrapRecoveryCode, bootstrapButton, recoveryCode, newRecoveryCode, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
     document.body.appendChild(section);
     window.addEventListener("iao-session-changed", refreshSessionGates);
     refreshSessionGates();
