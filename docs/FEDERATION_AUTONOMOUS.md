@@ -18,7 +18,7 @@
 
 Por ello, las rutas CandidateRegistry.record_verified_identity() y CandidateRegistry.authorize() fallan cerradas con TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED. El pipeline autónomo también bloquea el enrolamiento de peers no-loopback, incluso si la configuración declara require_mutual_tls=true. Esa configuración no sustituye una prueba real de mTLS ligada a la conexión.
 
-El descubrimiento continúa disponible, pero un peer descubierto no obtiene confianza, permisos, acceso al corpus privado, capacidad de ejecutar código ni autoridad sobre IAO.
+El descubrimiento continúa disponible, pero un peer descubierto no obtiene confianza, permisos, acceso al corpus privado, capacidad de ejecutar código ni autoridad sobre IAO. El pipeline también evita iniciar handshakes HTTP salientes hacia peers remotos hasta que exista el transporte confiable; solo se permiten pruebas loopback de desarrollo.
 
 ## Trabajo pendiente para habilitar federación externa
 
