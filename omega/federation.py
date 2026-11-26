@@ -458,9 +458,14 @@ class Node:
     def bind_peer_endpoint(self, peer_id: str, endpoint: str) -> None:
         """Pin the sole outbound URL for an enrolled peer; changes are audited."""
         try:
-            validate_message_endpoint(endpoint)
+            endpoint_scheme = validate_message_endpoint(endpoint)[0]
         except FederationTransportError as exc:
             raise ValueError("INVALID_PEER_ENDPOINT") from exc
+        if (
+            endpoint_scheme == "http"
+            and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") != "1"
+        ):
+            raise ValueError("LOOPBACK_HTTP_DISABLED")
         with self._lock:
             peer = self.peers.get(peer_id)
             if peer is None or peer.get("revoked"):
@@ -583,9 +588,14 @@ class Node:
         if capability not in c["capabilities"] or capability not in self.served:
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
         try:
-            validate_message_endpoint(url)
+            endpoint_scheme = validate_message_endpoint(url)[0]
         except FederationTransportError:
             return {"ok": False, "error": "INVALID_ENDPOINT"}
+        if (
+            endpoint_scheme == "http"
+            and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") != "1"
+        ):
+            return {"ok": False, "error": "LOOPBACK_HTTP_DISABLED"}
         saved_endpoint = c.get("endpoint")
         if not isinstance(saved_endpoint, str) or not saved_endpoint:
             return {"ok": False, "error": "ENDPOINT_NOT_PINNED"}
