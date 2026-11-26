@@ -223,6 +223,34 @@ class LimitsAndIntegrityTests(Base):
         self.assertEqual((s, p["error"]), (503, "MODEL_ADAPTER_NOT_CONFIGURED"))
         self.assertEqual(self.call("POST", "/v1/chat", self.tok("b"), {"conversation_id": cid, "message": "hi"})[0], 404)
 
+    def test_running_task_is_failed_closed_after_service_restart(self) -> None:
+        intent = {
+            "contract_version": "1.0",
+            "goal": "recover interrupted work",
+            "request_digest": "sha256:test",
+        }
+        task, created = self.svc.store.create_task(
+            "interrupted-task-id", "alice", intent, None
+        )
+        self.assertTrue(created)
+        self.svc.store.set_task_state(task["id"], "RUNNING")
+        self.svc.store.close()
+
+        self.mk()
+
+        recovered = self.svc.store.get_task(task["id"], "alice")
+        self.assertEqual(recovered["state"], "FAILED")
+        self.assertEqual(
+            json.loads(recovered["result_json"]),
+            {"decision": "INTERRUPTED", "error": "PROCESS_INTERRUPTED"},
+        )
+        events = self.svc.store._all_events()
+        self.assertTrue(any(
+            event["event_type"] == "TASK_INTERRUPTED_ON_RESTART"
+            and event["subject"] == "alice"
+            for event in events
+        ))
+
     def test_persistence_survives_restart(self) -> None:
         tid = self.task("alice", "knowledge.search")[1]["task_id"]
         self.svc.store.close()
