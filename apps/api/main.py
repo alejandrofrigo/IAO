@@ -55,13 +55,19 @@ def ready():
                 "reason": "PERSISTENT_RUNTIME_UNAVAILABLE",
             },
         )
-    if payload.get("status") == "ready":
-        payload["status"] = "ready"
-    elif payload.get("status") == "degraded":
-        payload["status"] = "degraded"
-    else:
+    if status != 200 or payload.get("status") == "not_ready":
         payload["status"] = "not_ready"
-    return JSONResponse(status_code=status, content=payload)
+        return JSONResponse(status_code=503, content=payload)
+    # Infrastructure readiness is not equivalent to production readiness:
+    # device-bound command authority and independent federation are still
+    # explicit acceptance gates, even when the database and audit chain work.
+    payload["status"] = "degraded"
+    payload["production_gates"] = {
+        "device_bound_command_authority": "not_integrated",
+        "independent_federation": "not_verified",
+        "model_provider": "configured" if _get_service().model is not None else "not_configured",
+    }
+    return JSONResponse(status_code=200, content=payload)
 
 
 @app.api_route(
