@@ -350,15 +350,9 @@ class ExternalNetwork:
                             now = _utc()
                             p2p_peers[peer_id] = {
                                 "peer_id": peer_id, "multiaddrs": addrs,
-                                "source": source.name, "status": (
-                                    "DISCOVERED_UNVERIFIED"
-                                    if previous.get("status") == "STALE_UNVERIFIED"
-                                    else previous.get("status", "DISCOVERED_UNVERIFIED")
-                                ),
+                                "source": source.name, "status": "DISCOVERED_UNVERIFIED",
                                 "first_seen": previous.get("first_seen", now),
-                                "last_seen": now, "granted_capabilities": previous.get(
-                                    "granted_capabilities", []
-                                ),
+                                "last_seen": now, "granted_capabilities": [],
                                 "remote_code_execution": False, "private_data_access": False,
                             }
                             totals["discovered"] += 1
@@ -378,13 +372,16 @@ class ExternalNetwork:
                         if previous and previous.get("node_id") == item["node_id"] and previous.get("origin") == item["origin"]:
                             for field in (
                                 "status", "identity_verified", "enrolled",
-                                "granted_capabilities", "remote_code_execution",
-                                "private_data_access",
                             ):
                                 if field in previous:
                                     item[field] = previous[field]
                             if item.get("status") == "STALE_UNVERIFIED":
                                 item["status"] = "DISCOVERED_UNVERIFIED"
+                            previous_caps = previous.get("granted_capabilities", [])
+                            if isinstance(previous_caps, list):
+                                item["granted_capabilities"] = sorted(
+                                    set(previous_caps) & {"knowledge.search"}
+                                )
                         candidates[item["candidate_id"]] = item
                         totals["refreshed" if previous else "added"] += 1
                     self._audit("DISCOVERY_SOURCE_COMPLETED", source=source.name,

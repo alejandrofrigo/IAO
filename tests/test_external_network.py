@@ -208,3 +208,25 @@ def test_rediscovery_reactivates_stale_unverified_candidate(tmp_path):
     refreshed = json.loads((tmp_path / "registry.json").read_text())["candidates"][item["candidate_id"]]
     assert refreshed["status"] == "DISCOVERED_UNVERIFIED"
     assert refreshed["last_seen"] != item["last_seen"]
+
+
+def test_discovery_never_restores_privileged_or_unknown_capabilities(tmp_path):
+    item = _candidate(record(), "unit")
+    item.update({
+        "status": "IDENTITY_VERIFIED",
+        "identity_verified": True,
+        "enrolled": True,
+        "granted_capabilities": ["knowledge.search", "admin", "code.execute"],
+        "remote_code_execution": True,
+        "private_data_access": True,
+    })
+    network = ExternalNetwork(tmp_path, [Source([record()])])
+    network.state_dir.mkdir(parents=True)
+    (tmp_path / "registry.json").write_text(json.dumps({
+        "schema": 1, "candidates": {item["candidate_id"]: item}, "p2p_peers": {},
+    }))
+    network.run_cycle()
+    saved = json.loads((tmp_path / "registry.json").read_text())["candidates"][item["candidate_id"]]
+    assert saved["granted_capabilities"] == ["knowledge.search"]
+    assert saved["remote_code_execution"] is False
+    assert saved["private_data_access"] is False
