@@ -912,11 +912,11 @@ def test_recovery_retries_after_device_commit_and_identity_transaction_failure(t
         challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
     )
     root_signature = new_root.sign(
-        b"IAO-OPERATOR-RECOVERY-V1\\x00" + payload,
+        b"IAO-OPERATOR-RECOVERY-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
     device_signature = new_device_private.sign(
-        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\\x00" + payload,
+        b"IAO-OPERATOR-RECOVERY-DEVICE-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
 
