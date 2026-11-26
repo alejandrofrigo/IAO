@@ -208,6 +208,29 @@ class DeviceAuthority:
             raise DeviceAuthorityError("INVALID_BOOTSTRAP_DEVICE_SIGNATURE", 401) from None
         return True
 
+    def preflight_bootstrap_device(
+        self, public_key_pem: Any, signature: bytes,
+    ) -> bool:
+        """Validate device possession and ensure bootstrap can claim the sole device slot."""
+        self.verify_bootstrap_device_signature(public_key_pem, signature)
+        try:
+            key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        except (ValueError, TypeError, UnicodeEncodeError):
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY") from None
+        der = key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        device_id = hashlib.sha256(der).hexdigest()
+        with self._database() as db:
+            if db.execute("SELECT 1 FROM devices WHERE active=1").fetchone():
+                raise DeviceAuthorityError("PRIMARY_DEVICE_ALREADY_ENROLLED", 409)
+            if db.execute(
+                "SELECT 1 FROM devices WHERE device_id=?", (device_id,)
+            ).fetchone():
+                raise DeviceAuthorityError("DEVICE_KEY_PREVIOUSLY_ENROLLED", 409)
+        return True
+
     def enroll_bootstrap_primary_device(
         self, public_key_pem: Any, *, owner_subject: str, signature: bytes,
     ) -> dict[str, str]:
