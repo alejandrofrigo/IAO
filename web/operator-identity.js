@@ -415,21 +415,27 @@
     });
     recoveryButton.addEventListener("click", () => run(
       recoveryButton, async () => {
-        const secret = recoveryCode.value; recoveryCode.value = "";
-        const nextSecret = newRecoveryCode.value; newRecoveryCode.value = "";
+        const secret = recoveryCode.value;
+        const nextSecret = newRecoveryCode.value;
         if (!secret) throw new Error("OPERATOR_RECOVERY_CODE_REQUIRED");
         if (!nextSecret) throw new Error("NEW_OPERATOR_RECOVERY_CODE_REQUIRED");
-        return recoverIdentity(secret, nextSecret);
+        const result = await recoverIdentity(secret, nextSecret);
+        recoveryCode.value = "";
+        newRecoveryCode.value = "";
+        return result;
       },
       result => "IDENTIDAD RECUPERADA\\nVersión de clave: " + result.key_version + "\\nDispositivo sustituido: " + result.device_replaced + "\\nNuevo código offline (guárdalo ahora):\\n" + result.recoveryCode
     ));
     bootstrapButton.addEventListener("click", () => run(bootstrapButton, async () => {
-      const secret = code.value; code.value = "";
-      const recoverySecret = bootstrapRecoveryCode.value; bootstrapRecoveryCode.value = "";
+      const secret = code.value;
+      const recoverySecret = bootstrapRecoveryCode.value;
       if (!secret) throw new Error("OPERATOR_BOOTSTRAP_REQUIRED");
       if (!recoverySecret) throw new Error("OPERATOR_RECOVERY_CODE_REQUIRED");
       if (secret === recoverySecret) throw new Error("RECOVERY_CODE_MUST_DIFFER_FROM_BOOTSTRAP");
-      return bootstrap(secret, recoverySecret);
+      const result = await bootstrap(secret, recoverySecret);
+      code.value = "";
+      bootstrapRecoveryCode.value = "";
+      return result;
     }, result => "IDENTIDAD RAÍZ REGISTRADA\nAlgoritmo: " + result.algorithm + "\nVersión: " + result.key_version + "\nCódigo de recuperación offline (guárdalo ahora):\n" + result.recoveryCode));
     loginButton.addEventListener("click", () => run(
       loginButton, login,
