@@ -2,11 +2,14 @@
 
 ## Status
 
-The durable root-key registry has a first isolated implementation in
+The durable root-key registry has an isolated implementation in
 `omega/operator_identity.py`: one-time bootstrap consumption, a single active
 P-256 root, domain-separated signature verification, root-key rotation,
 revocation, SQLite persistence and restrictive filesystem permissions are
-covered by `tests/test_operator_identity.py`.
+covered by `tests/test_operator_identity.py`. It also supports a root-signed,
+canonical device-binding payload and a persistent single-primary-device
+binding. A binding is invalidated when the root key version changes and must
+be explicitly re-authorized by the new root key version.
 
 This is a foundation only, not an end-to-end operator identity system. It is
 not yet wired to API sessions, device enrollment/binding, task authorization,
