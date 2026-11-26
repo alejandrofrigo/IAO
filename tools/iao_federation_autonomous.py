@@ -322,6 +322,21 @@ def _peer_is_loopback(url):
     return host in _LOOPBACK_HOSTS
 
 def enroll_if_consented(node, protocol, candidate, verified, item, policy):
+    # La firma Ed25519 prueba identidad, no autenticación del canal. El probe
+    # actual no aporta una atestación mTLS ligada a la conexión ni bloquea de
+    # forma segura redirects/DNS rebinding. Por eso no se enrolan peers remotos
+    # hasta integrar un transporte confiable; el descubrimiento sigue permitido.
+    candidate_url = candidate.get("endpoint") if isinstance(candidate, dict) else None
+    if candidate_url is None and isinstance(item, dict):
+        candidate_url = item.get("url")
+    if not _peer_is_loopback(candidate_url or ""):
+        return {
+            "status": "BLOCKED_TRUSTED_TRANSPORT_NOT_INTEGRATED",
+            "peer_id": (verified or {}).get("peer_id"),
+            "peer_url": str(candidate_url or "")[:200],
+            "enrollment_performed": False,
+            "capabilities_granted": [],
+        }
     # Salvaguarda por-peer: si mTLS está desactivado (solo permitido en
     # entornos de integración), rechazar cualquier peer que no sea loopback.
     # En producción require_mutual_tls debe ser True.
