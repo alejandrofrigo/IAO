@@ -155,6 +155,14 @@
       await writeIdentity(stored);
     }
     let devicePublicKeyPem = stored.recoveryPendingDevicePublicKeyPem;
+    if (devicePublicKeyPem &&
+        !(await window.IAODeviceAuthority.hasRecoveryKey(devicePublicKeyPem))) {
+      const updated = { ...stored };
+      delete updated.recoveryPendingDevicePublicKeyPem;
+      stored = updated;
+      devicePublicKeyPem = null;
+      await writeIdentity(stored);
+    }
     if (!devicePublicKeyPem) {
       devicePublicKeyPem = await window.IAODeviceAuthority.recoveryPublicKeyPem().catch(async () => {
         const prepared = await window.IAODeviceAuthority.prepareRecoveryIdentity();
