@@ -26,7 +26,7 @@ button:disabled{opacity:.5}
 <h1>Chat público IAO</h1>
 <div class="muted">Inteligencia Artificial</div>
 <section class="panel">
-<p>Conéctate para iniciar una sesión temporal de visitante.</p>
+<p>Conéctate para iniciar una sesión temporal de visitante. El chat público no concede autoridad de mando ni permite ejecutar tareas en cola.</p>
 <button id="connect">Entrar al chat</button>
 <div id="status" class="status" role="status">Desconectado</div>
 </section>
@@ -88,25 +88,35 @@ button:disabled{opacity:.5}
     connectBtn.disabled = true;
     status("Creando sesión pública...");
     try {
+      const session = await request("/v1/public/session", "POST", {});
+      if (typeof session.access_token !== "string" || !session.access_token) {
+        throw new Error("INVALID_PUBLIC_SESSION");
+      }
+      token = session.access_token;
+      const conversation = await request("/v1/conversations", "POST",
+        {title: "Chat público IAO"});
+      if (typeof conversation.conversation_id !== "string" || !conversation.conversation_id) {
+        throw new Error("INVALID_CONVERSATION");
+      }
+      conversationId = conversation.conversation_id;
+      // Public sessions are deliberately guest-only. The status endpoint
+      // reports authority but never upgrades or infers operator privileges.
+      let authority = "GUEST_READ_ONLY";
       try {
-        const session = await request("/v1/public/session", "POST", {});
-        token = session.access_token;
-        const conversation = await request("/v1/conversations", "POST",
-          {title: "Chat público IAO"});
-        conversationId = conversation.conversation_id;
-      } catch (e) {
-        const message = String(e && e.message || e);
-        if (!/HTTP_(404|405)|HTTP (404|405)/i.test(message)) throw e;
-        // Compatibilidad con backends que solo exponen POST /v1/chat.
-        // No se eluden errores de autenticación ni de autorización.
-        token = "";
-        conversationId = "iao-" + Date.now().toString(36);
-        console.warn("IAO: rutas de sesión no disponibles; modo compatible.");
+        const sessionStatus = await request("/v1/operator/session/status");
+        if (typeof sessionStatus.authority === "string") {
+          authority = sessionStatus.authority;
+        }
+      } catch (_) {
+        // The public chat remains available if the optional identity service
+        // is not configured; absence of evidence never grants authority.
       }
       messagesEl.replaceChildren();
       messageEl.disabled = false;
       sendBtn.disabled = false;
-      status("Conectado. La sesión temporal caduca en dos horas.");
+      status(authority === "GUEST_READ_ONLY"
+        ? "Conectado como visitante. Solo chat; sin mando ni tareas en cola. La sesión caduca en dos horas."
+        : "Conectado. Autoridad: " + authority + ". La sesión caduca en dos horas.");
       messageEl.focus();
     } catch (e) {
       token = null;
