@@ -370,13 +370,22 @@ class OmegaService:
                                    ("capability", isinstance(cap, str) and bool(cap)),
                                    ("input", isinstance(tin, dict))) if not ok]
         expires = datetime.fromtimestamp(self.clock() + self.ttl, timezone.utc).isoformat()
+        request_digest = _digest({
+            "goal": goal,
+            "capability": cap,
+            "input": tin,
+        })
         intent = {"contract_version": "1.0", "goal": goal if isinstance(goal, str) else None,
-                  "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [], "risk_class": "R0",
+                  "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [],
+                  "request_digest": request_digest, "risk_class": "R0",
                   "budget": {"max_model_calls": 0, "timeout_seconds": 20}, "termination_condition": "result or terminal error",
                   "policy_version": POLICY_VERSION, "expires_at": expires}
         tid = str(uuid.uuid4())
         row, created = self.store.create_task(tid, pr.subject, intent, idem)
         if not created:
+            previous_intent = json.loads(row["intent_json"])
+            if previous_intent.get("request_digest") != request_digest:
+                raise ApiError(409, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST")
             return 200, {**self._view(row), "idempotent_replay": True}
         tid = row["id"]
         st = "CREATED"
