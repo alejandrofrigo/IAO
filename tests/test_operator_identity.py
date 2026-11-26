@@ -860,4 +860,9 @@ def test_operator_recovery_challenge_expires_before_any_device_replacement(tmp_p
             (authority._digest(challenge["challenge"]),),
         ).fetchone()
     assert row["consumed_at"] is None
-    assert authority._recovery_digest(rotated) != authority._recovery_digest(recovery)
+    with authority._database() as db:
+        identity = db.execute(
+            "SELECT recovery_code_digest, key_version FROM operator_identities"
+        ).fetchone()
+    assert identity["recovery_code_digest"] == authority._recovery_digest(recovery)
+    assert identity["key_version"] == 1
