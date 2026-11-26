@@ -572,6 +572,7 @@ def test_dual_signature_operator_login_rejects_wrong_device_signature(tmp_path):
 def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp_path):
     bootstrap = "bootstrap-secret-" + "b" * 40
     recovery = "offline-recovery-secret-" + "r" * 48
+    next_recovery = "rotated-offline-recovery-" + "n" * 48
     old_private, old_public = keypair()
     new_root_private, new_root_public = keypair()
     new_device_private, new_device_public = keypair()
@@ -588,7 +589,7 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
     )
 
     challenge = authority.create_operator_recovery_challenge(
-        recovery, new_root_public, new_device_public,
+        recovery, new_root_public, new_device_public, next_recovery,
     )
     payload = base64.urlsafe_b64decode(
         challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
@@ -621,6 +622,11 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
         authority.create_operator_recovery_challenge(
             recovery, new_root_public, new_device_public,
         )
+    next_challenge = authority.create_operator_recovery_challenge(
+        next_recovery, new_root_public, new_device_public,
+        "second-rotated-recovery-" + "t" * 48,
+    )
+    assert next_challenge["protocol"] == "IAO-OPERATOR-RECOVERY-V1"
     with pytest.raises(OperatorIdentityError, match="OPERATOR_RECOVERY_REPLAYED"):
         authority.complete_operator_recovery(
             challenge["challenge"], root_signature, device_signature,
@@ -631,6 +637,7 @@ def test_one_time_recovery_replaces_root_and_primary_device_after_revocation(tmp
 def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_signature(tmp_path):
     bootstrap = "bootstrap-secret-" + "c" * 40
     recovery = "offline-recovery-secret-" + "s" * 48
+    next_recovery = "rotated-offline-recovery-" + "m" * 48
     _, old_public = keypair()
     root_private, root_public = keypair()
     device_private, device_public = keypair()
@@ -640,7 +647,7 @@ def test_recovery_requires_both_new_private_keys_and_does_not_consume_on_bad_sig
     )
     authority.bootstrap(bootstrap, old_public, recovery_code=recovery)
     challenge = authority.create_operator_recovery_challenge(
-        recovery, root_public, device_public,
+        recovery, root_public, device_public, next_recovery,
     )
     payload = base64.urlsafe_b64decode(
         challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
