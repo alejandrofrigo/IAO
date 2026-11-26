@@ -205,6 +205,51 @@ class DeviceAuthority:
             raise DeviceAuthorityError("DEVICE_KEY_NOT_ENROLLED_FOR_OWNER", 403)
         return True
 
+    @contextmanager
+    def bind_active_key_to_operator(self, public_key_pem: Any, *, owner_subject: str):
+        """Atomically transfer the active enrolled key to its root-authenticated principal.
+
+        The caller must invoke this only after verifying both root and device
+        signatures. The write transaction remains open until the caller's
+        operator-identity transaction has committed.
+        """
+        if (
+            not isinstance(owner_subject, str)
+            or not re.fullmatch(r"operator:[0-9a-f]{32}", owner_subject)
+        ):
+            raise DeviceAuthorityError("INVALID_OPERATOR_SUBJECT", 403)
+        if not isinstance(public_key_pem, str) or not 1 <= len(public_key_pem) <= 4096:
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY")
+        try:
+            key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        except (ValueError, TypeError, UnicodeEncodeError):
+            raise DeviceAuthorityError("INVALID_PUBLIC_KEY") from None
+        if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+            raise DeviceAuthorityError("UNSUPPORTED_PUBLIC_KEY")
+        canonical = key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                rows = db.execute(
+                    "SELECT device_id,owner_subject FROM devices WHERE public_key_pem=? AND active=1",
+                    (canonical,),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise DeviceAuthorityError("DEVICE_KEY_NOT_ACTIVE", 403)
+                db.execute(
+                    "UPDATE devices SET owner_subject=? WHERE device_id=? AND active=1",
+                    (owner_subject, rows[0]["device_id"]),
+                )
+                yield True
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
     def verify_active_public_key(self, public_key_pem: Any) -> bool:
         """Check that an exact public key is currently enrolled and not revoked."""
         if not isinstance(public_key_pem, str) or not 1 <= len(public_key_pem) <= 4096:
