@@ -150,6 +150,27 @@ class PolicyToolTests(Base):
             (409, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST"),
         )
 
+    def test_idempotent_replay_is_allowed_after_daily_quota_is_reached(self) -> None:
+        self.svc.store.close()
+        self.mk(daily_task_quota=1)
+        headers = {**self.tok("alice"), "idempotency-key": "stable-task"}
+        payload = {
+            "goal": "g",
+            "capability": "knowledge.search",
+            "input": {"query": "audit chain"},
+        }
+        first_status, first = self.call("POST", "/v1/tasks", headers, payload)
+        self.assertEqual(first_status, 200)
+        second_status, second = self.call("POST", "/v1/tasks", headers, payload)
+        self.assertEqual(second_status, 200)
+        self.assertEqual(second["task_id"], first["task_id"])
+        self.assertTrue(second["idempotent_replay"])
+        self.assertEqual(self.svc.store.count_tasks_since("alice", "0000"), 1)
+        self.assertTrue(any(
+            event["event_type"] == "TASK_IDEMPOTENT_REPLAY"
+            for event in self.svc.store._all_events()
+        ))
+
     def test_invalid_json_and_oversize(self) -> None:
         self.assertEqual(self.svc.handle("POST", "/v1/tasks", self.tok("alice"), b"{bad")[0], 400)
         self.assertEqual(self.svc.handle("POST", "/v1/tasks", self.tok("alice"), b"x" * 70000)[0], 413)
