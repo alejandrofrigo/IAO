@@ -220,6 +220,82 @@ def test_device_request_nonce_is_single_use_across_independent_authorities(tmp_p
     assert row is not None and row["consumed_at"] is not None
 
 
+
+def test_device_proof_racing_recovery_cannot_survive_primary_key_replacement(tmp_path):
+    """A concurrent proof is either consumed before recovery or rejected after it."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    owner = "operator:" + "d" * 32
+    code = "device-proof-recovery-race-" + "r" * 40
+    db_path = tmp_path / "device-proof-recovery-race.sqlite3"
+    authority = DeviceAuthority(db_path, enrollment_code=code)
+    old_private = ec.generate_private_key(ec.SECP256R1())
+    old_public = old_private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    enrolled = authority.enroll(code, old_public, owner_subject=owner)
+    challenge = authority.challenge(enrolled["device_id"], owner_subject=owner)
+    body = b'{"capability":"knowledge.search","input":{"query":"race"}}'
+    digest = hashlib.sha256(body).hexdigest()
+    proof = _signed_request(
+        old_private, enrolled["device_id"], challenge["nonce"],
+        "POST", "/v1/tasks", digest,
+    )
+    new_private = ec.generate_private_key(ec.SECP256R1())
+    new_public = new_private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    workers = [
+        authority,
+        DeviceAuthority(db_path, enrollment_code=""),
+    ]
+    gate = Barrier(2)
+
+    def verify():
+        gate.wait(timeout=10)
+        try:
+            workers[0].verify_request(
+                proof, method="POST", path="/v1/tasks",
+                request_digest=digest, owner_subject=owner,
+            )
+            return "accepted"
+        except DeviceAuthorityError as exc:
+            return exc.code
+
+    def recover():
+        gate.wait(timeout=10)
+        workers[1].replace_active_device_for_recovery(
+            new_public, owner_subject=owner,
+            expected_old_public_key_pem=old_public,
+        )
+        return "replaced"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        verify_future = pool.submit(verify)
+        recover_future = pool.submit(recover)
+        verify_outcome = verify_future.result()
+        assert recover_future.result() == "replaced"
+
+    assert verify_outcome in {"accepted", "DEVICE_OR_CHALLENGE_NOT_FOUND"}
+    assert authority.verify_registered_public_key(new_public, owner_subject=owner)
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_KEY_NOT_ACTIVE"):
+        authority.verify_active_public_key(old_public)
+    with authority._database() as db:
+        old_row = db.execute(
+            "SELECT active FROM devices WHERE device_id=?",
+            (enrolled["device_id"],),
+        ).fetchone()
+        stale_challenge = db.execute(
+            "SELECT 1 FROM device_challenges WHERE device_id=? AND nonce=?",
+            (enrolled["device_id"], challenge["nonce"]),
+        ).fetchone()
+    assert old_row["active"] == 0
+    assert stale_challenge is None
+
+
 def test_device_proofs_are_bound_to_the_enrolling_operator(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
 
