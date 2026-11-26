@@ -217,6 +217,78 @@ class OmegaService:
             self.store.audit(subject, "PUBLIC_SESSION_CREATED", "public_chat", expires_in=ttl)
             return 201, {"access_token": token, "token_type": "Bearer", "expires_in": ttl}
 
+        if method == "POST" and p == "/v1/operator/login/challenge":
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_LOGIN_UNAVAILABLE")
+            now = self.clock()
+            with self._rl:
+                while self._operator_login_hits and self._operator_login_hits[0] < now - 60:
+                    self._operator_login_hits.popleft()
+                limited = len(self._operator_login_hits) >= 10
+                if not limited:
+                    self._operator_login_hits.append(now)
+            if limited:
+                raise ApiError(429, "RATE_LIMITED")
+            try:
+                device_public_key = self.operator_identity_authority.primary_device_public_key()
+                self.device_authority.verify_active_public_key(device_public_key)
+                challenge = self.operator_identity_authority.create_operator_login_challenge()
+            except DeviceAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_login", "OPERATOR_LOGIN_CHALLENGE_ISSUED",
+                "operator_identity", decision="ALLOW",
+                protocol="IAO-OPERATOR-LOGIN-V1",
+                expires_at=challenge["expires_at"],
+            )
+            return 200, challenge
+
+        if method == "POST" and p == "/v1/operator/login/complete":
+            if self.operator_identity_authority is None or self.device_authority is None:
+                raise ApiError(503, "OPERATOR_LOGIN_UNAVAILABLE")
+            data = self._json(body)
+            challenge_handle = data.get("challenge")
+            root_encoded = data.get("root_signature")
+            device_encoded = data.get("device_signature")
+            if (
+                not isinstance(challenge_handle, str)
+                or not isinstance(root_encoded, str)
+                or not isinstance(device_encoded, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", root_encoded)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", device_encoded)
+            ):
+                raise ApiError(400, "INVALID_OPERATOR_LOGIN")
+            try:
+                device_public_key = self.operator_identity_authority.primary_device_public_key()
+                self.device_authority.verify_active_public_key(device_public_key)
+                root_signature = base64.b64decode(
+                    root_encoded + "=" * (-len(root_encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                device_signature = base64.b64decode(
+                    device_encoded + "=" * (-len(device_encoded) % 4),
+                    altchars=b"-_", validate=True,
+                )
+                result = self.operator_identity_authority.complete_operator_login(
+                    challenge_handle, root_signature, device_signature,
+                    self.token_key, ttl_seconds=900,
+                )
+            except (binascii.Error, ValueError):
+                raise ApiError(400, "INVALID_OPERATOR_LOGIN") from None
+            except DeviceAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "operator_login", "OPERATOR_LOGIN_COMPLETED",
+                "operator_identity", decision="ALLOW",
+                authority="READ_ONLY", key_version=result["key_version"],
+                expires_in=result["expires_in"],
+            )
+            return 200, result
+
         if method == "GET" and p == "/v1/federation/status":
             # No afirmar que existe una red federada operativa: el servicio
             # API todavía no consume un registro de peers verificados.
