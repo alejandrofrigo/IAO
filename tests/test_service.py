@@ -557,6 +557,47 @@ class AuthTests(Base):
         self.assertEqual(self.svc.operator_identity_authority.primary_device_public_key(), None)
         self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
 
+    def test_operator_bootstrap_rejects_reused_root_device_key(self) -> None:
+        code = "same-key-bootstrap-" + "q" * 48
+        recovery_code = "same-key-recovery-" + "v" * 48
+        self.svc.store.close()
+        with patch.dict(os.environ, {
+            "IAO_OPERATOR_BOOTSTRAP_CODE": code,
+            "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT": str(time.time() + 600),
+        }):
+            self.mk()
+        self.svc.device_authority = DeviceAuthority(
+            self.state / "same-key-bootstrap-device.sqlite3", enrollment_code="",
+        )
+        shared = ec.generate_private_key(ec.SECP256R1())
+        public = shared.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        _, payload = self.svc.operator_identity_authority.device_binding_payload(
+            public, key_version=1,
+        )
+        body = {
+            "code": code, "recovery_code": recovery_code,
+            "root_public_key_pem": public, "device_public_key_pem": public,
+            "root_signature": base64.urlsafe_b64encode(
+                shared.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
+            ).decode().rstrip("="),
+            "device_signature": base64.urlsafe_b64encode(
+                shared.sign(
+                    b"IAO-OPERATOR-BOOTSTRAP-DEVICE-V1\\x00" + payload,
+                    ec.ECDSA(hashes.SHA256()),
+                )
+            ).decode().rstrip("="),
+        }
+        status, result = self.call("POST", "/v1/operator/bootstrap", {}, body)
+        self.assertEqual(
+            (status, result["error"]),
+            (400, "OPERATOR_BOOTSTRAP_KEYS_MUST_BE_DISTINCT"),
+        )
+        self.assertEqual(self.svc.operator_identity_authority.bootstrap_code, code)
+        self.assertIsNone(self.svc.operator_identity_authority.primary_device_public_key())
+
     def test_operator_bootstrap_does_not_consume_code_when_primary_slot_is_taken(self) -> None:
         code = "occupied-slot-bootstrap-" + "q" * 48
         recovery_code = "occupied-slot-recovery-" + "v" * 48
