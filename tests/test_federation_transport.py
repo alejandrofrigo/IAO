@@ -31,8 +31,8 @@ class FakeConnection:
         self.request_args = None
         self.closed = False
 
-    def request(self, method, target, headers):
-        self.request_args = (method, target, headers)
+    def request(self, method, target, body=None, headers=None):
+        self.request_args = (method, target, headers or {}, body)
 
     def getresponse(self):
         return self.response
@@ -93,6 +93,7 @@ def test_fetch_public_json_pins_ip_and_parses_json(monkeypatch):
     assert created[0].address == "8.8.8.8"
     assert created[0].request_args[0:2] == ("GET", "/peers")
     assert created[0].request_args[2]["Host"] == "directory.example.org"
+    assert created[0].request_args[3] is None
     assert created[0].closed
 
 
