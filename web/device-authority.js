@@ -123,12 +123,17 @@
   }
 
   async function post(path, body) {
+    const headers = { "Content-Type": "application/json" };
+    if (typeof window.iaoGetSessionToken === "function") {
+      const token = window.iaoGetSessionToken();
+      if (token) headers.Authorization = "Bearer " + token;
+    }
     const response = await fetch(apiUrl(path), {
       method: "POST",
       mode: "cors",
       credentials: "omit",
       cache: "no-store",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body)
     });
 
@@ -197,6 +202,61 @@
     });
 
     return result;
+  }
+
+  async function signedTaskHeaders(payload) {
+    const identity = await dbGet();
+    if (!identity || !identity.privateKey || !identity.deviceId) {
+      throw new Error("DEVICE_NOT_ENROLLED");
+    }
+    const bodyText = JSON.stringify(payload);
+    const challenge = await post("/v1/device/challenge", {
+      device_id: identity.deviceId
+    });
+    const timestamp = Math.floor(Date.now() / 1000);
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", encoder.encode(bodyText))
+    );
+    const hexDigest = Array.from(
+      digest, b => b.toString(16).padStart(2, "0")
+    ).join("");
+    const signedText = [
+      "POST", "/v1/tasks", String(timestamp), challenge.nonce, hexDigest
+    ].join("\n");
+    const rawSignature = new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        identity.privateKey,
+        encoder.encode(signedText)
+      )
+    );
+    return {
+      "X-IAO-Device-Proof": JSON.stringify({
+        device_id: identity.deviceId,
+        nonce: challenge.nonce,
+        timestamp,
+        request_digest: hexDigest,
+        signature: b64url(rawEcdsaToDer(rawSignature))
+      })
+    };
+  }
+
+  async function submitQueuedTask(payload) {
+    const identity = await dbGet();
+    if (!identity) throw new Error("DEVICE_NOT_ENROLLED");
+    const proofHeaders = await signedTaskHeaders(payload);
+    const headers = { "Content-Type": "application/json", ...proofHeaders };
+    if (typeof window.iaoGetSessionToken === "function") {
+      const token = window.iaoGetSessionToken();
+      if (token) headers.Authorization = "Bearer " + token;
+    }
+    const response = await fetch(apiUrl("/v1/tasks"), {
+      method: "POST", mode: "cors", credentials: "omit", cache: "no-store",
+      headers, body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "HTTP_" + response.status);
+    return data;
   }
 
   async function signedStatus() {
@@ -369,6 +429,12 @@
       showResult("Almacenamiento no disponible: " + error.message, true);
     });
   }
+
+  window.IAODeviceAuthority = Object.freeze({
+    signedStatus,
+    signedTaskHeaders,
+    submitQueuedTask
+  });
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", addPanel, { once: true });
