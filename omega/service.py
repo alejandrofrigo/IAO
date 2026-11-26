@@ -18,6 +18,7 @@ from omega.adapters.model import ModelError
 from omega.audit import canonical_json
 from omega.auth import Principal, issue_token, verify_token
 from omega.control import transition
+from omega.device_authority import DeviceAuthority, DeviceAuthorityError
 from omega.policy import authorize
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
@@ -39,8 +40,9 @@ def _digest(obj: Any) -> str:
 class OmegaService:
     def __init__(self, store: Store, registry: ToolRegistry, token_key: str, *, rate_limit_per_min: int = 120,
                  daily_task_quota: int = 1000, task_ttl_seconds: int = 300, model_adapter: Any = None,
-                 clock: Any = time.time) -> None:
+                 clock: Any = time.time, device_authority: DeviceAuthority | None = None) -> None:
         self.store, self.registry, self.token_key = store, registry, token_key
+        self.device_authority = device_authority
         self.rate, self.quota, self.ttl, self.model, self.clock = rate_limit_per_min, daily_task_quota, task_ttl_seconds, model_adapter, clock
 
         self._hits: dict[str, deque[float]] = defaultdict(deque)
@@ -187,6 +189,20 @@ class OmegaService:
 
 
         pr = self._auth(headers)
+        if method == "POST" and p == "/v1/device/challenge":
+            if self.device_authority is None:
+                raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
+            data = self._json(body)
+            try:
+                challenge = self.device_authority.challenge(data.get("device_id"))
+            except DeviceAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                pr.subject, "DEVICE_CHALLENGE_ISSUED", "primary_device",
+                expires_in=challenge["expires_in"],
+            )
+            return 200, challenge
+
         if method == "GET" and p == "/v1/me":
             return 200, {"subject": pr.subject, "scopes": sorted(pr.scopes)}
         if method == "POST" and p == "/v1/conversations":
@@ -384,6 +400,34 @@ class OmegaService:
         execution_mode = d.get("execution_mode", "sync")
         if not isinstance(execution_mode, str) or execution_mode not in {"sync", "queued"}:
             raise ApiError(400, "INVALID_EXECUTION_MODE")
+        if execution_mode == "queued":
+            if self.device_authority is None:
+                raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
+            raw_proof = headers.get("x-iao-device-proof", "")
+            if not isinstance(raw_proof, str) or not 1 <= len(raw_proof) <= 4096:
+                raise ApiError(401, "DEVICE_PROOF_REQUIRED")
+            try:
+                proof = json.loads(raw_proof)
+            except (ValueError, TypeError):
+                raise ApiError(400, "INVALID_DEVICE_PROOF") from None
+            if not isinstance(proof, dict):
+                raise ApiError(400, "INVALID_DEVICE_PROOF")
+            request_digest = hashlib.sha256(body).hexdigest()
+            try:
+                self.device_authority.verify_request(
+                    proof, method="POST", path="/v1/tasks",
+                    request_digest=request_digest,
+                )
+            except DeviceAuthorityError as exc:
+                self.store.audit(
+                    pr.subject, "DEVICE_REQUEST_DENIED", "task_submission",
+                    decision="DENY", reason=exc.code,
+                )
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                pr.subject, "DEVICE_REQUEST_VERIFIED", "task_submission",
+                decision="ALLOW", request_digest=request_digest,
+            )
         request_digest = _digest({
             "goal": goal,
             "capability": cap,
