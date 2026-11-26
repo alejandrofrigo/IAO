@@ -303,7 +303,7 @@ class OmegaService:
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             try:
                 challenge = self.operator_identity_authority.create_session_challenge(
-                    pr.subject
+                    pr.subject, self._verified_bearer_token(headers)
                 )
             except OperatorIdentityError as exc:
                 raise ApiError(exc.status, exc.code) from None
@@ -333,7 +333,8 @@ class OmegaService:
                     altchars=b"-_", validate=True,
                 )
                 result = self.operator_identity_authority.bind_authenticated_session(
-                    data["challenge"], pr.subject, signature
+                    data["challenge"], pr.subject,
+                    self._verified_bearer_token(headers), signature
                 )
             except (binascii.Error, ValueError):
                 raise ApiError(400, "INVALID_SESSION_BINDING") from None
@@ -357,7 +358,7 @@ class OmegaService:
                 return 200, {"associated": False, "authority": "GUEST_READ_ONLY"}
             try:
                 associated = self.operator_identity_authority.verify_authenticated_session(
-                    pr.subject
+                    pr.subject, self._verified_bearer_token(headers)
                 )
             except OperatorIdentityError as exc:
                 raise ApiError(exc.status, exc.code) from None
