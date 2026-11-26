@@ -156,8 +156,11 @@ def _resolve_loopback(host: str, port: int) -> list[str]:
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, hostname: str, address: str, *, timeout: float, context: ssl.SSLContext):
-        super().__init__(hostname, 443, timeout=timeout, context=context)
+    def __init__(
+        self, hostname: str, address: str, *, port: int = 443,
+        timeout: float, context: ssl.SSLContext,
+    ):
+        super().__init__(hostname, port, timeout=timeout, context=context)
         self._pinned_address = address
 
     def connect(self) -> None:
@@ -241,7 +244,7 @@ def _request_json(
     for address in addresses:
         if scheme == "https":
             connection = _PinnedHTTPSConnection(
-                tls_host, address, timeout=timeout, context=context
+                tls_host, address, port=port, timeout=timeout, context=context
             )
         else:
             connection = _PinnedHTTPConnection(
