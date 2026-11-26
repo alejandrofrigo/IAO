@@ -135,6 +135,11 @@ class Base(unittest.TestCase):
             },
         )
         self.assertEqual((replay[0], replay[1]["error"]), (409, "OPERATOR_RECOVERY_REPLAYED"))
+        audit = json.dumps(self.svc.store._all_events())
+        for secret in (recovery, next_recovery, new_root_public, new_device_public):
+            self.assertNotIn(secret, audit)
+        self.assertNotIn(base64.urlsafe_b64encode(root_signature).decode().rstrip("="), audit)
+        self.assertNotIn(base64.urlsafe_b64encode(device_signature).decode().rstrip("="), audit)
 
 
 class AuthTests(Base):
