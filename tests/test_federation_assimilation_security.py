@@ -129,16 +129,20 @@ class FederationEndpointSafetyTests(unittest.TestCase):
                 "https://federation.example.org/fed/v1/message",
                 "unit-test",
             )["candidate"]
-            registry.record_verified_identity(
-                item["candidate_id"],
-                expected_node_id=node_id,
-                evidence=evidence,
-            )
-            authorized = registry.authorize(item["candidate_id"])
-            self.assertTrue(authorized["authorized"])
+            # Una firma Ed25519 válida no convierte dos booleanos JSON en
+            # evidencia TLS: el adaptador de transporte confiable aún no existe.
+            with self.assertRaisesRegex(
+                AssimilationError, "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
+            ):
+                registry.record_verified_identity(
+                    item["candidate_id"],
+                    expected_node_id=node_id,
+                    evidence=evidence,
+                )
             self.assertEqual(
-                authorized["authorized_by"], "IAO_AUTONOMOUS_POLICY_V1"
+                registry.get(item["candidate_id"])["status"], "DISCOVERED"
             )
+            self.assertFalse(registry.get(item["candidate_id"])["authorized"])
 
 
 
