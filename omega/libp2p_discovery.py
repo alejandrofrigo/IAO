@@ -220,7 +220,7 @@ def persist_discovered_peers(peers: Any, *, state_dir: str | Path | None = None)
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
-            stream.write("\\n")
+            stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
