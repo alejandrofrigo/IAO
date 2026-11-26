@@ -26,7 +26,8 @@ def _pair(tmp_path):
     ).decode("ascii")
     identity_db = tmp_path / "identity.sqlite3"
     device_db = tmp_path / "device.sqlite3"
-    identity = OperatorIdentityAuthority(\n        identity_db, "unused-bootstrap-secret-" + "x" * 40,\n        bootstrap_expires_at=time.time() + 600,\n    )
+    identity = OperatorIdentityAuthority(
+        identity_db, "unused-bootstrap-secret-" + "x" * 40,\n        bootstrap_expires_at=time.time() + 600,\n    )
     device = DeviceAuthority(device_db, enrollment_code="device-enrollment-secret-" + "d" * 40)
     enrolled = identity.bootstrap(
         "unused-bootstrap-secret-" + "x" * 40, root_public,
