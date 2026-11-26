@@ -53,9 +53,9 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
         web_root = state / "web"
         shutil.copytree(ROOT / "web", web_root)
         (web_root / "api-config.js").write_text(
-            "window.IAO_API_BASE = " + repr(api_origin) + ";\\n"
+            "window.IAO_API_BASE = " + repr(api_origin) + ";\n"
             "window.iaoApiUrl = path => new URL(String(path).replace(/^\\/+/, ''), "
-            "window.IAO_API_BASE + '/').toString();\\n",
+            "window.IAO_API_BASE + '/').toString();\n",
             encoding="utf-8",
         )
 
