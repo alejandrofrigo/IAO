@@ -19,7 +19,7 @@ import stat
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -536,7 +536,7 @@ class OperatorIdentityAuthority:
 
     def complete_operator_login(
         self, challenge: Any, root_signature: bytes, device_signature: bytes,
-        token_key: str, *, ttl_seconds: int = 900,
+        token_key: str, *, ttl_seconds: int = 900, device_owner_binding=None,
     ) -> dict[str, Any]:
         """Atomically consume a dual-signed challenge and bind a read-only session."""
         if not isinstance(challenge, str) or not 32 <= len(challenge) <= 128:
@@ -592,38 +592,46 @@ class OperatorIdentityAuthority:
                     device_key.verify(device_signature, device_message, ec.ECDSA(hashes.SHA256()))
                 except (InvalidSignature, ValueError, TypeError):
                     raise OperatorIdentityError("INVALID_OPERATOR_LOGIN_SIGNATURE", 401) from None
-                changed = db.execute(
-                    """UPDATE operator_login_challenges SET consumed_at=?
-                    WHERE challenge_digest=? AND consumed_at IS NULL AND expires_at>?""",
-                    (now, self._digest(challenge), now),
-                ).rowcount
-                if changed != 1:
-                    raise OperatorIdentityError("OPERATOR_LOGIN_REPLAYED", 409)
                 subject = "operator:" + row["identity_id"]
-                token = __import__("omega.auth", fromlist=["issue_token"]).issue_token(
-                    token_key, subject, [], ttl=ttl_seconds, now=now
+                owner_context = (
+                    device_owner_binding(subject, row["device_public_key_pem"])
+                    if device_owner_binding is not None else nullcontext()
                 )
-                subject_digest = hmac.new(
-                    self.subject_digest_key,
-                    subject.encode("utf-8"), hashlib.sha256
-                ).hexdigest() if isinstance(self.subject_digest_key, bytes) and len(self.subject_digest_key) >= 32 else None
-                session_digest = self._session_credential_digest(token)
-                if subject_digest is None:
-                    raise OperatorIdentityError("OPERATOR_SESSION_BINDING_UNAVAILABLE", 503)
-                db.execute(
-                    """INSERT INTO operator_session_bindings
-                    (identity_id,subject_digest,session_digest,key_version,bound_at)
-                    VALUES(?,?,?,?,?)
-                    ON CONFLICT(identity_id) DO UPDATE SET
-                    subject_digest=excluded.subject_digest,
-                    session_digest=excluded.session_digest,
-                    key_version=excluded.key_version,bound_at=excluded.bound_at""",
-                    (row["identity_id"], subject_digest, session_digest,
-                     row["key_version"], now),
-                )
-                db.execute("COMMIT")
+                with owner_context:
+                    changed = db.execute(
+                        """UPDATE operator_login_challenges SET consumed_at=?
+                        WHERE challenge_digest=? AND consumed_at IS NULL AND expires_at>?""",
+                        (now, self._digest(challenge), now),
+                    ).rowcount
+                    if changed != 1:
+                        raise OperatorIdentityError("OPERATOR_LOGIN_REPLAYED", 409)
+                    subject = "operator:" + row["identity_id"]
+                    token = __import__("omega.auth", fromlist=["issue_token"]).issue_token(
+                        token_key, subject, [], ttl=ttl_seconds, now=now
+                    )
+                    subject_digest = hmac.new(
+                        self.subject_digest_key,
+                        subject.encode("utf-8"), hashlib.sha256
+                    ).hexdigest() if isinstance(self.subject_digest_key, bytes) and len(self.subject_digest_key) >= 32 else None
+                    session_digest = self._session_credential_digest(token)
+                    if subject_digest is None:
+                        raise OperatorIdentityError("OPERATOR_SESSION_BINDING_UNAVAILABLE", 503)
+                    db.execute(
+                        """INSERT INTO operator_session_bindings
+                        (identity_id,subject_digest,session_digest,key_version,bound_at)
+                        VALUES(?,?,?,?,?)
+                        ON CONFLICT(identity_id) DO UPDATE SET
+                        subject_digest=excluded.subject_digest,
+                        session_digest=excluded.session_digest,
+                        key_version=excluded.key_version,bound_at=excluded.bound_at""",
+                        (row["identity_id"], subject_digest, session_digest,
+                         row["key_version"], now),
+                    )
+                    db.execute("COMMIT")
+
             except Exception:
-                db.execute("ROLLBACK")
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
                 raise
         return {
             "access_token": token,
