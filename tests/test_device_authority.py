@@ -17,13 +17,11 @@ def _enrolled_authority(tmp_path):
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
+    code = "one-time-enrollment-secret-that-is-long-enough"
     authority = DeviceAuthority(
-        tmp_path / "device-authority.sqlite3",
-        enrollment_code="one-time-enrollment-secret-that-is-long-enough",
+        tmp_path / "device-authority.sqlite3", enrollment_code=code
     )
-    enrolled = authority.enroll(
-        "one-time-enrollment-secret-that-is-long-enough", public_pem
-    )
+    enrolled = authority.enroll(code, public_pem)
     return authority, private_key, enrolled["device_id"]
 
 
@@ -33,7 +31,7 @@ def _signed_status(private_key, device_id, nonce, timestamp=None):
         {"action": "status"}, separators=(",", ":"), ensure_ascii=False
     )
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    signed_text = "\\n".join(
+    signed_text = "\n".join(
         ["POST", "/v1/device/command", str(timestamp), nonce, digest]
     ).encode("utf-8")
     signature = private_key.sign(signed_text, ec.ECDSA(hashes.SHA256()))
@@ -67,7 +65,8 @@ def test_device_status_proof_rejects_modified_signature(tmp_path):
     authority, private_key, device_id = _enrolled_authority(tmp_path)
     challenge = authority.challenge(device_id)
     proof = _signed_status(private_key, device_id, challenge["nonce"])
-    proof["signature"] = ("A" if proof["signature"][0] != "A" else "B") + proof["signature"][1:]
+    first = "A" if proof["signature"][0] != "A" else "B"
+    proof["signature"] = first + proof["signature"][1:]
 
     with pytest.raises(DeviceAuthorityError, match="INVALID_DEVICE_SIGNATURE"):
         authority.verify_status(proof)
