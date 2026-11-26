@@ -293,10 +293,21 @@ class OperatorIdentityAuthority:
                     raise OperatorIdentityError("OPERATOR_IDENTITY_NOT_ACTIVE", 403)
                 if row["key_version"] != expected_key_version:
                     raise OperatorIdentityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
-                if db.execute(
-                    "SELECT 1 FROM primary_device_bindings"
-                ).fetchone():
-                    raise OperatorIdentityError("PRIMARY_DEVICE_ALREADY_BOUND", 409)
+                existing = db.execute(
+                    """SELECT identity_id,device_id,key_version
+                    FROM primary_device_bindings"""
+                ).fetchone()
+                if existing is not None:
+                    if existing["identity_id"] != identity_id:
+                        raise OperatorIdentityError("PRIMARY_DEVICE_ALREADY_BOUND", 409)
+                    if expected_key_version <= existing["key_version"]:
+                        if (
+                            existing["device_id"] == device_id
+                            and expected_key_version == existing["key_version"]
+                        ):
+                            db.execute("COMMIT")
+                            return {"key_version": expected_key_version}
+                        raise OperatorIdentityError("PRIMARY_DEVICE_ALREADY_BOUND", 409)
                 db.execute(
                     """INSERT INTO primary_device_bindings
                     (identity_id,device_id,device_public_key_pem,key_version,bound_at)
