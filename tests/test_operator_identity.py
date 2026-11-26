@@ -241,6 +241,30 @@ def test_bootstrap_rejects_expired_or_missing_expiry(tmp_path):
 
 
 
+def test_bootstrap_rechecks_expiry_inside_write_transaction(tmp_path, monkeypatch):
+    code = "bootstrap-race-secret-" + "x" * 40
+    _, public = keypair()
+    db = tmp_path / "expiry-race.sqlite3"
+    authority = OperatorIdentityAuthority(
+        db, code, bootstrap_expires_at=200.0
+    )
+
+    clock_values = iter([100.0, 201.0])
+    monkeypatch.setattr(
+        "omega.operator_identity.time.time", lambda: next(clock_values)
+    )
+    with pytest.raises(OperatorIdentityError, match="OPERATOR_BOOTSTRAP_DISABLED"):
+        authority.bootstrap(code, public)
+    monkeypatch.undo()
+
+    # The expired attempt must not consume the one-time capability or create
+    # an active root; a separately provisioned, fresh window can still enroll.
+    fresh = OperatorIdentityAuthority(
+        db, code, bootstrap_expires_at=time.time() + 600
+    )
+    assert fresh.bootstrap(code, public)["key_version"] == 1
+
+
 def test_revocation_releases_primary_slot_for_explicit_new_root_recovery(tmp_path):
     code = "bootstrap-secret-" + "x" * 40
     recovery_code = "recovery-bootstrap-" + "y" * 40
