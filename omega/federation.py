@@ -834,7 +834,7 @@ class Node:
         }
     @classmethod
     def from_persistent_identity(cls, store, registry, *, identity_dir=None, **kwargs):
-        """Crea un nodo federado con la identidad Ed25519 persistente de esta instalación."""
+        """Load the persistent Ed25519 identity with backward-compatible manifest validation."""
         import hashlib
         import json
         from pathlib import Path
@@ -848,12 +848,12 @@ class Node:
         public_path = base / "public.pem"
         manifest_path = base / "manifest.json"
 
-        if not private_path.is_file():
-            raise FileNotFoundError(f"No existe la clave privada: {private_path}")
+        if private_path.is_symlink() or not private_path.is_file():
+            raise FileNotFoundError("PERSISTENT_IDENTITY_PRIVATE_KEY_UNAVAILABLE")
 
         key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
         if not isinstance(key, Ed25519PrivateKey):
-            raise ValueError("La clave persistente no es Ed25519")
+            raise ValueError("PERSISTENT_IDENTITY_NOT_ED25519")
 
         public_raw = key.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
@@ -862,30 +862,49 @@ class Node:
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        fingerprint = hashlib.sha256(public_der).hexdigest()
+        raw_fingerprint = hashlib.sha256(public_raw).hexdigest()
+        der_fingerprint = hashlib.sha256(public_der).hexdigest()
+        operational_id = node_id_of(public_raw)
 
+        if public_path.is_symlink():
+            raise ValueError("PERSISTENT_IDENTITY_PUBLIC_KEY_SYMLINK")
         if public_path.is_file():
             stored = serialization.load_pem_public_key(public_path.read_bytes())
             stored_raw = stored.public_bytes(
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
             )
             if stored_raw != public_raw:
-                raise ValueError("La clave pública no corresponde a la privada")
+                raise ValueError("PERSISTENT_IDENTITY_PUBLIC_KEY_MISMATCH")
 
-        if manifest_path.is_file():
-            manifest = json.loads(manifest_path.read_text())
-            if manifest.get("public_key_algorithm") != "Ed25519":
-                raise ValueError("Algoritmo incompatible en el manifiesto")
-            if manifest.get("node_id") != fingerprint:
-                raise ValueError("La huella del manifiesto no corresponde a la clave")
+        identity_version = 1
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("PERSISTENT_IDENTITY_MANIFEST_UNAVAILABLE")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or manifest.get("public_key_algorithm") != "Ed25519":
+            raise ValueError("PERSISTENT_IDENTITY_MANIFEST_INVALID")
+
+        identity_version = manifest.get("identity_contract_version", 1)
+        if identity_version == 2:
+            if (manifest.get("node_id") != raw_fingerprint
+                    or manifest.get("operational_node_id") != operational_id
+                    or manifest.get("public_key_sha256") != raw_fingerprint):
+                raise ValueError("PERSISTENT_IDENTITY_V2_FINGERPRINT_MISMATCH")
+        elif identity_version == 1:
+            if manifest.get("node_id") != der_fingerprint:
+                raise ValueError("PERSISTENT_IDENTITY_LEGACY_FINGERPRINT_MISMATCH")
+        else:
+            raise ValueError("PERSISTENT_IDENTITY_CONTRACT_UNSUPPORTED")
 
         if "key" in kwargs:
-            raise TypeError("No se permite sustituir la identidad persistente")
+            raise TypeError("PERSISTENT_IDENTITY_KEY_OVERRIDE_FORBIDDEN")
 
-        kwargs.setdefault("peer_store_path", str(base.parent / "peers.json"))
+        kwargs.setdefault("peer_store_path", str(base / "peers.json"))
         instance = cls(store, registry, key=key, **kwargs)
-        instance.identity_fingerprint = fingerprint
+        instance.identity_fingerprint = (
+            raw_fingerprint if identity_version == 2 else der_fingerprint
+        )
         instance.identity_source = str(private_path)
+        instance.identity_contract_version = identity_version
         return instance
 
 
