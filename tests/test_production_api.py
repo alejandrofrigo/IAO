@@ -108,103 +108,48 @@ def test_v1_routes_reject_missing_authentication(monkeypatch, tmp_path) -> None:
     response = client.get("/v1/me")
     assert response.status_code == 401
 
-def test_device_enrollment_challenge_signature_and_replay_protection(monkeypatch, tmp_path) -> None:
+def test_device_routes_require_operator_session_and_reject_guest_enrollment(monkeypatch, tmp_path):
     client = configured_client(monkeypatch, tmp_path)
+    guest = client.post("/v1/public/session", json={})
+    headers = {"Authorization": "Bearer " + guest.json()["access_token"]}
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_pem = private_key.public_key().public_bytes(
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
-    code = "one-time-enrollment-code-" + "z" * 32
 
     enrolled = client.post(
-        "/v1/device/enroll",
-        json={"code": code, "public_key_pem": public_pem},
-    )
-    assert enrolled.status_code == 201
-    device_id = enrolled.json()["device_id"]
-    assert enrolled.json()["algorithm"] == "ECDSA-P256-SHA256"
-
-    second_enrollment = client.post(
-        "/v1/device/enroll",
-        json={"code": code, "public_key_pem": public_pem},
-    )
-    assert second_enrollment.status_code == 409
-
-    challenge = client.post(
-        "/v1/device/challenge",
-        json={"device_id": device_id},
-    )
-    assert challenge.status_code == 200
-    nonce = challenge.json()["nonce"]
-    timestamp = int(time.time())
-    action = "status"
-    canonical = json.dumps({"action": action}, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode()).hexdigest()
-    signed_text = "\n".join(
-        ["POST", "/v1/device/command", str(timestamp), nonce, digest]
-    ).encode()
-    signature = private_key.sign(signed_text, ec.ECDSA(hashes.SHA256()))
-    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
-    payload = {
-        "device_id": device_id,
-        "nonce": nonce,
-        "timestamp": timestamp,
-        "action": action,
-        "signature": encoded_signature,
-    }
-
-    verified = client.post("/v1/device/command", json=payload)
-    assert verified.status_code == 200
-    assert verified.json()["authority"] == "READ_ONLY_DEVICE_VERIFIED"
-
-    replay = client.post("/v1/device/command", json=payload)
-    assert replay.status_code == 401
-
-
-def test_device_authority_rejects_unsigned_privileged_action(monkeypatch, tmp_path) -> None:
-    client = configured_client(monkeypatch, tmp_path)
-    response = client.post(
-        "/v1/device/command",
+        "/v1/device/enroll", headers=headers,
         json={
-            "device_id": "0" * 64,
-            "nonce": "1" * 64,
-            "timestamp": int(time.time()),
-            "action": "execute",
-            "signature": "A" * 96,
+            "code": "one-time-enrollment-code-" + "z" * 32,
+            "public_key_pem": public_pem,
         },
     )
-    assert response.status_code == 400
+    assert enrolled.status_code == 403
+    assert enrolled.json()["error"] == "OPERATOR_SESSION_REQUIRED"
+
+    challenge = client.post(
+        "/v1/device/challenge", headers=headers,
+        json={"device_id": "0" * 64},
+    )
+    assert challenge.status_code == 403
+    assert challenge.json()["error"] == "OPERATOR_SESSION_REQUIRED"
+
+    unauthenticated_status = client.post(
+        "/v1/device/command", json={"action": "status"},
+    )
+    assert unauthenticated_status.status_code == 401
 
 
-def test_device_challenge_endpoint_caps_outstanding_challenges(monkeypatch, tmp_path) -> None:
+def test_device_routes_do_not_bypass_persistent_service_authentication(monkeypatch, tmp_path):
     client = configured_client(monkeypatch, tmp_path)
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    public_pem = private_key.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode("ascii")
-    code = "one-time-enrollment-code-" + "z" * 32
-    enrolled = client.post(
+    response = client.post(
         "/v1/device/enroll",
-        json={"code": code, "public_key_pem": public_pem},
+        json={"code": "x" * 40, "public_key_pem": "invalid"},
     )
-    assert enrolled.status_code == 201
-    device_id = enrolled.json()["device_id"]
+    assert response.status_code == 401
+    assert response.json()["error"] == "AUTHENTICATION_REQUIRED"
 
-    for _ in range(5):
-        response = client.post(
-            "/v1/device/challenge",
-            json={"device_id": device_id},
-        )
-        assert response.status_code == 200
-
-    limited = client.post(
-        "/v1/device/challenge",
-        json={"device_id": device_id},
-    )
-    assert limited.status_code == 429
-    assert limited.json()["error"] == "DEVICE_CHALLENGE_RATE_LIMITED"
 
 def test_federation_status_does_not_claim_unverified_network_is_active(monkeypatch, tmp_path):
     client = configured_client(monkeypatch, tmp_path)
