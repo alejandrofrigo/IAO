@@ -171,3 +171,27 @@ def test_signed_request_rejects_digest_field_mismatch_and_replay(tmp_path):
         authority.verify_request(
             proof, method="POST", path="/v1/tasks", request_digest=digest, owner_subject="operator"
         )
+
+
+def test_device_proofs_are_bound_to_the_enrolling_operator(tmp_path):
+    authority, private_key, device_id = _enrolled_authority(tmp_path)
+
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_OWNER_MISMATCH"):
+        authority.challenge(device_id, owner_subject="different-operator")
+
+    challenge = authority.challenge(device_id, owner_subject="operator")
+    proof = _signed_status(private_key, device_id, challenge["nonce"])
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_OWNER_MISMATCH"):
+        authority.verify_status(proof, owner_subject="different-operator")
+
+    digest = hashlib.sha256(b"{}").hexdigest()
+    request_challenge = authority.challenge(device_id, owner_subject="operator")
+    request_proof = _signed_request(
+        private_key, device_id, request_challenge["nonce"],
+        "POST", "/v1/tasks", digest,
+    )
+    with pytest.raises(DeviceAuthorityError, match="DEVICE_OWNER_MISMATCH"):
+        authority.verify_request(
+            request_proof, method="POST", path="/v1/tasks",
+            request_digest=digest, owner_subject="different-operator",
+        )
