@@ -8,13 +8,28 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="IAO API", version="11.2.0")
+@asynccontextmanager
+async def _runtime_lifespan(_app):
+    # Start persistent service and network workers during configured production boot.
+    # Liveness-only qualification may omit secrets; in that case the API remains
+    # live but readiness and service routes stay fail-closed.
+    if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
+            and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
+        try:
+            _get_service()
+        except Exception:
+            pass
+    yield
+
+
+app = FastAPI(title="IAO API", version="11.2.0", lifespan=_runtime_lifespan)
 _service = None
 _device_authority = None
 _federation_node = None
