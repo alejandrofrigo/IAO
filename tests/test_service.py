@@ -353,6 +353,7 @@ class QueuedTaskApiTests(Base):
         status, result = self.call("POST", "/v1/device/command", {}, proof)
         self.assertEqual(status, 200)
         self.assertEqual(result["authority"], "READ_ONLY_DEVICE_VERIFIED")
+        self.assertNotIn("device_id", result)
         audit = json.dumps(self.svc.store._all_events())
         self.assertNotIn(code, audit)
         self.assertNotIn(enrolled["device_id"], audit)
