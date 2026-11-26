@@ -42,9 +42,11 @@ the registry in its persistent state directory.
 Browser support now exists in web/operator-identity.js: it generates a P-256
 key in the browser, imports the private component as a non-extractable
 WebCrypto key, stores that CryptoKey in IndexedDB, submits only the public key
-for bootstrap, and signs the session challenge locally. The bootstrap
-capability is cleared from the input and is not persisted. This browser path
-has not yet passed target-mobile-browser end-to-end testing.
+for bootstrap, signs the session challenge locally, and can sign the canonical
+primary-device binding statement locally. web/device-authority.js retains the
+public device key in IndexedDB and exposes it only to the local root-binding
+flow. The bootstrap capability is cleared from the input and is not persisted.
+This browser path has not yet passed target-mobile-browser end-to-end testing.
 
 This is still not an end-to-end operator identity system. Trusted deployment
 provisioning, a usable non-guest authentication/session provider, enforcement
