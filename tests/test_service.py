@@ -60,6 +60,7 @@ class Base(unittest.TestCase):
     def test_offline_recovery_api_replaces_root_device_and_invalidates_old_challenges(self) -> None:
         bootstrap = "api-recovery-bootstrap-" + "b" * 48
         recovery = "api-offline-recovery-" + "r" * 48
+        next_recovery = "api-next-offline-recovery-" + "n" * 48
         old_root = ec.generate_private_key(ec.SECP256R1())
         old_public = old_root.public_key().public_bytes(
             serialization.Encoding.PEM,
@@ -89,6 +90,7 @@ class Base(unittest.TestCase):
                 "recovery_code": recovery,
                 "new_root_public_key_pem": new_root_public,
                 "new_device_public_key_pem": new_device_public,
+                "new_recovery_code": next_recovery,
             },
         )
         self.assertEqual(status, 200)
@@ -116,12 +118,13 @@ class Base(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["authority"], "OPERATOR_RECOVERED_READ_ONLY")
         self.assertEqual(result["key_version"], 2)
+        self.assertTrue(result["recovery_code_rotated"])
         self.assertTrue(self.svc.device_authority.verify_registered_public_key(
             new_device_public, owner_subject="operator:" + identity["identity_id"]
         ))
         with self.assertRaisesRegex(OperatorIdentityError, "INVALID_OPERATOR_RECOVERY_CODE"):
             authority.create_operator_recovery_challenge(
-                recovery, new_root_public, new_device_public,
+                recovery, new_root_public, new_device_public, "another-new-recovery-" + "z" * 40,
             )
         replay = self.call(
             "POST", "/v1/operator/recovery/complete", {},
