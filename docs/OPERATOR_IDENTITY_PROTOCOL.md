@@ -24,14 +24,17 @@ service exposes challenge, bind and read-only status routes, plus a
 rate-limited one-time bootstrap endpoint that is disabled unless deployment
 configuration supplies an out-of-band secret and expiry.
 A challenge is bound to the server-supplied authenticated subject digest,
-active root identity digest, root key version, one-time nonce, expiry and
-fixed protocol purpose; the root signature is verified and the challenge is
-consumed atomically before a single durable subject binding is recorded.
+the HMAC digest of the exact bearer token, active root identity digest, root
+key version, one-time nonce, expiry and fixed protocol purpose; the root
+signature is verified and the challenge is consumed atomically before a
+single durable session binding is recorded.
 Session verification fails closed after root rotation or revocation. The
 challenge response contains an opaque one-time handle and canonical signing
 payload, not the internal identity identifier, raw subject or bearer token.
 Only a domain-separated HMAC digest of the exact bearer token is persisted;
-a different token for the same subject cannot consume the challenge. API tests cover
+a different token for the same subject cannot consume the challenge or pass
+the session-status check. A new token for the same subject requires a fresh
+root signature and replaces the prior session association. API tests cover
 subject and token substitution, guest rejection, invalid signature, replay, expiry,
 restart persistence, rotation and revocation. The production service stores
 the registry in its persistent state directory.
