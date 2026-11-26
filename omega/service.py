@@ -200,7 +200,8 @@ class OmegaService:
             data = self._json(body)
             try:
                 enrolled = self.device_authority.enroll(
-                    data.get("code"), data.get("public_key_pem")
+                    data.get("code"), data.get("public_key_pem"),
+                    owner_subject=pr.subject,
                 )
             except DeviceAuthorityError as exc:
                 raise ApiError(exc.status, exc.code) from None
@@ -216,7 +217,7 @@ class OmegaService:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
             pr = self._auth(headers)
             try:
-                result = self.device_authority.verify_status(self._json(body))
+                result = self.device_authority.verify_status(self._json(body), owner_subject=pr.subject)
             except DeviceAuthorityError as exc:
                 self.store.audit(
                     pr.subject, "DEVICE_STATUS_DENIED", "primary_device",
@@ -237,7 +238,7 @@ class OmegaService:
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             data = self._json(body)
             try:
-                challenge = self.device_authority.challenge(data.get("device_id"))
+                challenge = self.device_authority.challenge(data.get("device_id"), owner_subject=pr.subject)
             except DeviceAuthorityError as exc:
                 raise ApiError(exc.status, exc.code) from None
             self.store.audit(
@@ -460,6 +461,7 @@ class OmegaService:
                 self.device_authority.verify_request(
                     proof, method="POST", path="/v1/tasks",
                     request_digest=request_digest,
+                    owner_subject=pr.subject,
                 )
             except DeviceAuthorityError as exc:
                 self.store.audit(
