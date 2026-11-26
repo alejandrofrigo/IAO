@@ -10,6 +10,7 @@ from pathlib import Path
 from omega.env_loader import load_env_files
 from omega.config import load_settings
 from omega.service import MAX_BODY, OmegaService
+from omega.device_authority import DeviceAuthority
 from omega.store import Store
 from omega.federation import MAX_MSG, Node
 from omega.federation_identity import load_or_create_key
@@ -53,6 +54,13 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         kw["model_adapter"] = RouterModelAdapter()
     else:
         kw.setdefault("model_adapter", adapter_from_env(dict(os.environ)))
+    kw.setdefault(
+        "device_authority",
+        DeviceAuthority(
+            state_dir / "device-authority.sqlite3",
+            enrollment_code=os.environ.get("IAO_DEVICE_ENROLLMENT_CODE", ""),
+        ),
+    )
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
 
@@ -197,7 +205,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     origin.rstrip("/") not in allowed
                     or requested_method not in {"POST", "GET"}
                     or not requested_headers.issubset(
-                        {"authorization", "content-type"}
+                        {"authorization", "content-type", "x-iao-device-proof"}
                     )
                 ):
                     self.send_response(403)
@@ -209,7 +217,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self.send_response(204)
                 self._cors_headers()
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-IAO-Device-Proof")
                 self.send_header("Access-Control-Max-Age", "600")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
