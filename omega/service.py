@@ -369,20 +369,30 @@ class OmegaService:
         idem = headers.get("idempotency-key")
         if idem is not None and not 1 <= len(idem) <= 128:
             raise ApiError(400, "INVALID_IDEMPOTENCY_KEY")
-        day = datetime.fromtimestamp(self.clock(), timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        if self.store.count_tasks_since(pr.subject, day) >= self.quota:
-            self.store.audit(pr.subject, "QUOTA", "daily_task_quota", decision="DENY", reason="QUOTA_EXCEEDED")
-            raise ApiError(429, "QUOTA_EXCEEDED")
         goal, cap, tin = d.get("goal"), d.get("capability"), d.get("input", {})
-        missing = [n for n, ok in (("goal", isinstance(goal, str) and 1 <= len(goal) <= 4000),
-                                   ("capability", isinstance(cap, str) and bool(cap)),
-                                   ("input", isinstance(tin, dict))) if not ok]
-        expires = datetime.fromtimestamp(self.clock() + self.ttl, timezone.utc).isoformat()
         request_digest = _digest({
             "goal": goal,
             "capability": cap,
             "input": tin,
         })
+        # Idempotent retries return the original task even when the owner has
+        # since reached the daily quota. A reused key with changed input fails.
+        if idem is not None:
+            previous = self.store.get_task_by_idempotency(pr.subject, idem)
+            if previous is not None:
+                previous_intent = json.loads(previous["intent_json"])
+                if previous_intent.get("request_digest") != request_digest:
+                    raise ApiError(409, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST")
+                self.store.audit(pr.subject, "TASK_IDEMPOTENT_REPLAY", previous["id"])
+                return 200, {**self._view(previous), "idempotent_replay": True}
+        day = datetime.fromtimestamp(self.clock(), timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        if self.store.count_tasks_since(pr.subject, day) >= self.quota:
+            self.store.audit(pr.subject, "QUOTA", "daily_task_quota", decision="DENY", reason="QUOTA_EXCEEDED")
+            raise ApiError(429, "QUOTA_EXCEEDED")
+        missing = [n for n, ok in (("goal", isinstance(goal, str) and 1 <= len(goal) <= 4000),
+                                   ("capability", isinstance(cap, str) and bool(cap)),
+                                   ("input", isinstance(tin, dict))) if not ok]
+        expires = datetime.fromtimestamp(self.clock() + self.ttl, timezone.utc).isoformat()
         intent = {"contract_version": "1.0", "goal": goal if isinstance(goal, str) else None,
                   "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [],
                   "request_digest": request_digest, "risk_class": "R0",
