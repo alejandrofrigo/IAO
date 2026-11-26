@@ -96,6 +96,16 @@ button:disabled{opacity:.5}
     }
   };
 
+  window.iaoClearOperatorSession = () => {
+    token = null;
+    conversationId = null;
+    messagesEl.replaceChildren();
+    messageEl.disabled = true;
+    sendBtn.disabled = true;
+    window.dispatchEvent(new Event("iao-session-changed"));
+    status("Identidad revocada. La sesión de operador se ha cerrado.");
+  };
+
   function addMessage(role, text) {
     const div = document.createElement("div");
     div.className = "msg " + (role === "user" ? "user" : "omega");
