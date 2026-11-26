@@ -372,7 +372,8 @@ def test_session_binding_rejects_invalid_signature_guest_and_expiry(tmp_path, mo
     expired_payload = base64.urlsafe_b64decode(
         expired["signing_payload"] + "=" * (-len(expired["signing_payload"]) % 4)
     )
-    monkeypatch.setattr("omega.operator_identity.time.time", lambda: time.time() + 1000)
+    future = time.time() + 1000
+    monkeypatch.setattr("omega.operator_identity.time.time", lambda: future)
     with pytest.raises(OperatorIdentityError, match="SESSION_CHALLENGE_EXPIRED"):
         authority.bind_authenticated_session(
             expired["challenge"], "verified-subject", sign(root_private, expired_payload)
