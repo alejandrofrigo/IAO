@@ -1,0 +1,443 @@
+"""IAO simultaneous multi-provider router with live-context synthesis; stdlib only."""
+from __future__ import annotations
+
+import concurrent.futures
+import json
+import os
+import stat
+import random
+import threading
+import time
+import urllib.request
+from urllib.parse import urlsplit
+from pathlib import Path
+
+CONFIG = Path.home() / ".config" / "iao" / "llm-providers.json"
+STATE = Path.home() / ".local" / "share" / "iao" / "llm-health.json"
+LOCK = threading.Lock()
+
+
+DECUFFED_ACCOUNT = (
+    Path.home() / ".config" / "iao" / "providers"
+    / "decuffed" / "account.json"
+)
+
+
+def _decuffed_account_key():
+    """Obtiene la credencial Decuffed sin exponerla."""
+    try:
+        info = DECUFFED_ACCOUNT.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            return ""
+        if info.st_uid != os.getuid():
+            return ""
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            return ""
+        account = json.loads(
+            DECUFFED_ACCOUNT.read_text(encoding="utf-8")
+        )
+        key = account.get("key", "")
+        if isinstance(key, str) and key.strip():
+            return key.strip()
+    except (OSError, ValueError, TypeError, AttributeError):
+        return ""
+    return ""
+
+
+def _secret_value(name):
+    if not isinstance(name, str) or not name:
+        return ""
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    if name == "DECUFFED_API_KEY":
+        return _decuffed_account_key()
+    env_file = Path.cwd() / ".env"
+    try:
+        for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, raw = line.split("=", 1)
+            if key.strip() != name:
+                continue
+            raw = raw.strip()
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("\\'", '"'):
+                raw = raw[1:-1]
+            return raw
+    except OSError:
+        pass
+    return ""
+
+def _read_json(path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def _write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+
+
+def _provider_url_allowed(url):
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme == "https":
+            return (
+                bool(parsed.hostname)
+                and not parsed.username
+                and not parsed.password
+                and not parsed.fragment
+            )
+        return (
+            parsed.scheme == "http"
+            and parsed.hostname in {
+                "shannonmd773o5vxz75byha5rkea7nzr3srotw46uwythq3pjl6y4cad.onion",
+                "nanogpt5wwal7shnauuilouj3gaewmk7lskqxdmxlbfz5ho4tdqeh2id.onion",
+                "vplomjjsd3hicadr6inrzu2uyykrqw4yc7wxjnjooj5smctmmpbhnkad.onion",
+                "bf7hn23jgyo5umvbi2lzzkb62ts3glxd2pnfksecqmyi4yglgdevs2ad.onion",
+            }
+            and parsed.port in (None, 80)
+            and not parsed.username
+            and not parsed.password
+            and not parsed.fragment
+        )
+    except (TypeError, ValueError):
+        return False
+
+def providers():
+    data = _read_json(CONFIG, {"providers": []})
+    return [
+        p for p in data.get("providers", [])
+        if isinstance(p, dict)
+        and p.get("enabled", True)
+        and isinstance(p.get("url"), str)
+        and _provider_url_allowed(p["url"])
+        and isinstance(p.get("model"), str)
+        and p["model"].strip()
+    ]
+
+
+def health():
+    return _read_json(STATE, {})
+
+
+def _request(provider, messages, timeout):
+    url = provider["url"].rstrip("/") + "/chat/completions"
+    key_env = provider.get("key_env", "")
+    key = _secret_value(key_env) if key_env else ""
+    if key_env and not key:
+        raise RuntimeError("provider credential unavailable")
+    if provider.get("id") == "arkapi-onion":
+        if _secret_value("IAO_ARKAPI_ALLOW_PAID") != "1":
+            raise RuntimeError("ArkAPI paid usage not explicitly authorized")
+        if provider.get("model") in ("", "MODEL_ID_REQUIRED"):
+            raise RuntimeError("ArkAPI model ID has not been verified")
+
+    payload = {
+        "model": provider["model"],
+        "messages": messages,
+        "stream": False,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Accept-Encoding": "identity",
+            **({"Authorization": "Bearer " + key} if key else {}),
+        },
+        method="POST",
+    )
+    parsed_url = urlsplit(url)
+    if parsed_url.scheme == "http" and parsed_url.hostname and parsed_url.hostname.endswith(".onion"):
+        from omega.tor_transport import request_json
+        data = request_json(
+            url=url,
+            body=payload,
+            headers=dict(req.header_items()),
+            timeout=timeout,
+        )
+    else:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read(2_000_000).decode("utf-8"))
+    msg = (data.get("choices") or [{}])[0].get("message") or {}
+    answer = msg.get("content")
+    if not isinstance(answer, str) or not answer.strip():
+        answer = msg.get("reasoning") or msg.get("reasoning_content") or ""
+    if not isinstance(answer, str) or not answer.strip():
+        raise ValueError("empty response")
+    upstream_model = data.get("model")
+    if not isinstance(upstream_model, str) or not upstream_model.strip():
+        upstream_model = None
+    else:
+        upstream_model = upstream_model.strip()[:120]
+    return answer.strip(), upstream_model
+
+
+def _record_success(ident):
+    with LOCK:
+        states = health()
+        states[ident] = {
+            "failures": 0,
+            "last_success": int(time.time()),
+            "retry_after": 0,
+        }
+        _write_json(STATE, states)
+
+
+def _record_failure(ident, exc):
+    with LOCK:
+        states = health()
+        previous = states.get(ident, {})
+        failures = min(int(previous.get("failures", 0)) + 1, 12)
+        delay = min(20 * (2 ** min(failures - 1, 4)), 300)
+        states[ident] = {
+            "failures": failures,
+            "last_error": type(exc).__name__,
+            "retry_after": int(time.time() + delay + random.randint(0, 8)),
+        }
+        _write_json(STATE, states)
+
+
+def _call_single_provider(p, messages, timeout):
+    ident = str(p.get("id", p["url"]))
+    answer, upstream_model = _request(p, messages, timeout)
+    _record_success(ident)
+    return {
+        "provider_id": ident[:120],
+        "configured_model": str(p["model"])[:120],
+        "upstream_model": upstream_model,
+        "priority": int(p.get("priority", 100)),
+        "reply": answer,
+    }
+
+
+def _synthesize_multi(messages, results, timeout):
+    if len(results) <= 1:
+        return None
+    primary = results[0]
+    summary_parts = []
+    for idx, item in enumerate(results, start=1):
+        label = f"{item['provider_id']} ({item.get('upstream_model') or item['configured_model']})"
+        summary_parts.append(f"[Cerebro {idx}: {label}]\n{item['reply'][:2200]}")
+
+    merge_prompt = [
+        {
+            "role": "system",
+            "content": (
+                "Eres el núcleo integrador de IAO. Varios motores de IA han respondido en paralelo "
+                "a la consulta del usuario usando el contexto recuperado. Combina y depura sus "
+                "respuestas en una sola salida clara, precisa y útil."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Consulta original:\n{messages[-1].get('content', '')}\n\n"
+                "Aportes paralelos de los proveedores:\n\n"
+                + "\n\n---\n\n".join(summary_parts)
+            ),
+        },
+    ]
+    try:
+        merged_text, merged_model = _request(
+            {
+                "url": primary.get("_url", ""),
+                "model": primary["configured_model"],
+                "key_env": primary.get("_key_env", ""),
+            },
+            merge_prompt,
+            min(timeout, 18),
+        ) if primary.get("_url") else (None, None)
+        if merged_text:
+            return merged_text, merged_model
+    except Exception:
+        pass
+    return None
+
+
+def _build_live_fallback_reply(messages, errors):
+    system_blobs = [
+        str(m.get("content") or "")
+        for m in messages
+        if m.get("role") == "system"
+    ]
+    combined_sys = "\n".join(system_blobs)
+
+    cleaned_items = []
+    for block in combined_sys.split("\n---\n"):
+        if "RESULTADO WEB" in block or "FUENTE:" in block:
+            title_m = None
+            url_m = None
+            snip_m = None
+            for ln in block.splitlines():
+                s = ln.strip()
+                if s.startswith("RESULTADO WEB"):
+                    title_m = s.split(":", 1)[1].strip() if ":" in s else s
+                elif s.startswith("URL:"):
+                    url_m = s.split(":", 1)[1].strip()
+                elif "EXTRACTO EXTERNO" in s:
+                    snip_m = s.split(":", 1)[1].strip() if ":" in s else s
+            parts = [x for x in (title_m, snip_m, url_m) if x]
+            if parts:
+                cleaned_items.append(" — ".join(parts))
+
+    if cleaned_items:
+        return "\n".join(f"• {it}" for it in cleaned_items[:4])
+
+    return "Sin resultados externos en este momento."
+
+
+def chat_with_metadata(messages, timeout=25):
+    candidates = providers()
+    if not candidates:
+        fallback_reply = _build_live_fallback_reply(messages, ["IAO_NO_PROVIDERS"])
+        return {
+            "reply": fallback_reply,
+            "model_identity": {
+                "provider_id": "live-context-fallback",
+                "active_providers": [],
+                "providers_count": 0,
+                "configured_model": "none",
+                "upstream_model": None,
+                "identity_status": "fallback_no_providers",
+            },
+        }
+
+    states = health()
+    now = time.time()
+
+    candidates.sort(key=lambda p: (
+        p.get("priority", 100),
+        states.get(p.get("id", ""), {}).get("failures", 0),
+    ))
+    ready = [
+        p for p in candidates
+        if float(states.get(p.get("id", ""), {}).get("retry_after", 0) or 0) <= now
+    ]
+    pool_candidates = ready if ready else candidates
+
+    errors = []
+    successes = []
+
+    max_workers = max(1, min(len(pool_candidates), 8))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(_call_single_provider, p, messages, timeout): p
+            for p in pool_candidates
+        }
+        try:
+            for fut in concurrent.futures.as_completed(future_map, timeout=timeout + 2.0):
+                prov = future_map[fut]
+                ident = str(prov.get("id", prov["url"]))
+                try:
+                    res = fut.result(timeout=0.5)
+                    res["_url"] = prov["url"]
+                    res["_key_env"] = prov.get("key_env", "")
+                    successes.append(res)
+                except Exception as exc:
+                    errors.append(f"{ident}:{type(exc).__name__}")
+                    _record_failure(ident, exc)
+        except concurrent.futures.TimeoutError:
+            for fut, prov in future_map.items():
+                if not fut.done():
+                    ident = str(prov.get("id", prov["url"]))
+                    errors.append(f"{ident}:TimeoutError")
+
+    if not successes:
+        return {
+            "reply": _build_live_fallback_reply(messages, errors),
+            "model_identity": {
+                "provider_id": "live-context-fallback",
+                "active_providers": [],
+                "providers_count": 0,
+                "configured_model": "fallback-aggregator",
+                "upstream_model": None,
+                "identity_status": "fallback_all_providers_failed",
+            },
+        }
+
+    successes.sort(key=lambda r: (r["priority"], r["provider_id"]))
+    primary = successes[0]
+    merged_reply = None
+    merged_upstream = None
+    if len(successes) >= 2:
+        merged_reply, merged_upstream = _synthesize_multi(messages, successes, timeout)
+
+    final_reply = merged_reply if merged_reply else primary["reply"]
+    upstream_model = merged_upstream or primary["upstream_model"]
+
+    return {
+        "reply": final_reply,
+        "model_identity": {
+            "provider_id": primary["provider_id"],
+            "active_providers": [s["provider_id"] for s in successes],
+            "providers_count": len(successes),
+            "configured_model": primary["configured_model"],
+            "upstream_model": upstream_model,
+            "identity_status": (
+                "multi_provider_simultaneous"
+                if len(successes) > 1
+                else ("upstream_model_reported" if upstream_model else "configured_model_only")
+            ),
+        },
+    }
+
+
+def chat(messages, timeout=25):
+    return chat_with_metadata(messages, timeout)["reply"]
+
+
+def status():
+    configured = providers()
+    states = health()
+    return {
+        "configured": len(configured),
+        "providers": [
+            {
+                "id": p.get("id", "unnamed"),
+                "model": p["model"],
+                "failures": states.get(p.get("id", ""), {}).get("failures", 0),
+                "last_success": states.get(p.get("id", ""), {}).get("last_success"),
+            }
+            for p in configured
+        ],
+    }
+
+
+class RouterModelAdapter:
+    def _prepare(self, messages):
+        from omega.adapters.model import ModelError, SYSTEM_PROMPT
+
+        prepared = list(messages)
+        if not prepared or prepared[-1].get("role") != "user":
+            raise ModelError("INVALID_PROMPT", 400)
+
+        if not any(m.get("role") == "system" for m in prepared):
+            prepared.insert(0, {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+            })
+        return prepared
+
+    def chat(self, messages):
+        return self.chat_with_metadata(messages)["reply"]
+
+    def chat_with_metadata(self, messages):
+        from omega.adapters.model import ModelError
+
+        prepared = self._prepare(messages)
+        try:
+            return chat_with_metadata(prepared)
+        except ModelError:
+            raise
+        except Exception:
+            raise ModelError("PROVIDER_UNAVAILABLE", 503) from None

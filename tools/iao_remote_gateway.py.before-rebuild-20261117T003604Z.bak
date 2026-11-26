@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+import base64
+import hashlib
+import hmac
+import http.client
+import json
+import os
+import secrets
+import socket
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs
+
+ROOT = Path(__file__).resolve().parent.parent
+CONFIG = Path.home() / ".config/iao/remote-access.json"
+HOST = "127.0.0.1"
+PORT = 8765
+UPSTREAM_HOST = "127.0.0.1"
+UPSTREAM_PORT = 8080
+SESSION_SECONDS = 28800
+MAX_BODY = 8 * 1024 * 1024
+
+LOGIN_PAGE = b"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acceso privado - IAO</title>
+<style>
+body{font-family:system-ui;background:#101827;color:#edf2f7;
+display:grid;place-items:center;min-height:90vh;margin:0}
+main{width:min(390px,88vw);padding:28px;background:#1c293b;
+border-radius:16px}input,button{box-sizing:border-box;width:100%;
+padding:13px;margin-top:12px;border-radius:8px;border:0}
+button{background:#3979d8;color:white;font-weight:bold}
+p{color:#bac8d9;font-size:14px}
+</style></head><body><main><h2>Chat publico IAO</h2>
+<p>Introduce la contrasena de acceso remoto.</p>
+<form method="post" action="/_remote/login">
+<input type="password" name="password" required
+autocomplete="current-password" placeholder="Contrasena">
+<button type="submit">Entrar</button></form></main></body></html>"""
+
+def decode_secret(value, expected):
+    if not isinstance(value, str):
+        raise ValueError("Formato de configuracion no valido")
+    try:
+        if len(value) == expected * 2:
+            raw = bytes.fromhex(value)
+        else:
+            raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except Exception as exc:
+        raise ValueError("Codificacion de configuracion no valida") from exc
+    if len(raw) != expected:
+        raise ValueError("Longitud de configuracion no valida")
+    return raw
+
+def load_config():
+    data = json.loads(CONFIG.read_text(encoding="utf-8"))
+    salt = decode_secret(data["salt"], 16)
+    password_hash = decode_secret(data["password_hash"], 32)
+    session_key = decode_secret(data["session_key"], 32)
+    return salt, password_hash, session_key
+
+SALT, PASSWORD_HASH, SESSION_KEY = load_config()
+
+def b64(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+def make_cookie():
+    payload = (str(int(time.time())) + ":" +
+               secrets.token_urlsafe(18)).encode("ascii")
+    encoded = b64(payload)
+    signature = hmac.new(
+        SESSION_KEY, encoded.encode("ascii"), hashlib.sha256
+    ).digest()
+    return encoded + "." + b64(signature)
+
+def valid_cookie(value):
+    try:
+        encoded, supplied = value.split(".", 1)
+        expected = hmac.new(
+            SESSION_KEY, encoded.encode("ascii"), hashlib.sha256
+        ).digest()
+        actual = base64.urlsafe_b64decode(
+            supplied + "=" * (-len(supplied) % 4)
+        )
+        if not hmac.compare_digest(expected, actual):
+            return False
+        payload = base64.urlsafe_b64decode(
+            encoded + "=" * (-len(encoded) % 4)
+        ).decode("ascii")
+        timestamp = int(payload.split(":", 1)[0])
+        age = int(time.time()) - timestamp
+        return 0 <= age <= SESSION_SECONDS
+    except Exception:
+        return False
+
+RATE_LOCK = threading.Lock()
+LOGIN_ATTEMPTS = {}
+
+def allow_login(address):
+    now = time.time()
+    with RATE_LOCK:
+        recent = [t for t in LOGIN_ATTEMPTS.get(address, [])
+                  if now - t < 300]
+        if len(recent) >= 8:
+            LOGIN_ATTEMPTS[address] = recent
+            return False
+        recent.append(now)
+        LOGIN_ATTEMPTS[address] = recent
+        return True
+
+class GatewayHandler(BaseHTTPRequestHandler):
+    server_version = "IAO-Remote-Gateway"
+    sys_version = ""
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def reply(self, status, body=b"", content_type="text/plain; charset=utf-8",
+              headers=None):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if headers:
+            for key, value in headers.items():
+                self.send_header(key, value)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def cookie_value(self):
+        raw = self.headers.get("Cookie", "")
+        for item in raw.split(";"):
+            name, sep, value = item.strip().partition("=")
+            if sep and name == "iao_remote":
+                return value
+        return ""
+
+    def authenticated(self):
+        return valid_cookie(self.cookie_value())
+
+    def do_GET(self):
+        if self.path == "/_remote/health":
+            self.reply(200, b"gateway_alive")
+            return
+        if self.path in ("/_remote/login", "/"):
+            if self.authenticated() and self.path == "/":
+                self.proxy()
+            else:
+                self.reply(200, LOGIN_PAGE, "text/html; charset=utf-8")
+            return
+        if self.path == "/_remote/logout":
+            self.reply(303, b"", headers={
+                "Location": "/",
+                "Set-Cookie": "iao_remote=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
+            })
+            return
+        self.require_auth()
+
+    def do_HEAD(self):
+        self.require_auth()
+
+    def do_POST(self):
+        if self.path == "/_remote/login":
+            self.login()
+            return
+        self.require_auth()
+
+    def do_PUT(self):
+        self.require_auth()
+
+    def do_PATCH(self):
+        self.require_auth()
+
+    def do_DELETE(self):
+        self.require_auth()
+
+    def do_OPTIONS(self):
+        self.require_auth()
+
+    def login(self):
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if origin:
+            from urllib.parse import urlsplit
+            if urlsplit(origin).netloc.lower() != host.lower():
+                self.reply(403, b"Origen no permitido")
+                return
+
+        address = self.client_address[0]
+        if not allow_login(address):
+            self.reply(429, b"Demasiados intentos. Espera unos minutos.")
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 4096:
+                self.reply(400, b"Solicitud no valida")
+                return
+            form = parse_qs(
+                self.rfile.read(length).decode("utf-8", "replace")
+            )
+            password = form.get("password", [""])[0]
+            candidate = hashlib.scrypt(
+                password.encode("utf-8"),
+                salt=SALT, n=2**14, r=8, p=1, dklen=32
+            )
+        except Exception:
+            self.reply(400, b"Solicitud no valida")
+            return
+
+        if not hmac.compare_digest(candidate, PASSWORD_HASH):
+            self.reply(401, b"Contrasena incorrecta")
+            return
+
+        cookie = make_cookie()
+        self.reply(303, b"", headers={
+            "Location": "/",
+            "Set-Cookie": (
+                "iao_remote=" + cookie +
+                "; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Strict"
+            )
+        })
+
+    def require_auth(self):
+        if not self.authenticated():
+            self.reply(401, b"Acceso privado IAO: inicia sesion en /")
+            return
+        self.proxy()
+
+    def proxy(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > MAX_BODY:
+                self.reply(413, b"Solicitud demasiado grande")
+                return
+            body = self.rfile.read(length) if length else None
+
+            conn = http.client.HTTPConnection(
+                UPSTREAM_HOST, UPSTREAM_PORT, timeout=90
+            )
+            headers = {}
+            for name in ("Content-Type", "Accept", "Authorization",
+                         "User-Agent", "X-Request-ID"):
+                value = self.headers.get(name)
+                if value:
+                    headers[name] = value
+            if body is not None:
+                headers["Content-Length"] = str(len(body))
+
+            conn.request(self.command, self.path, body=body, headers=headers)
+            response = conn.getresponse()
+            payload = response.read(MAX_BODY + 1)
+            status = response.status
+            response_headers = response.getheaders()
+            conn.close()
+
+            if len(payload) > MAX_BODY:
+                self.reply(502, b"Respuesta del servidor demasiado grande")
+                return
+
+            self.send_response(status)
+            blocked = {
+                "connection", "keep-alive", "transfer-encoding",
+                "proxy-authenticate", "proxy-authorization", "upgrade",
+                "content-length", "set-cookie"
+            }
+            for key, value in response_headers:
+                if key.lower() not in blocked:
+                    self.send_header(key, value)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(payload)
+        except Exception:
+            try:
+                self.reply(502, b"Servidor IAO no disponible")
+            except Exception:
+                pass
+
+def main():
+    server = ThreadingHTTPServer((HOST, PORT), GatewayHandler)
+    server.daemon_threads = True
+    print("IAO gateway listening on 127.0.0.1:8765", flush=True)
+    server.serve_forever()
+
+if __name__ == "__main__":
+    main()

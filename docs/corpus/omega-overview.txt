@@ -1,0 +1,2 @@
+IAO overview
+IAO is a governed AI platform. The model proposes, a deterministic policy authorizes, the executor applies, the verifier checks and the evidence log records. Task state is kept in the control plane and never inferred from model output.

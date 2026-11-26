@@ -1,0 +1,554 @@
+#!/usr/bin/env python3
+"""Federacion autonoma externa de IAO - pipeline con validacion mutua."""
+from __future__ import annotations
+import ssl
+import argparse, asyncio, base64, hashlib, json, os, secrets, sys, time, urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from omega.store import Store
+from omega.tools.registry import ToolRegistry
+from omega.federation import Node, verify_identity_challenge
+import omega.federation_transport as federation_transport
+import omega.federation_protocols.native  # noqa: F401
+import omega.federation_protocols.nostr   # noqa: F401
+from omega.federation_protocols import probe_any, get as get_adapter
+# El bridge real se importa DESPUÉS del stub para sobrescribir el registro global:
+import omega.federation_protocols.nostr_bridge  # noqa: F401
+
+STATE    = ROOT / ".state"
+NODES    = STATE / "iao-external-nodes.json"
+POLICY   = STATE / "iao-node-network/federation-policy.json"
+PEERS_V2 = STATE / "federation/identity/peers.json"
+PEERS_V1 = STATE / "iao-node-network/authorized-peers.json"
+INBOX    = STATE / "iao-node-network/federation-inbox"
+AUDIT    = STATE / "iao-node-network/federation-audit/events.jsonl"
+REPORT   = STATE / "iao-federation-autonomous-report.json"
+IDENTITY = STATE / "federation/identity"
+SOURCES  = STATE / "iao-federation-sources.json"
+
+def utc(): return datetime.now(timezone.utc).isoformat()
+def load(p, d): return json.loads(p.read_text(encoding="utf-8")) if p.exists() else d
+def save(p, data):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
+def audit(event, **fields):
+    AUDIT.parent.mkdir(parents=True, exist_ok=True)
+    with AUDIT.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"timestamp": utc(), "event": event, **fields}, ensure_ascii=False) + "\n")
+
+def discover_signed_directory(url, trusted_pub_hex, timeout=15):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    try:
+        doc = federation_transport.request_json(
+            url, method="GET", timeout=timeout, max_bytes=1_000_000
+        )
+        if not isinstance(doc, dict):
+            raise ValueError("INVALID_DIRECTORY_DOCUMENT")
+    except Exception as e:
+        audit("discovery_directory_failed", url=url, error=str(e)[:120])
+        return []
+
+    sig = doc.pop("sig", None)
+    if not sig:
+        audit("discovery_directory_unsigned", url=url)
+        return []
+
+    body = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pub_hex)).verify(
+            base64.b64decode(sig, validate=True), body
+        )
+    except Exception:
+        audit("discovery_directory_bad_signature", url=url)
+        return []
+
+    peers = doc.get("peers", [])
+    if not isinstance(peers, list):
+        return []
+
+    out = []
+    for p in peers:
+        if isinstance(p, dict) and p.get("id") and p.get("url"):
+            out.append({
+                "url": p["url"],
+                "id": p["id"],
+                "capabilities": p.get("capabilities", []),
+                "source": f"signed_directory:{url}",
+            })
+
+    audit("discovery_directory_ok", url=url, peers=len(out))
+    return out
+
+
+def discover_feed(url, timeout=10):
+    try:
+        data = federation_transport.request_json(
+            url, method="GET", timeout=timeout, max_bytes=500_000
+        )
+    except Exception as e:
+        audit("discovery_feed_failed", url=url, error=str(e)[:120])
+        return []
+
+    peers = data if isinstance(data, list) else (
+        data.get("peers", []) if isinstance(data, dict) else []
+    )
+    out = []
+    for p in peers:
+        if isinstance(p, dict) and p.get("id") and p.get("url"):
+            out.append({
+                "url": p["url"],
+                "id": p["id"],
+                "capabilities": p.get("capabilities", []),
+                "source": f"feed:{url}",
+            })
+
+    audit("discovery_feed_ok", url=url, peers=len(out))
+    return out
+
+
+def discover_dht(ipfs_api):
+    try:
+        req = urllib.request.Request(f"{ipfs_api}/api/v0/swarm/peers", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read(500_000))
+    except Exception:
+        return []
+    out = []
+    for p in data.get("Peers", []):
+        addr = p.get("Addr", "")
+        parts = addr.split("/")
+        host = port = None
+        for i, x in enumerate(parts):
+            if x == "ip4" and i+1 < len(parts): host = parts[i+1]
+            if x == "tcp" and i+1 < len(parts): port = parts[i+1]
+        if host and port:
+            out.append({"url": f"https://{host}:{port}", "id": None,
+                        "capabilities": [], "source": "dht"})
+    return out
+
+def run_discovery():
+    sources = load(SOURCES, {})
+    candidates = []
+    for d in sources.get("signed_directories", []):
+        if d.get("url") and d.get("pubkey_hex"):
+            candidates.extend(discover_signed_directory(d["url"], d["pubkey_hex"]))
+    for f in sources.get("feeds", []):
+        if isinstance(f, str) and f.startswith("https://"):
+            candidates.extend(discover_feed(f))
+    dht = sources.get("dht", {})
+    if dht.get("enabled"):
+        candidates.extend(discover_dht(dht.get("ipfs_api", "http://127.0.0.1:5001")))
+    bridges = sources.get("bridges", {})
+    nostr_cfg = bridges.get("nostr", {})
+    if nostr_cfg.get("enabled"):
+        try:
+            from omega.federation_protocols.nostr_bridge import discover_nostr_authorizations
+            relays = nostr_cfg.get("relays") or None
+            events = asyncio.run(discover_nostr_authorizations(relays))
+            for ev in events:
+                candidates.append({
+                    "url": f"nostr://{ev.get('pubkey','')}",
+                    "id": None,
+                    "authorized": False,
+                    "capabilities": ["knowledge.search"],
+                    "source": "nostr_bridge",
+                    "nostr_event": ev,
+                })
+            audit("discovery_nostr_ok", events=len(events))
+        except Exception as e:
+            audit("discovery_nostr_failed", error=str(e)[:120])
+    return candidates
+
+def merge_candidates_into_nodes(candidates):
+    cfg = load(NODES, {"nodes": []})
+    ids = {n.get("id") for n in cfg.get("nodes", []) if n.get("id")}
+    added = 0
+    for c in candidates:
+        if not c.get("id") or c["id"] in ids: continue
+        cfg["nodes"].append({"url": c["url"], "id": c["id"],
+            "authorized": False,
+            "capabilities": c.get("capabilities", []),
+            "source": c.get("source", "unknown")})
+        ids.add(c["id"]); added += 1
+    save(NODES, cfg); return added
+
+def probe_and_verify(addr):
+    hit = probe_any(addr)
+    if not hit: return None
+    protocol, candidate = hit
+    if protocol != "iao-federation":
+        return protocol, candidate, {"ok": False, "error": "NO_BRIDGE"}
+    requester_id = secrets.token_hex(8)
+    nonce = secrets.token_hex(32)
+    request_ts = time.time()
+    origin = candidate["endpoint"]
+    challenge = {"v": 1, "from": requester_id,
+                 "to": candidate["identity_doc"]["node_id"],
+                 "nonce": nonce, "ts": request_ts}
+    try:
+        req = urllib.request.Request(origin + "/fed/v1/handshake", method="POST",
+            data=json.dumps(challenge).encode(),
+            headers={"Content-Type": "application/json"})
+        # mTLS obligatorio: certificado cliente real y HTTPS, sin degradación.
+        _policy = load(POLICY, {})
+        _ctx = None
+        if _policy.get("require_mutual_tls"):
+            if not origin.startswith("https://"):
+                audit("handshake_blocked_mtls_https_required", addr=addr)
+                return protocol, candidate, {
+                    "ok": False, "error": "MTLS_HTTPS_REQUIRED"
+                }
+
+            _cert = os.environ.get("IAO_FEDERATION_MTLS_CERT")
+            _key = os.environ.get("IAO_FEDERATION_MTLS_KEY")
+            _ca = os.environ.get("IAO_FEDERATION_MTLS_CA")
+
+            if (not _cert or not _key
+                    or not Path(_cert).is_file()
+                    or not Path(_key).is_file()):
+                audit("handshake_blocked_mtls_client_certificate_missing",
+                      addr=addr)
+                return protocol, candidate, {
+                    "ok": False,
+                    "error": "MTLS_CLIENT_CERTIFICATE_NOT_CONFIGURED"
+                }
+
+            if _ca and not Path(_ca).is_file():
+                audit("handshake_blocked_mtls_ca_missing", addr=addr)
+                return protocol, candidate, {
+                    "ok": False, "error": "MTLS_CA_FILE_NOT_FOUND"
+                }
+
+            try:
+                _ctx = ssl.create_default_context(
+                    cafile=_ca if _ca else None
+                )
+                _ctx.load_cert_chain(certfile=_cert, keyfile=_key)
+            except Exception as e:
+                audit("handshake_blocked_mtls_certificate_invalid",
+                      addr=addr, error=type(e).__name__)
+                return protocol, candidate, {
+                    "ok": False,
+                    "error": "MTLS_CLIENT_CERTIFICATE_INVALID",
+                    "detail": type(e).__name__
+                }
+        elif origin.startswith("https://"):
+            # Mantener la validación TLS normal y la CA personalizada existente.
+            _ca_file = os.environ.get("IAO_TLS_CA_FILE")
+            try:
+                _ctx = ssl.create_default_context(
+                    cafile=_ca_file if _ca_file else None
+                )
+            except Exception as e:
+                audit("handshake_tls_context_error",
+                      addr=addr, error=type(e).__name__)
+                return protocol, candidate, {
+                    "ok": False, "error": "TLS_CONTEXT_INVALID"
+                }
+
+        response = federation_transport.request_json(
+            origin + "/fed/v1/handshake",
+            method="POST",
+            payload=challenge,
+            timeout=8,
+            max_bytes=4096,
+            ssl_context=_ctx,
+            allow_loopback=(
+                os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") == "1"
+            ),
+        )
+    except Exception as e:
+        audit("handshake_unreachable", addr=addr,
+              error=f"{type(e).__name__}:{str(e)[:120]}")
+        return protocol, candidate, {"ok": False,
+                                      "error": "HANDSHAKE_UNREACHABLE",
+                                      "detail": type(e).__name__}
+    verified = verify_identity_challenge(candidate["identity_doc"], response,
+        requester_id=requester_id, nonce=nonce,
+        request_ts=request_ts, now=time.time(), skew=60.0)
+    if not verified.get("ok"):
+        audit("handshake_rejected", addr=addr, error=verified.get("error"))
+    else:
+        audit("handshake_verified", addr=addr, peer_id=verified["peer_id"])
+    return protocol, candidate, verified
+
+def _registry_with_knowledge():
+    """Registry con knowledge.search real, igual que omega/server.py."""
+    import os
+    from omega.tools.knowledge_search import KnowledgeCorpus
+    from omega.tools.registry import ToolSpec
+    corpus_dir = Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus"))
+    corpus = KnowledgeCorpus(corpus_dir)
+    r = ToolRegistry()
+    if r.get("knowledge.search") is None:
+        r.register(ToolSpec("knowledge.search", "1.0.0", "knowledge.search",
+                            "READ_ONLY", 5.0,
+                            corpus.validate_input, corpus.run, corpus.verify))
+    return r
+
+def make_node(policy):
+    key = load_pem_private_key((IDENTITY / "private.pem").read_bytes(), password=None)
+    return Node(store=Store(str(STATE / "store.db")), registry=_registry_with_knowledge(),
+                key=key, peer_store_path=PEERS_V2,
+                served=frozenset(policy.get("allowed_capabilities", [])))
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+def _peer_is_loopback(url):
+    from urllib.parse import urlsplit
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host in _LOOPBACK_HOSTS
+
+def enroll_if_consented(node, protocol, candidate, verified, item, policy):
+    # Salvaguarda por-peer: si mTLS está desactivado (solo permitido en
+    # entornos de integración), rechazar cualquier peer que no sea loopback.
+    # En producción require_mutual_tls debe ser True.
+    if not policy.get("require_mutual_tls"):
+        candidate_url = candidate.get("endpoint") if isinstance(candidate, dict) else None
+        if candidate_url is None and isinstance(item, dict):
+            candidate_url = item.get("url")
+        if not _peer_is_loopback(candidate_url or ""):
+            audit("peer_blocked_mtls_required",
+                  peer_url=str(candidate_url)[:200])
+            return {
+                "status": "BLOCKED_MTLS_REQUIRED_NON_LOOPBACK",
+                "peer_id": (verified or {}).get("peer_id"),
+                "peer_url": str(candidate_url)[:200],
+                "policy": "Sin mTLS solo loopback puede enrolarse.",
+            }
+    if protocol == "nostr":
+        peer_id = verified.get("peer_id")
+        if not peer_id:
+            return {"status": "SKIPPED_NO_PEER_ID", "protocol": "nostr"}
+    else:
+        peer_id = candidate["identity_doc"]["node_id"]
+    # Enrolamiento autónomo: la confianza proviene de la verificación
+    # criptográfica completa (handshake firmado) y de que las capacidades
+    # solicitadas estén en la allowlist READ_ONLY. No se requiere flag
+    # authorized=True previo. La decisión queda auditada.
+    policy_caps = set(policy.get("allowed_capabilities", []))
+    requested_caps = set(item.get("capabilities", [])) & policy_caps
+    if not requested_caps:
+        return {"status": "SKIPPED_NO_ALLOWED_CAPABILITIES", "peer_id": peer_id}
+    if not verified.get("ok"):
+        return {"status": "SKIPPED_HANDSHAKE_FAILED", "peer_id": peer_id,
+                "error": verified.get("error")}
+    if not verified.get("ok"):
+        return {"status": "SKIPPED_HANDSHAKE_FAILED", "peer_id": peer_id,
+                "error": verified.get("error")}
+    adapter = get_adapter(protocol)
+    if not adapter: return {"status": "SKIPPED_NO_ADAPTER", "protocol": protocol}
+    contract = adapter.to_participation_contract(candidate)
+    if not contract: return {"status": "SKIPPED_NO_BRIDGE", "protocol": protocol}
+    allowed = set(policy.get("allowed_capabilities", []))
+    requested = set(item.get("capabilities", [])) & allowed
+    if not requested:
+        return {"status": "SKIPPED_NO_ALLOWED_CAPABILITIES", "peer_id": peer_id}
+    contract["lease_expires_at"] = time.time() + 3600
+    contract["capabilities"] = sorted(requested)
+    # Evitar reinscripciones y propuestas duplicadas para peers ya vigentes.
+    existing = node.peers.get(peer_id)
+    if isinstance(existing, dict) and not existing.get("revoked", True):
+        try:
+            old_pub = existing.get("pub")
+            if not isinstance(old_pub, bytes):
+                old_pub = base64.b64decode(existing.get("pubkey", ""), validate=True)
+            new_pub = base64.b64decode(contract["pubkey"], validate=True)
+
+            same_identity = old_pub == new_pub
+            same_endpoint = existing.get("endpoint") == contract.get("endpoint")
+            same_capabilities = (
+                set(existing.get("capabilities", [])) == requested
+            )
+            same_grants = (
+                set(existing.get("granted_capabilities", [])) == requested
+            )
+            lease_valid = (
+                float(existing.get("lease_expires_at", 0)) > time.time() + 300
+            )
+
+            if (same_identity and same_endpoint and same_capabilities
+                    and same_grants and lease_valid):
+                audit("peer_already_enrolled", peer_id=peer_id,
+                      capabilities=sorted(requested))
+                return {
+                    "status": "ALREADY_ENROLLED",
+                    "peer_id": peer_id,
+                    "capabilities": sorted(requested),
+                }
+        except (TypeError, ValueError, KeyError):
+            # Estado incompleto o inconsistente: continuar por la vía normal
+            # de validación y reinscripción, sin darlo por válido.
+            pass
+
+    # Registro autónomo de la autorización en el ledger de candidatos.
+    try:
+        registry = CandidateRegistry(STATE / "iao-federation-candidates.json")
+        try:
+            registry.authorize(item["candidate_id"])
+        except Exception:
+            # Si ya estaba autorizado o el registro no está, continuar.
+            pass
+    except Exception:
+        pass
+
+    try:
+        node.enroll(contract, granted_capabilities=sorted(requested))
+    except Exception as e:
+        audit("enroll_failed", peer_id=peer_id, error=str(e)[:200])
+        return {"status": "ENROLL_FAILED", "peer_id": peer_id, "error": str(e)[:200]}
+    peers = load(PEERS_V1, {"schema": 1, "authorized_peers": []})
+    peers["authorized_peers"] = [p for p in peers.get("authorized_peers", [])
+                                  if p.get("node_id") != peer_id]
+    peers["authorized_peers"].append({"node_id": peer_id, "endpoint": candidate["endpoint"],
+        "status": "AUTHORIZED", "capabilities": sorted(requested),
+        "protocol": protocol, "enrolled_at": utc(),
+        "source": "autonomous_pipeline"})
+    save(PEERS_V1, peers)
+    registry_path = STATE / "iao-node-network/nodes.json"
+    registry = load(registry_path, {"schema": 1, "nodes": {}})
+    registry.setdefault("nodes", {})[peer_id] = {
+        "node_id": peer_id,
+        "name": f"peer-{peer_id[:8]}",
+        "status": "ENROLLED_PENDING_CONTROL_PLANE",
+        "transport": (
+            "HTTPS" if str(candidate["endpoint"]).startswith("https://")
+            else "LOOPBACK_HTTP_TEST"
+        ),
+        "last_handshake_verified": utc(),
+        "endpoint": candidate["endpoint"],
+        "capabilities": sorted(requested),
+        "protocol": protocol,
+        "control_plane_admission": "PENDING",
+        "operational": False,
+    }
+    save(registry_path, registry)
+    INBOX.mkdir(parents=True, exist_ok=True)
+    proposal_id = hashlib.sha256((peer_id + utc()).encode()).hexdigest()
+    save(INBOX / f"{proposal_id}.json", {"schema": 1, "proposal_id": proposal_id,
+        "source": "IAO_FEDERATED_NODE", "node_id": peer_id,
+        "protocol": protocol, "capabilities": sorted(requested),
+        "requested_action": "CAPABILITY_CATALOG_UPDATE",
+        "execution_authority": "NONE",
+        "status": "STAGED_FOR_PADGE_REVIEW", "created_at": utc()})
+    audit("peer_enrolled", peer_id=peer_id, capabilities=sorted(requested), mode="AUTONOMOUS")
+    return {"status": "ENROLLED", "peer_id": peer_id, "capabilities": sorted(requested)}
+
+def run_cycle(dry_run=False, discover=True):
+    policy = load(POLICY, {})
+    if not policy.get("enabled"): return {"status": "FEDERATION_DISABLED"}
+
+    discovery_summary = {"candidates_added": 0}
+    if discover:
+        candidates = run_discovery()
+        discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
+        discovery_summary["candidates_discovered"] = len(candidates)
+    items = [n for n in load(NODES, {"nodes": []}).get("nodes", []) if isinstance(n, dict)]
+    node = make_node(policy) if not dry_run else None
+    results = []
+    for item in items:
+        addr = item.get("url")
+        if not isinstance(addr, str): continue
+        # Nostr acredita consentimiento de una clave, no identidad de un nodo IAO.
+        # Nunca convertir el bridge Nostr en peer ni llamar a Node.enroll().
+        if item.get("source") == "nostr_bridge" and item.get("nostr_event"):
+            from omega.federation_protocols.nostr_bridge import NostrBridge
+            bridge = NostrBridge()
+            candidate = {"nostr_event": item["nostr_event"], "endpoint": addr}
+            contract = bridge.to_participation_contract(candidate)
+
+            if not contract:
+                results.append({
+                    "addr": addr,
+                    "protocol": "nostr",
+                    "status": "NOSTR_CONSENT_INVALID",
+                    "consent_verified": False,
+                    "federation_enrolled": False
+                })
+                continue
+
+            operator_authorized = bool(item.get("authorized"))
+            if dry_run:
+                results.append({
+                    "addr": addr,
+                    "protocol": "nostr",
+                    "status": "NOSTR_CONSENT_VALIDATED_NOT_FEDERATED",
+                    "consent_verified": True,
+                    "operator_authorized": operator_authorized,
+                    "federation_enrolled": False
+                })
+                continue
+
+            audit(
+                "nostr_consent_observed_not_federated",
+                endpoint_scheme="nostr",
+                operator_authorized=operator_authorized,
+                federation_enrolled=False
+            )
+
+            results.append({
+                "addr": addr,
+                "protocol": "nostr",
+                "status": (
+                    "NOSTR_CONSENT_RECORDED_NOT_FEDERATED"
+                    if operator_authorized
+                    else "NOSTR_CONSENT_VERIFIED_OPERATOR_AUTHORIZATION_REQUIRED"
+                ),
+                "consent_verified": True,
+                "operator_authorized": operator_authorized,
+                "federation_enrolled": False,
+                "peer_id": None
+            })
+            continue
+        probed = probe_and_verify(addr)
+        if not probed:
+            results.append({"addr": addr, "status": "NO_PROTOCOL_MATCH"}); continue
+        protocol, candidate, verified = probed
+        if dry_run:
+            results.append({"addr": addr, "protocol": protocol,
+                            "handshake_ok": bool(verified.get("ok")),
+                            "operator_authorized": bool(item.get("authorized"))})
+            continue
+        results.append({"addr": addr, "protocol": protocol,
+                        **enroll_if_consented(node, protocol, candidate, verified, item, policy)})
+    report = {"utc": utc(), "policy_mode": policy.get("padge_mode"),
+        "discovery": discovery_summary, "total_items": len(items), "results": results,
+        "summary": {
+            "enrolled": sum(1 for r in results if r.get("status") == "ENROLLED"),
+            "skipped_not_authorized": sum(1 for r in results if r.get("status","").startswith("SKIPPED_NOT_AUTHORIZED")),
+            "skipped_handshake": sum(1 for r in results if r.get("status","").startswith("SKIPPED_HANDSHAKE")),
+            "failed": sum(1 for r in results if r.get("status") == "ENROLL_FAILED")}}
+    if not dry_run:
+        save(REPORT, report); audit("autonomous_cycle_completed", **report["summary"])
+    return report
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-discover", action="store_true")
+    ap.add_argument("--watch", action="store_true")
+    args = ap.parse_args()
+    if args.watch:
+        while True:
+            try:
+                print(json.dumps(run_cycle(args.dry_run, not args.no_discover),
+                                 indent=2, ensure_ascii=False))
+            except Exception as e:
+                audit("cycle_error", error=str(e)[:200])
+            time.sleep(int(load(SOURCES, {"interval_seconds": 300}).get("interval_seconds", 300)))
+    else:
+        print(json.dumps(run_cycle(args.dry_run, not args.no_discover),
+                         indent=2, ensure_ascii=False))
+
+if __name__ == "__main__":
+    main()

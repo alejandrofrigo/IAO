@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+import base64, hashlib, hmac, http.client, json, os, secrets, sys, time
+from collections import defaultdict, deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs
+
+ROOT = Path(__file__).resolve().parent.parent
+CONFIG = Path.home() / ".config/iao/remote-access.json"
+HOST, PORT = "127.0.0.1", 8765
+UPSTREAM_HOST, UPSTREAM_PORT = "127.0.0.1", 8080
+COOKIE = "iao_remote"
+MAX_BODY = 1_100_000
+ATTEMPTS = defaultdict(deque)
+LOCKED_UNTIL = {}
+
+def load_config():
+    data = json.loads(CONFIG.read_text())
+    if not all(k in data for k in ("salt", "password_hash", "session_key")):
+        raise RuntimeError("Configuración incompleta")
+    return data
+
+CFG = load_config()
+SALT = bytes.fromhex(CFG["salt"])
+PASSWORD_HASH = bytes.fromhex(CFG["password_hash"])
+SESSION_KEY = bytes.fromhex(CFG["session_key"])
+
+def b64(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+def unb64(value):
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+def make_cookie():
+    payload = (str(int(time.time())) + ":" + secrets.token_urlsafe(18)).encode()
+    sig = hmac.new(SESSION_KEY, payload, hashlib.sha256).digest()
+    return b64(payload) + "." + b64(sig)
+
+def valid_cookie(value):
+    try:
+        p, s = value.split(".", 1)
+        payload, signature = unb64(p), unb64(s)
+        expected = hmac.new(SESSION_KEY, payload, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            return False
+        issued = int(payload.split(b":", 1)[0])
+        return 0 <= time.time() - issued <= 8 * 60 * 60
+    except Exception:
+        return False
+
+LOGIN_PAGE = b"""<!doctype html><html lang="es"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acceso protegido · IAO</title>
+<style>
+body{font:16px system-ui;background:#10151d;color:#edf2f7;display:grid;
+place-items:center;min-height:90vh;margin:0}
+main{width:min(390px,88vw);background:#1c2633;padding:26px;border-radius:16px}
+input,button{box-sizing:border-box;width:100%;padding:13px;margin-top:12px;
+border-radius:8px;border:1px solid #526174;font:inherit}
+button{background:#3269a8;color:white;border:0;font-weight:600}
+p{color:#bdc8d6;font-size:14px}
+</style><main><h1>IAO</h1><h2>Acceso protegido</h2>
+<p>Introduce la contraseña de acceso remoto.</p>
+<form method="post" action="/_remote/login">
+<input name="password" type="password" autocomplete="current-password"
+required autofocus placeholder="Contraseña">
+<button type="submit">Entrar</button></form></main></html>"""
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "IAO-Remote-Gateway"
+    sys_version = ""
+
+    def log_message(self, fmt, *args):
+        # No registrar cabeceras, cookies, cuerpos ni consultas.
+        sys.stderr.write("gateway " + (fmt % args).split("?")[0] + "\n")
+
+    def reply(self, code, body, content_type="text/plain; charset=utf-8",
+              extra=()):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for k, v in extra:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def authenticated(self):
+        raw = self.headers.get("Cookie", "")
+        for part in raw.split(";"):
+            k, sep, v = part.strip().partition("=")
+            if sep and k == COOKIE and valid_cookie(v):
+                return True
+        return False
+
+    def login(self):
+        # Evita login CSRF desde otro origen.
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if origin:
+            from urllib.parse import urlsplit
+            if urlsplit(origin).netloc.lower() != host.lower():
+                return self.reply(403, b"Origen no permitido")
+        ip = self.headers.get("CF-Connecting-IP", self.client_address[0])
+        now = time.time()
+        if LOCKED_UNTIL.get(ip, 0) > now:
+            return self.reply(429, b"Demasiados intentos. Espera unos minutos.")
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length > 4096:
+            return self.reply(413, b"Solicitud demasiado grande")
+        raw = self.rfile.read(length).decode("utf-8", "replace")
+        password = parse_qs(raw).get("password", [""])[0]
+        attempts = ATTEMPTS[ip]
+        while attempts and now - attempts[0] > 600:
+            attempts.popleft()
+        candidate = hashlib.scrypt(password.encode(), salt=SALT,
+                                   n=2**14, r=8, p=1, dklen=32)
+        if not hmac.compare_digest(candidate, PASSWORD_HASH):
+            attempts.append(now)
+            if len(attempts) >= 5:
+                LOCKED_UNTIL[ip] = now + 600
+                attempts.clear()
+            return self.reply(401, b"Contraseña incorrecta")
+        attempts.clear()
+        cookie = make_cookie()
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie",
+            f"{COOKIE}={cookie}; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Strict")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/_remote/logout":
+            return self.reply(200, b"Sesion cerrada", extra=[
+                ("Set-Cookie", f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict")])
+        if not self.authenticated():
+            return self.reply(200, LOGIN_PAGE, "text/html; charset=utf-8",
+                [("Content-Security-Policy",
+                  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")])
+        self.proxy()
+
+    def do_POST(self):
+        if self.path == "/_remote/login":
+            return self.login()
+        if not self.authenticated():
+            return self.reply(401, b"Acceso requerido")
+        self.proxy()
+
+    def do_OPTIONS(self):
+        if not self.authenticated():
+            return self.reply(401, b"Acceso requerido")
+        self.proxy()
+
+    def proxy(self):
+        if not self.path.startswith("/") or self.path.startswith("//"):
+            return self.reply(400, b"Ruta no valida")
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length < 0 or length > MAX_BODY:
+            return self.reply(413, b"Solicitud demasiado grande")
+        body = self.rfile.read(length) if length else None
+        allowed = {"accept", "content-type", "authorization", "user-agent",
+                   "x-request-id", "content-length"}
+        headers = {k: v for k, v in self.headers.items()
+                   if k.lower() in allowed}
+        headers["Host"] = f"{UPSTREAM_HOST}:{UPSTREAM_PORT}"
+        conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=90)
+        try:
+            conn.request(self.command, self.path, body=body, headers=headers)
+            response = conn.getresponse()
+            data = response.read(MAX_BODY + 1)
+            if len(data) > MAX_BODY:
+                return self.reply(502, b"Respuesta del servicio demasiado grande")
+            self.send_response(response.status)
+            for k, v in response.getheaders():
+                if k.lower() in {"content-type", "cache-control",
+                                  "x-content-type-options", "content-security-policy"}:
+                    self.send_header(k, v)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception:
+            self.reply(502, b"Servicio IAO no disponible")
+        finally:
+            conn.close()
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--check"]:
+        print("CONFIG_OK")
+        print("UPSTREAM_OK" if __import__("urllib.request").request.urlopen(
+            "http://127.0.0.1:8080/health/live", timeout=4).status == 200 else "UPSTREAM_ERROR")
+        raise SystemExit(0)
+    print(f"IAO remote gateway listening on {HOST}:{PORT}", flush=True)
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

@@ -1,0 +1,520 @@
+"""IAO live multi-source web search engine using Python standard library only."""
+from __future__ import annotations
+
+import concurrent.futures
+import json
+import os
+import re
+import unicodedata
+import urllib.parse
+import urllib.request
+from typing import Any
+
+USER_AGENT = "Mozilla/5.0 (Linux; Android 14) SO-Omega-IAO-LiveSearch/4.0"
+
+
+def _strip_accents(text: str) -> str:
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", text)
+        if unicodedata.category(ch) != "Mn"
+    )
+
+
+def _http_get_json(url: str, timeout: float = 8.0) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Encoding": "identity",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(1_200_000).decode("utf-8", errors="replace")
+    return json.loads(raw)
+
+
+def _ddg_search(query: str, limit: int = 4, timeout: float = 8.0) -> list[dict[str, str]]:
+    q = urllib.parse.quote_plus(query.strip())
+    url = f"https://api.duckduckgo.com/?q={q}&format=json&no_html=1&skip_disambig=1"
+    data = _http_get_json(url, timeout=timeout)
+    if not isinstance(data, dict):
+        return []
+
+    items: list[dict[str, str]] = []
+    abstract = (data.get("AbstractText") or "").strip()
+    abs_url = (data.get("AbstractURL") or "").strip()
+    heading = (data.get("Heading") or query).strip()
+    if abstract:
+        items.append({
+            "source": abs_url or "https://duckduckgo.com",
+            "title": heading,
+            "snippet": abstract[:500],
+            "engine": "duckduckgo",
+        })
+
+    def _walk_topics(topics: list[Any]) -> None:
+        for entry in topics:
+            if len(items) >= limit:
+                return
+            if isinstance(entry, dict):
+                if isinstance(entry.get("Topics"), list):
+                    _walk_topics(entry["Topics"])
+                else:
+                    text = (entry.get("Text") or "").strip()
+                    first_url = (entry.get("FirstURL") or "").strip()
+                    if text and first_url:
+                        items.append({
+                            "source": first_url,
+                            "title": text.split(" - ")[0][:100],
+                            "snippet": text[:450],
+                            "engine": "duckduckgo",
+                        })
+
+    if isinstance(data.get("RelatedTopics"), list):
+        _walk_topics(data["RelatedTopics"])
+
+    return items[:limit]
+
+
+def _wiki_search(query: str, lang: str = "es", limit: int = 3, timeout: float = 8.0) -> list[dict[str, str]]:
+    q = urllib.parse.quote(query.strip())
+    url = f"https://{lang}.wikipedia.org/w/rest.php/v1/search/title?q={q}&limit={max(1, min(limit, 5))}"
+    data = _http_get_json(url, timeout=timeout)
+    if not isinstance(data, dict):
+        return []
+    pages = data.get("pages")
+    if not isinstance(pages, list):
+        return []
+    out: list[dict[str, str]] = []
+    for p in pages[:limit]:
+        if not isinstance(p, dict):
+            continue
+        title = (p.get("title") or "").strip()
+        key = (p.get("key") or "").strip()
+        desc = (p.get("description") or "").strip()
+        excerpt = re.sub(r"<[^>]+>", " ", str(p.get("excerpt") or ""))
+        excerpt = " ".join(excerpt.split()).strip()
+        snippet = " — ".join(part for part in (desc, excerpt) if part)[:450]
+        page_url = f"https://{lang}.wikipedia.org/wiki/{urllib.parse.quote(key or title.replace(' ', '_'))}"
+        if title or snippet:
+            out.append({
+                "source": page_url,
+                "title": title or query,
+                "snippet": snippet or title,
+                "engine": f"wikipedia-{lang}",
+            })
+    return out
+
+
+def _hn_search(query: str, limit: int = 3, timeout: float = 8.0) -> list[dict[str, str]]:
+    q = urllib.parse.quote_plus(query.strip())
+    url = f"https://hn.algolia.com/api/v1/search?query={q}&tags=story&hitsPerPage={max(1, min(limit, 5))}"
+    data = _http_get_json(url, timeout=timeout)
+    if not isinstance(data, dict):
+        return []
+    hits = data.get("hits")
+    if not isinstance(hits, list):
+        return []
+    out: list[dict[str, str]] = []
+    for h in hits[:limit]:
+        if not isinstance(h, dict):
+            continue
+        title = str(h.get("title") or "").strip()
+        src = str(h.get("url") or f"https://news.ycombinator.com/item?id={h.get('objectID', '')}").strip()
+        if title:
+            out.append({
+                "source": src,
+                "title": title[:120],
+                "snippet": f"Hacker News — {title}",
+                "engine": "hackernews",
+            })
+    return out
+
+
+def _yahoo_finance_search(query: str, limit: int = 3, timeout: float = 8.0) -> list[dict[str, str]]:
+    q = urllib.parse.quote_plus(query.strip())
+    url = f"https://query1.finance.yahoo.com/v1/finance/search?q={q}&quotesCount=2&newsCount={max(1, min(limit, 4))}"
+    data = _http_get_json(url, timeout=timeout)
+    if not isinstance(data, dict):
+        return []
+    out: list[dict[str, str]] = []
+    for qt in (data.get("quotes") or [])[:2]:
+        if not isinstance(qt, dict):
+            continue
+        sym = str(qt.get("symbol") or "").strip()
+        name = str(qt.get("shortname") or qt.get("longname") or sym).strip()
+        exch = str(qt.get("exchange") or "").strip()
+        if sym or name:
+            out.append({
+                "source": f"https://finance.yahoo.com/quote/{urllib.parse.quote(sym)}",
+                "title": f"{name} ({sym})" if sym else name,
+                "snippet": f"Mercado/Activo — {name} [{exch}]",
+                "engine": "yahoo-finance",
+            })
+    for nw in (data.get("news") or [])[:limit]:
+        if not isinstance(nw, dict):
+            continue
+        title = str(nw.get("title") or "").strip()
+        link = str(nw.get("link") or "").strip()
+        pub = str(nw.get("publisher") or "").strip()
+        if title and link:
+            out.append({
+                "source": link,
+                "title": title[:120],
+                "snippet": f"{pub} — {title}" if pub else title,
+                "engine": "yahoo-finance",
+            })
+    return out[:limit]
+
+
+def _reddit_search(query: str, limit: int = 3, timeout: float = 8.0) -> list[dict[str, str]]:
+    q = urllib.parse.quote_plus(query.strip())
+    url = f"https://www.reddit.com/search.json?q={q}&sort=new&limit={max(1, min(limit, 4))}"
+    data = _http_get_json(url, timeout=timeout)
+    if not isinstance(data, dict):
+        return []
+    children = ((data.get("data") or {}).get("children")) or []
+    out: list[dict[str, str]] = []
+    for ch in children[:limit]:
+        if not isinstance(ch, dict):
+            continue
+        post = ch.get("data") or {}
+        title = str(post.get("title") or "").strip()
+        sub = str(post.get("subreddit_name_prefixed") or "").strip()
+        permalink = str(post.get("permalink") or "").strip()
+        if title:
+            src = f"https://www.reddit.com{permalink}" if permalink.startswith("/") else "https://www.reddit.com"
+            out.append({
+                "source": src,
+                "title": title[:120],
+                "snippet": f"{sub} — {title}" if sub else title,
+                "engine": "reddit",
+            })
+    return out
+
+
+
+import socket
+import struct
+
+
+def _tor_socks_addr() -> tuple[str, int] | None:
+    host = os.environ.get("IAO_TOR_SOCKS_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    raw_port = os.environ.get("IAO_TOR_SOCKS_PORT", "9050").strip() or "9050"
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return None
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return (host, port)
+    except OSError:
+        return None
+
+
+def _http_get_json_via_socks5(url: str, socks_addr: tuple[str, int], timeout: float = 10.0) -> Any:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL sin host")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    sock = socket.create_connection(socks_addr, timeout=timeout)
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(b"\x05\x01\x00")
+        resp = sock.recv(2)
+        if resp != b"\x05\x00":
+            raise RuntimeError("Fallo handshake SOCKS5 con Tor")
+
+        host_bytes = host.encode("utf-8")
+        if len(host_bytes) > 255:
+            raise ValueError("Host demasiado largo para SOCKS5")
+        req = b"\x05\x01\x00\x03" + bytes([len(host_bytes)]) + host_bytes + struct.pack("!H", port)
+        sock.sendall(req)
+        s_resp = sock.recv(4)
+        if len(s_resp) < 2 or s_resp[1] != 0x00:
+            raise RuntimeError("Fallo conexion SOCKS5 destino")
+        atyp = s_resp[3] if len(s_resp) > 3 else 0
+        if atyp == 0x01:
+            sock.recv(6)
+        elif atyp == 0x03:
+            ln = sock.recv(1)[0]
+            sock.recv(ln + 2)
+        elif atyp == 0x04:
+            sock.recv(18)
+
+        stream = sock
+        if parsed.scheme == "https":
+            import ssl
+            ctx = ssl.create_default_context()
+            stream = ctx.wrap_socket(sock, server_hostname=host)
+
+        http_req = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"User-Agent: {USER_AGENT}\r\n"
+            f"Accept: application/json, text/plain, */*\r\n"
+            f"Accept-Encoding: identity\r\n"
+            f"Connection: close\r\n\r\n"
+        ).encode("utf-8")
+        stream.sendall(http_req)
+
+        chunks = []
+        total = 0
+        while total < 1_200_000:
+            data = stream.recv(16384)
+            if not data:
+                break
+            chunks.append(data)
+            total += len(data)
+        raw_bytes = b"".join(chunks)
+        if hasattr(stream, "unwrap"):
+            try:
+                stream.close()
+            except Exception:
+                pass
+        else:
+            stream.close()
+
+        split_idx = raw_bytes.find(b"\r\n\r\n")
+        body = raw_bytes[split_idx + 4:] if split_idx != -1 else raw_bytes
+        text = body.decode("utf-8", errors="replace").strip()
+        if text.startswith("{") or text.startswith("["):
+            return json.loads(text)
+        return {"raw_text": text[:1000]}
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _tor_network_search(query: str, timeout: float = 10.0) -> list[dict[str, str]]:
+    socks_addr = _tor_socks_addr()
+    if not socks_addr:
+        return []
+    out: list[dict[str, str]] = []
+    q_enc = urllib.parse.quote_plus(query.strip())
+    tor_eps = [u.strip() for u in os.environ.get("IAO_TOR_ENDPOINTS", "").split(",") if u.strip()]
+    for tpl in tor_eps:
+        target = tpl.replace("{query}", q_enc) if "{query}" in tpl else f"{tpl}{'&' if '?' in tpl else '?'}q={q_enc}"
+        try:
+            payload = _http_get_json_via_socks5(target, socks_addr, timeout=timeout)
+            if isinstance(payload, dict):
+                rows = payload.get("results") or payload.get("items") or payload.get("data") or []
+                if rows and isinstance(rows, list):
+                    for r in rows[:3]:
+                        if isinstance(r, dict):
+                            snip = str(r.get("snippet") or r.get("content") or r.get("description") or r.get("title") or "").strip()
+                            if snip:
+                                out.append({
+                                    "source": str(r.get("url") or r.get("source") or target).strip(),
+                                    "title": str(r.get("title") or query).strip()[:120],
+                                    "snippet": snip[:450],
+                                    "engine": "tor-socks5",
+                                })
+                elif payload.get("raw_text"):
+                    out.append({
+                        "source": target,
+                        "title": f"Tor endpoint ({socks_addr[0]}:{socks_addr[1]})",
+                        "snippet": str(payload["raw_text"])[:450],
+                        "engine": "tor-socks5",
+                    })
+        except Exception:
+            continue
+    return out
+
+
+def _custom_endpoints_search(query: str, timeout: float = 8.0) -> list[dict[str, str]]:
+    raw_env = os.environ.get("IAO_SEARCH_ENDPOINTS", "").strip()
+    if not raw_env:
+        return []
+    results: list[dict[str, str]] = []
+    q_enc = urllib.parse.quote_plus(query.strip())
+    for tpl in [u.strip() for u in raw_env.split(",") if u.strip()]:
+        if not (tpl.startswith("https://") or tpl.startswith("http://")):
+            continue
+        target = tpl.replace("{query}", q_enc) if "{query}" in tpl else f"{tpl}{'&' if '?' in tpl else '?'}q={q_enc}"
+        try:
+            payload = _http_get_json(target, timeout=timeout)
+            if isinstance(payload, dict):
+                candidates = payload.get("results") or payload.get("items") or payload.get("data") or []
+            elif isinstance(payload, list):
+                candidates = payload
+            else:
+                candidates = []
+            for row in candidates[:3]:
+                if not isinstance(row, dict):
+                    continue
+                src = str(row.get("url") or row.get("link") or row.get("source") or target).strip()
+                title = str(row.get("title") or row.get("name") or query).strip()[:120]
+                snip = str(row.get("snippet") or row.get("content") or row.get("description") or "").strip()[:450]
+                if snip:
+                    results.append({
+                        "source": src,
+                        "title": title,
+                        "snippet": snip,
+                        "engine": "custom-endpoint",
+                    })
+        except Exception:
+            continue
+    return results
+
+
+
+def _weather_search(query: str, timeout: float = 8.0) -> list[dict[str, str]]:
+    plain = _strip_accents(query).lower()
+    weather_keys = ("temperatura", "clima", "tiempo", "lluvia", "humedad", "weather", "temperature", "forecast")
+    if not any(k in plain for k in weather_keys):
+        return []
+    m = re.search(r"\b(?:en|in)\s+([a-záéíóúüñA-ZÁÉÍÓÚÜÑ\s]{2,35}?)(?:\s+(?:hoy|ahora|manana|mañana|de|el|la|\d)|$)", query, re.IGNORECASE)
+    city = (m.group(1) if m else "").strip()
+    if not city:
+        for cand in ("caracas", "barquisimeto", "madrid", "bogota", "buenos aires", "mexico", "miami", "new york", "london", "tokyo", "singapore"):
+            if cand in plain:
+                city = cand
+                break
+    if not city:
+        return []
+    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(city)}&count=1&language=es&format=json"
+    geo = _http_get_json(geo_url, timeout=timeout)
+    results = (geo or {}).get("results") if isinstance(geo, dict) else None
+    if not results:
+        return []
+    top = results[0]
+    lat = top.get("latitude")
+    lon = top.get("longitude")
+    name = top.get("name") or city
+    country = top.get("country") or ""
+    if lat is None or lon is None:
+        return []
+    fc_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m"
+    fc = _http_get_json(fc_url, timeout=timeout)
+    cur = (fc or {}).get("current") if isinstance(fc, dict) else None
+    if not isinstance(cur, dict):
+        return []
+    temp = cur.get("temperature_2m")
+    feels = cur.get("apparent_temperature")
+    hum = cur.get("relative_humidity_2m")
+    wind = cur.get("wind_speed_10m")
+    place = f"{name}, {country}".strip(", ")
+    snip = f"Temperatura actual: {temp} °C (sensación {feels} °C, humedad {hum}%, viento {wind} km/h)"
+    return [{
+        "source": "https://open-meteo.com/",
+        "title": f"Clima en {place}",
+        "snippet": snip,
+        "engine": "open-meteo",
+    }]
+
+
+
+def _gdelt_search(query: str, limit: int = 4, timeout: float = 8.0) -> list[dict[str, str]]:
+    q = urllib.parse.quote_plus(query.strip())
+    url = f"https://api.gdeltproject.org/api/v2/doc/doc?query={q}&mode=ArtList&maxrecords={max(1, min(limit, 5))}&format=json"
+    data = _http_get_json(url, timeout=timeout)
+    if not isinstance(data, dict):
+        return []
+    arts = data.get("articles")
+    if not isinstance(arts, list):
+        return []
+    out: list[dict[str, str]] = []
+    for a in arts[:limit]:
+        if not isinstance(a, dict):
+            continue
+        title = str(a.get("title") or "").strip()
+        url_a = str(a.get("url") or "").strip()
+        dom = str(a.get("domain") or "").strip()
+        if title and url_a:
+            out.append({
+                "source": url_a,
+                "title": title[:120],
+                "snippet": f"{dom} — {title}" if dom else title,
+                "engine": "gdelt-global",
+            })
+    return out
+
+
+def _build_queries(query: str) -> list[str]:
+    clean = re.sub(r"[¿?¡!.,:;()\[\]{}\"']+", " ", " ".join((query or "").split())).strip()
+    if not clean:
+        return []
+    stop = {
+        "que", "qué", "cuanto", "cuánto", "es", "el", "la", "los", "las", "un", "una",
+        "de", "del", "en", "y", "o", "a", "por", "para", "con", "hoy", "what", "is", "the",
+    }
+    words = [w for w in re.findall(r"[\wáéíóúüñÁÉÍÓÚÜÑ]{2,}", clean)]
+    keywords = [w for w in words if _strip_accents(w).lower() not in stop and not w.isdigit()]
+    candidates: list[str] = [clean]
+    if keywords:
+        kw_str = " ".join(keywords)
+        if kw_str.lower() != clean.lower():
+            candidates.append(kw_str)
+        plain_kw = _strip_accents(kw_str)
+        if plain_kw.lower() not in {c.lower() for c in candidates}:
+            candidates.append(plain_kw)
+    low_plain = _strip_accents(clean).lower()
+    if "petroleo" in low_plain:
+        candidates.append("crude oil price")
+    return candidates[:4]
+
+
+def search_web_realtime(query: str, limit: int = 5, timeout: float = 8.0) -> dict[str, Any]:
+    queries = _build_queries(query)
+    if not queries:
+        return {"status": "NO_MATCH", "query": "", "items": [], "engines_used": []}
+
+    tasks: list[tuple[str, Any]] = []
+    for q in queries:
+        tasks.append(("weather", lambda q=q: _weather_search(q, timeout=timeout)))
+        tasks.append(("duckduckgo", lambda q=q: _ddg_search(q, limit=limit, timeout=timeout)))
+        tasks.append(("wikipedia-es", lambda q=q: _wiki_search(q, lang="es", limit=3, timeout=timeout)))
+        tasks.append(("wikipedia-en", lambda q=q: _wiki_search(q, lang="en", limit=2, timeout=timeout)))
+        tasks.append(("hackernews", lambda q=q: _hn_search(q, limit=2, timeout=timeout)))
+        tasks.append(("gdelt", lambda q=q: _gdelt_search(q, limit=3, timeout=timeout)))
+        tasks.append(("yahoo-finance", lambda q=q: _yahoo_finance_search(q, limit=3, timeout=timeout)))
+        tasks.append(("reddit", lambda q=q: _reddit_search(q, limit=2, timeout=timeout)))
+        tasks.append(("tor", lambda q=q: _tor_network_search(q, timeout=timeout)))
+        tasks.append(("custom", lambda q=q: _custom_endpoints_search(q, timeout=timeout)))
+
+    collected: list[dict[str, str]] = []
+    engines_ok: list[str] = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 10)) as pool:
+        future_map = {pool.submit(fn): name for name, fn in tasks}
+        try:
+            for fut in concurrent.futures.as_completed(future_map, timeout=timeout + 2.5):
+                name = future_map[fut]
+                try:
+                    rows = fut.result(timeout=0.5)
+                    if rows:
+                        if name not in engines_ok:
+                            engines_ok.append(name)
+                        collected.extend(rows)
+                except Exception:
+                    continue
+        except concurrent.futures.TimeoutError:
+            pass
+
+    seen_keys: set[str] = set()
+    deduped: list[dict[str, str]] = []
+    for row in collected:
+        key = (row.get("source", "") + "|" + row.get("snippet", "")[:100]).lower()
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(row)
+        if len(deduped) >= limit:
+            break
+
+    return {
+        "status": "USED" if deduped else "NO_MATCH",
+        "query": queries[0],
+        "items": deduped,
+        "engines_used": engines_ok,
+    }
