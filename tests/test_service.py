@@ -73,7 +73,7 @@ class AuthTests(Base):
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
-        device_authority.enroll(
+        enrolled_device = device_authority.enroll(
             enrollment_code, device_public, owner_subject="existing-device-owner"
         )
         identity_authority = OperatorIdentityAuthority(
@@ -123,6 +123,20 @@ class AuthTests(Base):
         self.assertEqual(status, 200)
         self.assertEqual(result["authority"], "OPERATOR_AUTHENTICATED_READ_ONLY")
         self.assertEqual(result["scopes"], [])
+        operator_subject = "operator:" + identity["identity_id"]
+        self.assertTrue(device_authority.verify_registered_public_key(
+            device_public, owner_subject=operator_subject,
+        ))
+        with self.assertRaisesRegex(Exception, "DEVICE_KEY_NOT_ENROLLED_FOR_OWNER"):
+            device_authority.verify_registered_public_key(
+                device_public, owner_subject="existing-device-owner",
+            )
+        self.assertEqual(
+            device_authority.challenge(
+                enrolled_device["device_id"], owner_subject=operator_subject,
+            )["expires_in"],
+            60,
+        )
         headers = {"authorization": "Bearer " + result["access_token"]}
         self.assertEqual(self.call("GET", "/v1/me", headers)[1]["scopes"], [])
         self.assertTrue(
