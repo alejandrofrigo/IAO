@@ -274,7 +274,7 @@
   }
 
   async function signRecoveryPayload(payloadBase64) {
-    const identity = await dbGet();
+    const identity = await dbGetPending();
     if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
       throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
     }
@@ -296,7 +296,7 @@
   }
 
   async function activateRecoveryIdentity() {
-    const identity = await dbGet();
+    const identity = await dbGetPending();
     if (!identity || identity.recoveryPending !== true || !identity.privateKey) {
       throw new Error("RECOVERY_DEVICE_KEY_NOT_PREPARED");
     }
