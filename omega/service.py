@@ -213,6 +213,9 @@ class OmegaService:
                 self.device_authority.verify_bootstrap_device_signature(
                     device_public_key, device_signature,
                 )
+                self.operator_identity_authority.verify_bootstrap_root_signature(
+                    root_public_key, device_public_key, root_signature,
+                )
                 identity = self.operator_identity_authority.bootstrap(
                     code, root_public_key, recovery_code=recovery_code,
                 )
