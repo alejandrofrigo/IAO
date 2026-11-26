@@ -313,7 +313,9 @@ class OperatorIdentityAuthority:
         device_id, _ = self.device_binding_payload(device_public_key_pem, key_version=1)
         with self._database() as db:
             row = db.execute(
-                """SELECT b.device_id,b.device_public_key_pem,b.key_version,i.status,i.key_version
+                """SELECT b.device_id,b.device_public_key_pem,
+                b.key_version AS binding_key_version,
+                i.status,i.key_version AS root_key_version
                 FROM primary_device_bindings b
                 JOIN operator_identities i ON i.identity_id=b.identity_id
                 WHERE b.identity_id=?""",
@@ -323,7 +325,7 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
         if row["device_id"] != device_id:
             raise OperatorIdentityError("PRIMARY_DEVICE_KEY_MISMATCH", 403)
-        if row["key_version"] != row["key_version"]:
+        if row["binding_key_version"] != row["root_key_version"]:
             raise OperatorIdentityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
         _, canonical_pem = self._public_key(device_public_key_pem)
         if not hmac.compare_digest(row["device_public_key_pem"], canonical_pem):
