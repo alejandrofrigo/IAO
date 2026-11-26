@@ -273,9 +273,13 @@ def main() -> None:
     # Startup reconciliation is fail-closed: expired RUNNING and VERIFYING
     # leases are marked FAILED and are never automatically re-enqueued.
     recovered = service.store.recover_interrupted_tasks()
-    for item in recovered:
+    if recovered:
+        # Keep owner subjects and per-task identifiers out of audit metadata.
         service.store.audit(
-            item["owner"], "TASK_WORKER_INTERRUPTED_RECOVERED", item["id"],
+            "system",
+            "TASK_WORKER_INTERRUPTED_RECOVERED",
+            "task_worker",
+            recovered_count=len(recovered),
             decision="FAIL_CLOSED",
         )
 
