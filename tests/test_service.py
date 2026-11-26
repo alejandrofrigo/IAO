@@ -106,7 +106,7 @@ class Base(unittest.TestCase):
             ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
         )
         device_signature = device.sign(
-            b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + payload,
+            b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + payload,
             ec.ECDSA(hashes.SHA256()),
         )
         encoded = lambda value: base64.urlsafe_b64encode(value).decode().rstrip("=")
