@@ -17,7 +17,7 @@ from omega.tools.registry import ToolSpec
 from omega.task_worker import TaskWorker
 from omega.service import POLICY_VERSION
 from omega.device_authority import DeviceAuthority
-from omega.operator_identity import ROOT_SIGNATURE_DOMAIN
+from omega.operator_identity import OperatorIdentityAuthority, ROOT_SIGNATURE_DOMAIN
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -57,17 +57,20 @@ class Base(unittest.TestCase):
 
 class AuthTests(Base):
     def test_root_signed_session_binding_api_is_scoped_and_read_only(self) -> None:
-        authority = self.svc.operator_identity_authority
-        self.assertIsNotNone(authority)
+        bootstrap_code = "session-api-bootstrap-" + "z" * 40
+        authority = OperatorIdentityAuthority(
+            self.state / "api-operator-identity.sqlite3",
+            bootstrap_code,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"api-session-test-key").digest(),
+        )
+        self.svc.operator_identity_authority = authority
         root = ec.generate_private_key(ec.SECP256R1())
         public = root.public_key().public_bytes(
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode("ascii")
-        identity = authority.bootstrap(
-            "session-api-bootstrap-" + "z" * 40,
-            public,
-        )
+        identity = authority.bootstrap(bootstrap_code, public)
         headers_a = self.tok("authenticated-session-A")
         headers_b = self.tok("authenticated-session-B")
 
