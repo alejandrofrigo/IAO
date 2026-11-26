@@ -430,7 +430,7 @@
       if (!recoverySecret) throw new Error("OPERATOR_RECOVERY_CODE_REQUIRED");
       if (secret === recoverySecret) throw new Error("RECOVERY_CODE_MUST_DIFFER_FROM_BOOTSTRAP");
       return bootstrap(secret, recoverySecret);
-    }, result => "IDENTIDAD RAÍZ REGISTRADA\nAlgoritmo: " + result.algorithm + "\nVersión: " + result.key_version));
+    }, result => "IDENTIDAD RAÍZ REGISTRADA\nAlgoritmo: " + result.algorithm + "\nVersión: " + result.key_version + "\nCódigo de recuperación offline (guárdalo ahora):\n" + result.recoveryCode));
     loginButton.addEventListener("click", () => run(
       loginButton, login,
       result => "SESIÓN DE OPERADOR AUTENTICADA\nAutoridad: " + result.authority + "\nPermisos: ninguno (solo lectura)"
