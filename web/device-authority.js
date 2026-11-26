@@ -232,7 +232,7 @@
       atob(encoded + "=".repeat((4 - encoded.length % 4) % 4)),
       c => c.charCodeAt(0)
     );
-    const domain = new TextEncoder().encode("IAO-OPERATOR-DEVICE-LOGIN-V1\\x00");
+    const domain = new TextEncoder().encode("IAO-OPERATOR-DEVICE-LOGIN-V1\x00");
     const message = new Uint8Array(domain.length + payload.length);
     message.set(domain);
     message.set(payload, domain.length);
