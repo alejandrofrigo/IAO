@@ -105,7 +105,7 @@
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     let binary = "";
     for (const value of bytes) binary += String.fromCharCode(value);
-    return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
   }
 
   async function bootstrap(code, recoveryCode) {
