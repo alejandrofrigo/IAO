@@ -2,6 +2,7 @@
 The same logic can be mounted under FastAPI later; the stdlib server in omega/server.py runs it today."""
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -187,6 +188,41 @@ class OmegaService:
             self.store.audit(pr.subject, "INTERNET_QUERY", "federation", query=pregunta[:100])
             return 200, {"answer": respuesta}
 
+
+        if method == "POST" and p == "/v1/device/enroll":
+            if self.device_authority is None:
+                raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
+            if os.environ.get("IAO_DEVICE_ENROLLMENT_ENABLED", "").strip() != "1":
+                raise ApiError(403, "DEVICE_ENROLLMENT_DISABLED")
+            data = self._json(body)
+            try:
+                enrolled = self.device_authority.enroll(
+                    data.get("code"), data.get("public_key_pem")
+                )
+            except DeviceAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "system", "DEVICE_ENROLLED", "primary_device",
+                algorithm=enrolled["algorithm"],
+            )
+            return 201, enrolled
+
+        if method == "POST" and p == "/v1/device/command":
+            if self.device_authority is None:
+                raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
+            try:
+                result = self.device_authority.verify_status(self._json(body))
+            except DeviceAuthorityError as exc:
+                self.store.audit(
+                    "system", "DEVICE_STATUS_DENIED", "primary_device",
+                    decision="DENY", reason=exc.code,
+                )
+                raise ApiError(exc.status, exc.code) from None
+            self.store.audit(
+                "system", "DEVICE_STATUS_VERIFIED", "primary_device",
+                decision="ALLOW", authority="READ_ONLY",
+            )
+            return 200, result
 
         pr = self._auth(headers)
         if method == "POST" and p == "/v1/device/challenge":
