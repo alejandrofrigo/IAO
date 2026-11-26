@@ -470,7 +470,7 @@ def test_concurrent_session_binding_and_root_revocation_leave_no_session_authori
     )
     session_signature = sign(root_private, payload)
     revoke_signature = sign(
-        root_private, b"revoke-root-v1\\n" + identity_id.encode("ascii")
+        root_private, b"revoke-root-v1\n" + identity_id.encode("ascii")
     )
     workers = [
         OperatorIdentityAuthority(identity_db, subject_digest_key=digest_key)
