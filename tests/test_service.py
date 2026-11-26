@@ -401,6 +401,14 @@ class QueuedTaskApiTests(Base):
             {"device_id": device_id},
         )
         self.assertEqual(status, 200)
+        wrong_owner_challenge = self.call(
+            "POST", "/v1/device/challenge", self.tok("different-owner"),
+            {"device_id": device_id},
+        )
+        self.assertEqual(
+            (wrong_owner_challenge[0], wrong_owner_challenge[1]["error"]),
+            (403, "DEVICE_OWNER_MISMATCH"),
+        )
         timestamp = int(time.time())
         canonical = json.dumps(
             {"action": "status"}, separators=(",", ":"), ensure_ascii=False
@@ -424,6 +432,13 @@ class QueuedTaskApiTests(Base):
         self.assertEqual(
             (unauthenticated_status, unauthenticated_result["error"]),
             (401, "AUTHENTICATION_REQUIRED"),
+        )
+        wrong_owner_status = self.call(
+            "POST", "/v1/device/command", self.tok("different-owner"), proof
+        )
+        self.assertEqual(
+            (wrong_owner_status[0], wrong_owner_status[1]["error"]),
+            (403, "DEVICE_OWNER_MISMATCH"),
         )
         status, result = self.call(
             "POST", "/v1/device/command", self.tok("device-owner"), proof
