@@ -13,6 +13,14 @@ class StateMachineTests(unittest.TestCase):
         for n in ("AUTHENTICATED", "COMPILED", "POLICY_CHECKED", "AUTHORIZED", "RUNNING", "VERIFYING", "SUCCEEDED"):
             s = transition(s, n)
 
+    def test_queued_worker_path(self) -> None:
+        self.assertEqual(transition("AUTHORIZED", "QUEUED"), "QUEUED")
+        self.assertEqual(transition("QUEUED", "RUNNING"), "RUNNING")
+
+    def test_queued_cannot_skip_authorization(self) -> None:
+        with self.assertRaises(InvalidTransition):
+            transition("POLICY_CHECKED", "QUEUED")
+
     def test_terminal_states_have_no_exits(self) -> None:
         for t in ("SUCCEEDED", "FAILED", "DENIED", "NEEDS_CLARIFICATION", "CANCELLED", "EXPIRED"):
             self.assertFalse(TRANSITIONS[t])
