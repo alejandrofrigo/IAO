@@ -26,9 +26,10 @@ def test_failover_records_only_error_class_and_recovers_success(monkeypatch):
     saved = []
 
     def persist(path, data):
+        snapshot = data.copy()
         state.clear()
-        state.update(data)
-        saved.append(data.copy())
+        state.update(snapshot)
+        saved.append(snapshot)
 
     monkeypatch.setattr(router, "_write_json", persist)
     calls = []
