@@ -3,7 +3,7 @@ import fcntl
 import os
 import stat
 
-from omega.supervision import read_heartbeat, write_heartbeat
+from omega.supervision import read_heartbeat, read_lock_owner, write_heartbeat
 from tools import iao_autonomous_coordinator as coordinator
 from tools import iao_five_motor_supervisor as supervisor
 
@@ -178,3 +178,25 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
         assert "GUARDIAN: PROCESS_ALIVE_UNVERIFIED" in output
         assert "GUARDIAN: RUNNING" not in output
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+def test_heartbeat_and_lock_readers_reject_symlink_paths(tmp_path):
+    real_heartbeat = tmp_path / "real-heartbeat.json"
+    write_heartbeat(
+        real_heartbeat,
+        component="PADGE_AUTONOMY",
+        pid=os.getpid(),
+        phase="cycle_completed",
+        interval_seconds=60,
+        stale_after_seconds=1800,
+    )
+    heartbeat_link = tmp_path / "heartbeat-link.json"
+    heartbeat_link.symlink_to(real_heartbeat)
+    assert read_heartbeat(
+        heartbeat_link, expected_component="PADGE_AUTONOMY",
+    ) == {"status": "UNVERIFIED"}
+
+    real_lock = tmp_path / "real-lock"
+    real_lock.write_text(str(os.getpid()), encoding="ascii")
+    lock_link = tmp_path / "lock-link"
+    lock_link.symlink_to(real_lock)
+    assert read_lock_owner(lock_link) is None
