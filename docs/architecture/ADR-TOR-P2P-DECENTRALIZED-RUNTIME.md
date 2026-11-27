@@ -154,3 +154,12 @@ Ejemplo de configuración privada (añadir únicamente direcciones reales de fee
 ```
 
 No existe un directorio onion global que permita enumerar automáticamente todos los servicios Tor. Sin feeds configurados o una fuente de descubrimiento pública identificable, IAO no puede inventar direcciones onion ni afirmar que ha descubierto la red Tor completa. El acceso Tor requiere además que el SOCKS local esté realmente activo; GitHub no puede encender el daemon Tor del teléfono.
+
+
+## Intercambio de referencias IPFS y clasificación de rutas
+
+- Los feeds onion pueden anunciar hasta 32 CIDs por servicio. IAO acepta únicamente CIDv0 y CIDv1 en base32 canónico, descarta cadenas inválidas y conserva las referencias en el inventario del servicio.
+- `omega/ipfs_content.py` incorpora recuperación acotada de contenido por CID a través de la API Kubo local, únicamente mediante una dirección IP literal loopback. Rechaza endpoints remotos, redirecciones, CIDs inválidos y respuestas superiores al límite configurado (2 MB por defecto). El contenido se devuelve como bytes y nunca se ejecuta ni se instala automáticamente; la verificación de bloques/DAG corresponde a Kubo.
+- La recuperación es una operación explícita; descubrir o recibir un CID no descarga automáticamente el contenido ni lo convierte en código confiable.
+- `omega/p2p_assimilation.py` clasifica multiaddresses observadas como TCP, QUIC/UDP, relay libp2p u onion anunciado. Cada registro indica `connectivity_verified=false`: una dirección anunciada no demuestra que la ruta funcione ni que QUIC pueda circular por Tor.
+- Las direcciones onion y los CIDs permanecen como metadatos públicos no autenticados hasta que una fase posterior valide identidad, firma, origen y política de contenido.
