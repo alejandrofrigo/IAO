@@ -1260,7 +1260,11 @@ class OmegaService:
             "contract_version": "1.0",
             "goal": goal if isinstance(goal, str) else None,
             "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [],
-            "authorized_scopes": sorted(pr.scopes),
+            "authorized_scopes": sorted(
+                set(pr.scopes) | (
+                    set(QUEUED_TOOL_ALLOWLIST) if execution_mode == "queued" else set()
+                )
+            ),
             "input": tin if isinstance(tin, dict) else {},
             "request_digest": request_digest,
             "operator_session_digest": (
@@ -1304,7 +1308,14 @@ class OmegaService:
             self.store.set_task_state(tid, st, res)
             return 422, {"task_id": tid, "state": st, **res}
         assert isinstance(cap, str) and isinstance(tin, dict)
-        dec = authorize(cap, authenticated=True, approved_capabilities=set(pr.scopes) & self.registry.names())
+        approved_capabilities = set(pr.scopes)
+        if execution_mode == "queued":
+            # A primary-device proof grants only the reviewed read-only queue allowlist.
+            approved_capabilities.update(QUEUED_TOOL_ALLOWLIST)
+        dec = authorize(
+            cap, authenticated=True,
+            approved_capabilities=approved_capabilities & self.registry.names(),
+        )
         self.store.audit(pr.subject, "DECISION", tid, decision="ALLOW" if dec.allowed else "DENY", reason=dec.reason,
                          capability=cap, policy_version=POLICY_VERSION)
         if not dec.allowed:
