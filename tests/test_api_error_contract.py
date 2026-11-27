@@ -108,3 +108,21 @@ def test_signed_non_decimal_content_length_is_rejected():
     assert error.headers["x-correlation-id"]
     assert error.headers["cache-control"] == "no-store"
     assert error.headers["x-content-type-options"] == "nosniff"
+
+
+def test_api_v1_service_exception_returns_safe_503(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+
+    def fail_service():
+        raise RuntimeError("private-service-exception-marker")
+
+    monkeypatch.setattr(main, "_get_service", fail_service)
+    response = client.get("/v1/memory")
+    payload = response.json()
+    assert response.status_code == 503
+    assert payload["error"] == "IAO_SERVICE_UNAVAILABLE"
+    assert len(payload["correlation_id"]) == 32
+    assert response.headers["x-correlation-id"] == payload["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "private-service-exception-marker" not in response.text
