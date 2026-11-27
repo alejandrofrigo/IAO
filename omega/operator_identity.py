@@ -511,6 +511,16 @@ class OperatorIdentityAuthority:
                     raise OperatorIdentityError("ANOTHER_OPERATOR_IDENTITY_ACTIVE", 409)
                 root_key = serialization.load_pem_public_key(row["root_public_key_pem"].encode("ascii"))
                 device_key = serialization.load_pem_public_key(row["device_public_key_pem"].encode("ascii"))
+                device_der = device_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                if not hmac.compare_digest(
+                    hashlib.sha256(device_der).hexdigest(), row["device_id"],
+                ):
+                    raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                if row["purpose"] == "REVOKE" and obj.get("grant_expires_at") is not None:
+                    raise OperatorIdentityError("CAPABILITY_PAYLOAD_MISMATCH", 409)
                 try:
                     root_key.verify(
                         root_signature, b"IAO-OPERATOR-RECOVERY-V1\x00" + row["signing_payload"],
@@ -1352,8 +1362,6 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_ID")
         if purpose == "GRANT" and grant_id is not None:
             raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_ID")
-        if isinstance(grant_ttl_seconds, bool) or not isinstance(grant_ttl_seconds, int) or not 60 <= grant_ttl_seconds <= 900:
-            raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_TTL")
         subject_digest = self._session_subject_digest(subject)
         session_digest = self._session_credential_digest(session_token)
         if not self.verify_authenticated_session(subject, session_token):
@@ -1449,7 +1457,7 @@ class OperatorIdentityAuthority:
     def complete_capability_challenge(
         self, subject: Any, session_token: Any, challenge: Any,
         root_signature: bytes, device_signature: bytes, *,
-        policy_version: str, grant_ttl_seconds: int = 900,
+        policy_version: str,
     ) -> dict[str, Any]:
         if not isinstance(challenge, str) or not 32 <= len(challenge) <= 128:
             raise OperatorIdentityError("INVALID_CAPABILITY_CHALLENGE")
@@ -1553,9 +1561,16 @@ class OperatorIdentityAuthority:
                 elif row["purpose"] == "REVOKE":
                     changed = db.execute(
                         """UPDATE operator_capability_grants SET revoked_at=?
-                        WHERE grant_id=? AND identity_id=? AND revoked_at IS NULL
+                        WHERE grant_id=? AND identity_id=? AND session_digest=?
+                        AND subject_digest=? AND device_id=? AND capability=?
+                        AND key_version=? AND policy_version=? AND revoked_at IS NULL
                         AND expires_at>?""",
-                        (now, row["grant_id"], row["identity_id"], now),
+                        (
+                            now, row["grant_id"], row["identity_id"],
+                            row["session_digest"], row["subject_digest"],
+                            row["device_id"], row["capability"], row["key_version"],
+                            row["policy_version"], now,
+                        ),
                     ).rowcount
                     if changed != 1:
                         raise OperatorIdentityError("CAPABILITY_GRANT_NOT_ACTIVE", 409)
