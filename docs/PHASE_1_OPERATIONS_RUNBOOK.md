@@ -35,7 +35,7 @@ Las respuestas JSON de error de API deben usar un código público estable en `e
 - Una denegación de preflight devuelve `CORS_PREFLIGHT_DENIED`; no debe añadirse una cabecera CORS permisiva a la respuesta denegada.
 - Los errores de cuerpo (longitud, tamaño, codificación o framing) deben conservar el mismo sobre de correlación y privacidad en ambos adaptadores. El adaptador stdlib debe rechazar transfer-encoding, Content-Length que no sea decimal ASCII, longitud negativa, cuerpos mayores que `MAX_BODY` y lecturas incompletas antes de invocar `OmegaService`; debe cerrar la conexión en esos casos. El adaptador FastAPI valida el tamaño de forma incremental y no debe acumular un cuerpo que supere el límite.
 
-El contrato y sus regresiones de FastAPI/stdlib están en proceso de cualificación. No declarar el objetivo 16 como VERIFICADO hasta que la suite completa pase en el SHA exacto y se revise la matriz de rutas y métodos.
+Los fallos inesperados de `OmegaService.handle` deben devolver 503 `IAO_SERVICE_UNAVAILABLE` en ambos adaptadores, sin propagar el mensaje de excepción; el log privado solo registra la clase de excepción. El contrato y sus regresiones de FastAPI/stdlib están en proceso de cualificación. No declarar el objetivo 16 como VERIFICADO hasta que la suite completa pase en el SHA exacto y se revise la matriz de rutas y métodos.
 
 ## Instalación reproducible
 
