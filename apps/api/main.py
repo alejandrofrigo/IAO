@@ -284,7 +284,7 @@ def _get_service():
                     raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED") from None
                 from omega.server import build_service
 
-                state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", "/var/lib/iao")))
+                state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
                 corpus_dir = Path(os.environ.get("IAO_CORPUS_DIR", "/app/knowledge"))
                 _service = build_service(state_dir, token_key, corpus_dir)
     service = _service
@@ -449,7 +449,7 @@ def _task_worker_health() -> str:
     state_dir = Path(
         os.environ.get(
             "IAO_STATE_DIR",
-            os.environ.get("OMEGA_STATE_DIR", "/var/lib/iao"),
+            os.environ.get("OMEGA_STATE_DIR", ".state"),
         )
     )
     heartbeat = read_heartbeat(
