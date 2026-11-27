@@ -347,6 +347,9 @@ class AgentAuthority:
         with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
+                now = time.time()
+                if abs(now - timestamp) > 60:
+                    raise AgentAuthorityError("AGENT_REQUEST_EXPIRED", 401)
                 row = db.execute(
                     """SELECT a.identity_id,a.key_version,a.public_key_pem,a.scopes_json,
                     a.expires_at,a.revoked_at,c.expires_at,c.consumed_at
