@@ -319,7 +319,7 @@ def main() -> None:
     token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
     if len(token_key) < 16:
         raise RuntimeError("OMEGA_DEV_TOKEN_KEY is required")
-    state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", "/var/lib/iao")))
+    state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
     service = build_service(
         state_dir,
         token_key,
