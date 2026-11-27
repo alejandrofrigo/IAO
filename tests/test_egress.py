@@ -32,7 +32,7 @@ class H(BaseHTTPRequestHandler):
         elif p == "/json":
             self._send(200, b'{"a":1}', "application/json; charset=utf-8")
         elif p == "/invalid-utf8":
-            self._send(200, b"valid-prefix-\\xff-invalid-utf8", "text/plain")
+            self._send(200, b"valid-prefix-\xff-invalid-utf8", "text/plain")
         elif p == "/big":
             self._send(200, b"x" * 2_000_000)
         elif p == "/bin":
