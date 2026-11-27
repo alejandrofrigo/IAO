@@ -2,7 +2,7 @@
 
 **Estado:** evidencia documental adicional; no sustituye la verificación del HEAD ni de CI.
 **SHA base observado:** `0920643d05833a2a761f9168ae1e89ed9944fcc7`.
-**HEAD observado al actualizar:** `3fe1d9f488b9826e13d67d5fe3ecc879789572f0` (483 ahead / 0 behind de `iao-production-gates-20261127T0856Z`).
+**HEAD observado al actualizar:** `52d40c46b4f3fdbec9da2e819a25845b96138f8c` (503 ahead / 0 behind de `iao-production-gates-20261127T0856Z`).
 **Rama destino:** `phase-1-core-foundation-20261127`
 **Alcance:** objetivo 01 de `PHASE_1_CORE_FOUNDATION.md`.
 
