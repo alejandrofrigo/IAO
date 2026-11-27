@@ -34,7 +34,34 @@ async def _runtime_lifespan(_app):
                 "RUNTIME_START_FAILED error_type=%s",
                 type(exc).__name__,
             )
-    yield
+    try:
+        yield
+    finally:
+        _stop_background_workers()
+
+
+def _stop_background_workers() -> None:
+    """Stop API-owned discovery workers with bounded joins before store teardown."""
+    stops = (
+        ("autojoin", "omega.federation_autojoin", "stop_federation_autojoin"),
+        ("discovery", "omega.federation_discovery", "stop_federation_discovery"),
+        ("external_network", "omega.external_network", "stop_external_network"),
+    )
+    logger = logging.getLogger("iao.runtime")
+    for worker_name, module_name, function_name in stops:
+        try:
+            module = __import__(module_name, fromlist=[function_name])
+            stop = getattr(module, function_name)
+            stopped = stop(timeout=5.0)
+        except Exception as exc:
+            logger.error(
+                "RUNTIME_WORKER_STOP_FAILED worker=%s error_type=%s",
+                worker_name,
+                type(exc).__name__,
+            )
+            continue
+        if stopped is not True:
+            logger.error("RUNTIME_WORKER_STOP_TIMEOUT worker=%s", worker_name)
 
 
 app = FastAPI(title="IAO API", version="11.2.0", lifespan=_runtime_lifespan)
