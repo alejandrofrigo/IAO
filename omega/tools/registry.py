@@ -44,7 +44,10 @@ class ToolRegistry:
             or not isinstance(spec.scope, str)
             or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", spec.scope)
             or not isinstance(spec.effect_class, str)
-            or spec.effect_class not in {"READ_ONLY", "WRITE", "EXTERNAL", "DESTRUCTIVE"}
+            or spec.effect_class not in {
+                "READ_ONLY", "REVERSIBLE", "EXTERNAL", "IRREVERSIBLE",
+                "WRITE", "DESTRUCTIVE",
+            }
             or isinstance(spec.timeout_seconds, bool)
             or not isinstance(spec.timeout_seconds, (int, float))
             or not math.isfinite(float(spec.timeout_seconds))
