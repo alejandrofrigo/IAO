@@ -910,7 +910,7 @@ class AuthTests(Base):
         )
         self.assertEqual(
             event["details"]["query_digest"],
-            hashlib.sha256(query.encode()).hexdigest(),
+            "sha256:" + hashlib.sha256(query.encode()).hexdigest(),
         )
         self.assertNotIn(query, json.dumps(events))
 
