@@ -253,3 +253,13 @@ def test_supervisor_only_signals_its_own_session_process_group(monkeypatch):
         raise ProcessLookupError
     monkeypatch.setattr(supervisor.os, "getpgid", missing)
     assert supervisor.managed_process_group(999) is False
+
+def test_supervisor_binds_child_identity_to_process_start_ticks(monkeypatch):
+    ticks = supervisor.process_start_ticks(os.getpid())
+    assert isinstance(ticks, str) and ticks.isdigit()
+    child = {"pid": os.getpid(), "process_start_ticks": ticks}
+    assert supervisor.process_identity_matches(child) is True
+
+    monkeypatch.setattr(supervisor, "process_start_ticks", lambda _pid: str(int(ticks) + 1))
+    assert supervisor.process_identity_matches(child) is False
+    assert supervisor.process_identity_matches({"pid": os.getpid()}) is False
