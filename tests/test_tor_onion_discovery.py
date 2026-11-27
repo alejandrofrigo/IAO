@@ -21,7 +21,7 @@ def test_onion_feed_discovers_only_valid_v3_onion_endpoints(monkeypatch):
     def fake_fetch(url, *, timeout, max_bytes):
         calls.append((url, timeout, max_bytes))
         return {"peers": [
-            {"peer_id": "Q" * 40, "url": valid, "capabilities": ["admin"]},
+            {"peer_id": "Q" * 40, "url": valid, "capabilities": ["admin"],\n             "cids": ["Qm" + "1" * 44, "../bad-cid"]},
             {"peer_id": "R" * 40, "url": invalid},
             {"peer_id": "short", "url": valid},
             {"peer_id": "S" * 40, "url": "https://example.org/"},
@@ -34,7 +34,7 @@ def test_onion_feed_discovers_only_valid_v3_onion_endpoints(monkeypatch):
     assert found[0]["peer_id"] == "Q" * 40
     assert found[0]["identity_state"] == "UNVERIFIED"
     assert found[0]["participation_state"] == "CANDIDATE_ONLY"
-    assert found[0]["capabilities"] == []
+    assert found[0]["content_cids"] == ["Qm" + "1" * 44]\n    assert found[0]["capabilities"] == []
     assert found[0]["granted_capabilities"] == []
     assert found[0]["remote_code_execution"] is False
     assert found[1]["peer_id"] is None
@@ -65,7 +65,7 @@ def test_onion_candidate_inventory_is_separate_private_and_unverified(tmp_path, 
     record = next(iter(saved["services"].values()))
     assert first == {"new": 1, "observed": 1, "total": 1}
     assert second == {"new": 0, "observed": 1, "total": 1}
-    assert record["service_url"] == endpoint
+    assert record["service_url"] == endpoint\n    assert record["content_cids"] == ["Qm" + "1" * 44]
     assert record["virtual_port"] == 8443
     assert record["discovery_state"] == "FEED_ADVERTISED_UNPROBED"
     assert record["identity_state"] == "UNVERIFIED"
