@@ -193,8 +193,11 @@ def launch(name, spec):
             event("entrypoint_missing", motor=name)
             return None
 
+    LOGS.mkdir(parents=True, exist_ok=True)
+    os.chmod(LOGS, 0o700)
     log_path = LOGS / f"{name.lower()}.log"
     stream = log_path.open("a", encoding="utf-8")
+    os.fchmod(stream.fileno(), 0o600)
     stream.write(f"\n--- START {now()} ---\n")
     stream.flush()
 
@@ -231,8 +234,10 @@ def handle_signal(_signum, _frame):
 
 def run():
     global STOP
-    STATE.mkdir(parents=True, exist_ok=True)
-    LOGS.mkdir(parents=True, exist_ok=True)
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    LOGS.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(STATE, 0o700)
+    os.chmod(LOGS, 0o700)
 
     if PID_FILE.exists():
         old_pid = PID_FILE.read_text(errors="replace").strip()
