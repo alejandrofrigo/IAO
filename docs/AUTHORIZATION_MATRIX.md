@@ -21,6 +21,43 @@
 | Tarea en cola | `POST /v1/tasks` con `execution_mode=queued` | Sesión raíz asociada al bearer exacto; prueba ECDSA del dispositivo sobre método, ruta, timestamp, nonce y hash del cuerpo; dispositivo primario vinculado a esa sesión; scope de herramienta; efecto READ_ONLY y allowlist de cola. | Encolado limitado a capacidades read-only aprobadas. No se admite ejecución privilegiada/destructiva. |
 | Auditoría | `GET /v1/audit/events` | Bearer válido; `audit.admin` determina vista global; en otro caso, eventos del propio sujeto. | Lectura acotada por sujeto o scope. |
 
+## Inventario de rutas de aplicación `/v1/*`
+
+La siguiente tabla refleja los controles observados en `OmegaService._route`, `handle` y sus autoridades. Los endpoints de bootstrap/login/recovery son públicos en el sentido de que no exigen un bearer preexistente; no son anónimos sin prueba: exigen códigos de un solo uso, challenges y/o firmas raíz y de dispositivo según la operación.
+
+| Ruta y método | Autenticación / autorización | Efecto y límite |
+|---|---|---|
+| `POST /v1/public/session` | Pública; rate limit por dirección de socket | Emite token `guest:` de vida limitada con scopes vacíos. |
+| `POST /v1/operator/bootstrap/status` | Pública; verifica par de claves raíz/dispositivo ya comprometido | Solo informa estado de bootstrap; no concede sesión. |
+| `POST /v1/operator/bootstrap` | Código de bootstrap + recovery code distinto + firmas raíz/dispositivo | Bootstrap de identidad; operación de una sola vez. |
+| `POST /v1/operator/recovery/status` | Pública; verifica par de claves y pertenencia de dispositivo | Solo informa si la recuperación quedó comprometida. |
+| `POST /v1/operator/recovery/challenge` | Recovery code, nuevo recovery code y claves públicas; rate limit | Emite challenge de recuperación acotado. |
+| `POST /v1/operator/recovery/complete` | Challenge + firmas raíz y dispositivo; rate limit | Recupera identidad y sustituye dispositivo activo; autoridad resultante READ_ONLY. |
+| `POST /v1/operator/login/challenge` | Pública; exige autoridades configuradas, clave raíz y dispositivo primario activo; rate limit | Emite challenge; no emite bearer por sí solo. |
+| `POST /v1/operator/login/complete` | Challenge + firmas raíz/dispositivo | Emite bearer de operador de vida limitada y vincula clave activa del dispositivo. |
+| `POST /v1/operator/identity/revoke` | Bearer de operador con sesión raíz vigente + firma raíz + versión de clave | Revoca identidad y dispositivo activo. |
+| `POST /v1/operator/device/bind` | Bearer de operador/sesión vigente + clave ya enrolada + firma raíz | Vincula dispositivo primario a la sesión. |
+| `POST /v1/operator/session/challenge` | Bearer de operador; rechaza guest | Emite challenge de asociación del bearer exacto. |
+| `POST /v1/operator/session/bind` | Bearer de operador + firma raíz sobre challenge de un solo uso | Asocia criptográficamente el bearer exacto; no añade scopes. |
+| `GET /v1/operator/session/status` | Bearer válido; guest solo obtiene estado READ_ONLY | Consulta asociación; no cambia permisos. |
+| `GET /v1/federation/status` | Pública | Diagnóstico `unknown/discovery_only`; no afirma peers ni red operativa. |
+| `POST /v1/federation/internet` | Bearer + scope explícito `federation.internet` | Consulta externa; la denegación se audita y la consulta se registra por digest. |
+| `POST /v1/device/enroll` | Bearer no guest + `IAO_DEVICE_ENROLLMENT_ENABLED=1` + código de enrolamiento | Registra clave pública; no concede scopes. |
+| `POST /v1/device/challenge` | Bearer no guest | Emite challenge para el dispositivo perteneciente al sujeto. |
+| `POST /v1/device/command` | Bearer + prueba de posesión del dispositivo | Devuelve estado READ_ONLY; no ejecuta comandos arbitrarios. |
+| `GET /v1/me` | Bearer; sujetos `operator:` requieren sesión raíz vigente | Devuelve sujeto y scopes del propio token. |
+| `POST /v1/conversations` | Bearer | Crea conversación del sujeto autenticado; guest permitido para chat público. |
+| `GET /v1/conversations/{uuid}/messages` | Bearer + propiedad de la conversación | Lee solo mensajes propios. |
+| `POST /v1/chat` | Bearer + propiedad de conversación | Guarda mensaje y respuesta; salida LLM no autoritativa. |
+| `POST /v1/tasks` | Bearer + scope de la capability + herramienta registrada y validación determinista | Modo sync sujeto a policy; modo queued añade sesión raíz, firma de dispositivo, lease y allowlist READ_ONLY. |
+| `GET /v1/tasks/{uuid}` | Bearer + propiedad de tarea | Lee solo la tarea propia. |
+| `GET /v1/memory`, `GET /v1/memory/export` | Bearer + `memory.read` | Lee/exporta memoria propia. |
+| `POST /v1/memory` | Bearer + `memory.write` + `consent=true` | Crea memoria explícitamente consentida; auditoría conserva digest, no contenido. |
+| `PUT /v1/memory/{uuid}`, `DELETE /v1/memory[/{uuid}]` | Bearer + `memory.write` | Actualiza/elimina memoria propia. |
+| `GET /v1/audit/events` | Bearer; `audit.admin` para vista global | Sin scope admin, devuelve solo eventos del propio sujeto. |
+
+Las rutas exactas tienen métodos allowlist y devuelven 405 con `Allow` cuando el método no está permitido. Las rutas de memoria, conversación y tarea validan ownership; las rutas privilegiadas de operador están además cubiertas por el rollback anchor cuando está configurado. Esta tabla es una revisión estática; los tests de integración exhaustivos para cada fila y ambos adaptadores siguen pendientes.
+
 ## Protocolo de federación `/fed/v1/*`
 
 | Ruta | Exposición | Comprobaciones y autoridad |
