@@ -19,21 +19,25 @@ def _limits(timeout: float) -> None:
         raise RuntimeError("POSIX_SANDBOX_REQUIRED")
     import resource
 
+    def bounded(kind: int, soft_cap: int, hard_cap: int | None = None) -> None:
+        _old_soft, old_hard = resource.getrlimit(kind)
+        target_hard = soft_cap if hard_cap is None else hard_cap
+        if old_hard != resource.RLIM_INFINITY:
+            target_hard = min(target_hard, old_hard)
+        target_soft = min(soft_cap, target_hard)
+        resource.setrlimit(kind, (target_soft, target_hard))
+
     cpu = max(1, int(timeout) + 1)
-    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-    resource.setrlimit(resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESULT_BYTES, MAX_RESULT_BYTES))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+    bounded(resource.RLIMIT_CPU, cpu, cpu + 1)
+    bounded(resource.RLIMIT_AS, MAX_ADDRESS_SPACE)
+    bounded(resource.RLIMIT_FSIZE, MAX_RESULT_BYTES)
+    bounded(resource.RLIMIT_NOFILE, 64)
     if hasattr(resource, "RLIMIT_NPROC"):
-        _soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-        process_limit = min(32, hard)
-        resource.setrlimit(resource.RLIMIT_NPROC, (process_limit, process_limit))
+        bounded(resource.RLIMIT_NPROC, 32)
     if hasattr(resource, "RLIMIT_STACK"):
-        _soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
-        stack_limit = min(16 * 1024 * 1024, hard)
-        resource.setrlimit(resource.RLIMIT_STACK, (stack_limit, stack_limit))
+        bounded(resource.RLIMIT_STACK, 16 * 1024 * 1024)
     if hasattr(resource, "RLIMIT_CORE"):
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        bounded(resource.RLIMIT_CORE, 0)
 
 
 def main() -> int:
