@@ -137,7 +137,8 @@ class DurableTaskQueueTests(unittest.TestCase):
         )
         self.assertTrue(
             self.store.update_claimed_task(
-                "task-1", "worker-a", "VERIFYING"
+                "task-1", "worker-a", "VERIFYING",
+                lease_generation=claimed["lease_generation"],
             )
         )
         self.assertTrue(
@@ -221,6 +222,7 @@ class DurableTaskQueueTests(unittest.TestCase):
 
     def test_state_transition_uses_compare_and_swap(self) -> None:
         self._queue_one()
+        self.store.set_task_state("task-1", "CREATED")
         self.assertTrue(self.store.transition_task_state(
             "task-1", "CREATED", "AUTHENTICATED"
         ))
@@ -232,6 +234,7 @@ class DurableTaskQueueTests(unittest.TestCase):
 
     def test_state_transition_rejects_illegal_edges(self) -> None:
         self._queue_one()
+        self.store.set_task_state("task-1", "CREATED")
         with self.assertRaisesRegex(ValueError, "INVALID_TASK_STATE_TRANSITION"):
             self.store.transition_task_state("task-1", "CREATED", "SUCCEEDED")
         row = self.store.get_task("task-1", "owner-a")
