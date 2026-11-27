@@ -170,6 +170,43 @@ def managed_process_group(pid):
 
 
 
+
+def motor_heartbeat_status(name, pid):
+    """Require a fresh heartbeat from the exact launched process for long-lived motors."""
+    components = {
+        "NODE_NETWORK": ("NODE_NETWORK", "node-network-heartbeat.json"),
+        "DISTRIBUTED_INTELLIGENCE": (
+            "DISTRIBUTED_INTELLIGENCE",
+            "distributed-intelligence-heartbeat.json",
+        ),
+    }
+    spec = components.get(name)
+    if spec is None:
+        return "PROCESS_ALIVE_UNVERIFIED"
+    from omega.supervision import read_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get("OMEGA_STATE_DIR", ".state"),
+        )
+    )
+    component, filename = spec
+    heartbeat = read_heartbeat(
+        state_dir / filename,
+        expected_component=component,
+    )
+    if heartbeat.get("status") == "UNVERIFIED" or heartbeat.get("pid") != _valid_pid(pid):
+        return "PROCESS_ALIVE_UNVERIFIED"
+    return {
+        "HEALTHY": "HEALTHY",
+        "CYCLE_IN_PROGRESS": "CYCLE_IN_PROGRESS",
+        "DEGRADED": "DEGRADED",
+        "STALE": "STALE_HEARTBEAT",
+        "STARTING": "STARTING",
+    }.get(heartbeat.get("status"), "PROCESS_ALIVE_UNVERIFIED")
+
+
 def task_worker_status():
     """Read TaskWorker functional health from its process-bound heartbeat."""
     from omega.supervision import read_heartbeat
@@ -215,6 +252,8 @@ def status():
 
         if alive:
             state = "PROCESS_ALIVE_UNVERIFIED"
+            if name in {"NODE_NETWORK", "DISTRIBUTED_INTELLIGENCE"}:
+                state = motor_heartbeat_status(name, pid)
             if name in {"PADGE", "AUTONOMY_CONTINUOUS"}:
                 from omega.supervision import read_heartbeat, read_lock_owner
 
