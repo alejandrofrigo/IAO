@@ -774,7 +774,7 @@ class OmegaService:
 
         if method == "POST" and p == "/v1/device/command":
             pr = self._auth(headers)
-            if not pr.subject.startswith("operator:"):
+            if pr.subject.startswith("guest:"):
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
