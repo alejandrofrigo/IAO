@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from omega.env_loader import load_env_files
-from omega.config import load_settings, validate_persistent_keys
+from omega.config import load_settings, session_signing_key, validate_persistent_keys
 from omega.service import MAX_BODY, OmegaService
 from omega.device_authority import DeviceAuthority
 from omega.operator_identity import OperatorIdentityAuthority
@@ -540,9 +540,7 @@ def main() -> None:
     runtime_env = Path.home() / '.iao-runtime.env'
     load_env_files((project_env, runtime_env))
     s = load_settings()
-    if s.app_env == "production":
-        sys.exit("BLOCKED_EXTERNAL: dev token auth is not allowed in production; configure OIDC")
-    key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+    key = session_signing_key()
     try:
         validate_persistent_keys(key, _load_persistent_audit_key())
     except (RuntimeError, ValueError):
