@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS message(
 CREATE TABLE IF NOT EXISTS task(
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL, intent_json TEXT NOT NULL,
   result_json TEXT, idem_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  lease_owner TEXT, lease_until TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,\n  lease_generation INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT, lease_until TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+  lease_generation INTEGER NOT NULL DEFAULT 0,
   UNIQUE(owner, idem_key));
 CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner, created_at);
 CREATE TABLE IF NOT EXISTS tool_execution(
@@ -476,7 +477,7 @@ class Store:
                     return None
                 changed = self.db.execute(
                     "UPDATE task SET state='RUNNING', lease_owner=?, lease_until=?, "
-                    "attempt_count=attempt_count+1, updated_at=? "
+                    "attempt_count=attempt_count+1, lease_generation=lease_generation+1, updated_at=? "
                     "WHERE id=? AND state='QUEUED'",
                     (worker_id, lease_until_iso, claimed_at_iso, row["id"]),
                 ).rowcount
@@ -500,8 +501,15 @@ class Store:
         result: dict[str, Any] | None = None,
         *,
         release: bool = False,
+        lease_generation: int | None = None,
     ) -> bool:
-        """Fenced task update: only the current lease holder may change its task."""
+        """Fenced update: worker ID, monotonic generation and live lease must all match."""
+        if (
+            isinstance(lease_generation, bool)
+            or not isinstance(lease_generation, int)
+            or lease_generation < 1
+        ):
+            return False
         if state not in {"VERIFYING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED"}:
             raise ValueError("INVALID_CLAIMED_TASK_STATE")
         if release and state == "VERIFYING":
@@ -514,8 +522,8 @@ class Store:
                     "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
                     "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
                     "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
-                    "AND lease_owner=? AND lease_until>?",
-                    (state, now, int(release), int(release), task_id, worker_id, now),
+                    "AND lease_owner=? AND lease_generation=? AND lease_until>?",
+                    (state, now, int(release), int(release), task_id, worker_id, lease_generation, now),
                 ).rowcount
             else:
                 changed = self.db.execute(
@@ -523,9 +531,9 @@ class Store:
                     "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
                     "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
                     "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
-                    "AND lease_owner=? AND lease_until>?",
+                    "AND lease_owner=? AND lease_generation=? AND lease_until>?",
                     (state, json.dumps(result, sort_keys=True), now,
-                     int(release), int(release), task_id, worker_id, now),
+                     int(release), int(release), task_id, worker_id, lease_generation, now),
                 ).rowcount
         return changed == 1
 
