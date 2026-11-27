@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from omega.ipfs_content import validate_cid\nfrom omega.federation_transport import (
+from omega.ipfs_content import validate_cid
+from omega.federation_transport import (
     FederationTransportError,
     _parse_onion_url,
     fetch_onion_json,
