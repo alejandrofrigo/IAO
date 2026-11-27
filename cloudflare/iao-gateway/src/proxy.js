@@ -48,7 +48,7 @@ export function configuredApiOrigin(value) {
   }
 }
 
-function allowedRoute(method, pathname) {
+export function allowedRoute(method, pathname) {
   if (pathname === "/health/live" || pathname === "/health/ready") return method === "GET";
 
   // The gateway exposes only routes used by the public chat, signed primary
