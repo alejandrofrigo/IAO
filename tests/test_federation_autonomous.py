@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import time
-from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
@@ -76,9 +75,12 @@ def setup_peer(monkeypatch, tmp_path, *, consent=True, revoked=False):
         "rate_limit_per_min": 30,
     }
     def fake_get(url, *, timeout, max_bytes):
-        if url.endswith("/fed/v1/publication"): return publication
-        if url.endswith("/fed/v1/identity"): return identity
-        if url.endswith("/fed/v1/contract"): return contract
+        if url.endswith("/fed/v1/publication"):
+            return publication
+        if url.endswith("/fed/v1/identity"):
+            return identity
+        if url.endswith("/fed/v1/contract"):
+            return contract
         raise AssertionError(url)
     def fake_post(url, payload, *, timeout, max_bytes):
         proof = {
