@@ -168,6 +168,10 @@ def _ordered_candidates(configured, states, requirements, now):
 
     def order(provider):
         state = _health_entry(states, provider["id"])
+        if not ready:
+            retry_after = _finite_number(state.get("retry_after"), 0.0)
+            failures = max(0, min(1000, int(_finite_number(state.get("failures"), 0))))
+            return retry_after, failures, provider["id"]
         failures = max(0, min(1000, int(_finite_number(state.get("failures"), 0))))
         cost = _finite_number(provider.get("cost_per_1k_tokens"), float("inf"))
         if cost < 0:
