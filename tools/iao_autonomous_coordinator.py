@@ -364,8 +364,7 @@ def main():
         parser.error("El intervalo mínimo permitido es 60 segundos")
 
     if args.mode == "status":
-        status()
-        return 0
+        return status()
 
     try:
         lock = acquire_lock()
