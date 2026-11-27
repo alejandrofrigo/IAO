@@ -65,7 +65,6 @@ def _stop_background_workers() -> None:
 
 app = FastAPI(title="IAO API", version="11.2.0", lifespan=_runtime_lifespan)
 _service = None
-_device_authority = None
 _federation_node = None
 _federation_lock = threading.Lock()
 _federation_worker_status = {"autojoin": False, "discovery": False, "external_network": False}
@@ -89,19 +88,11 @@ app.add_middleware(
 
 
 def _get_device_authority():
-    global _device_authority
-    if _device_authority is not None:
-        return _device_authority
-    with _service_lock:
-        if _device_authority is None:
-            from omega.device_authority import DeviceAuthority
-
-            state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
-            _device_authority = DeviceAuthority(
-                state_dir / "device-authority.sqlite3",
-                os.environ.get("IAO_DEVICE_ENROLLMENT_CODE", ""),
-            )
-    return _device_authority
+    """Return the authority owned by the process-wide OmegaService."""
+    authority = _get_service().device_authority
+    if authority is None:
+        raise RuntimeError("DEVICE_AUTHORITY_UNAVAILABLE")
+    return authority
 
 
 async def _device_json(request: Request):
