@@ -60,7 +60,7 @@ def _atomic_report(path: Path, payload: dict) -> None:
 def tor_discovery_cycle() -> dict:
     """Run configured onion feeds independently from the libp2p DHT result."""
     from omega.onion_discovery import run_configured_onion_discovery
-    return run_configured_onion_discovery(state_dir=state_dir())
+    return run_configured_onion_discovery()
 
 
 def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
