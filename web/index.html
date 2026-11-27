@@ -36,6 +36,18 @@ button:disabled{opacity:.5}
 <button id="send" disabled>Enviar mensaje</button>
 <small>No compartas contraseñas, claves privadas ni datos sensibles.</small>
 </section>
+<section id="iao-task-intake-panel" class="panel" aria-labelledby="iao-task-intake-title">
+<h2 id="iao-task-intake-title">Tareas de solo lectura</h2>
+<p class="muted">Solo permite buscar en el corpus de IAO con <code>knowledge.search</code>. Requiere sesión autenticada, dispositivo primario vinculado y autorización explícita vigente. No ejecuta comandos remotos.</p>
+<p class="muted">La consulta queda registrada en la tarea. No introduzcas contraseñas, claves privadas ni datos personales sensibles.</p>
+<label for="iao-task-query">Consulta para el corpus de IAO</label>
+<textarea id="iao-task-query" rows="3" maxlength="2000" placeholder="Escribe qué información quieres buscar..." disabled></textarea>
+<button id="iao-task-submit" type="button" disabled>Enviar búsqueda a la cola de IAO</button>
+<button id="iao-task-refresh" type="button" disabled>Consultar estado de la última tarea</button>
+<div id="iao-task-auth-status" class="status">Verificando autorización...</div>
+<div id="iao-task-status" class="status" role="status">Sin tareas enviadas.</div>
+<pre id="iao-task-result" aria-live="polite"></pre>
+</section>
 </main>
 <script src="./api-config.js"></script>
 <script>
@@ -216,5 +228,6 @@ button:disabled{opacity:.5}
 </script>
 <script src="./device-authority.js" defer></script>
 <script src="./operator-identity.js" defer></script>
+<script src="./task-intake.js" defer></script>
 </body>
 </html>

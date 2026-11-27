@@ -694,6 +694,7 @@
       }
       const result = await bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
       await refreshSessionGates();
+      window.dispatchEvent(new Event("iao-session-changed"));
       return result;
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
     grantCapabilityButton.addEventListener("click", () => {

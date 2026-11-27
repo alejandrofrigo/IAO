@@ -89,7 +89,7 @@ This is an intentional security boundary, not a reason to widen the operator tok
 - Operator authentication derives effective scopes from live grants on every request; login remains empty-scope by default.
 - Explicit revocation also requires fresh root and primary-device signatures. Root rotation, device replacement, session replacement, expiry or policy-version change invalidates the grant.
 - Task intake rechecks the live grant immediately before queue transition. TaskWorker checks it again, together with the existing session/device/policy gates, immediately before local tool execution.
-- The browser identity panel exposes explicit grant and revoke controls with confirmation. It does not yet expose a complete task-submission/status workflow.
+- The browser identity panel exposes explicit grant and revoke controls with confirmation. Draft PR #13 adds a restricted chat task-intake panel for `knowledge.search`, idempotent submission and owner-scoped status lookup. It does not expose general-purpose task or tool selection. The current draft Cloudflare gateway PR #4 already allowlists `POST /v1/tasks` and owner-scoped `GET /v1/tasks/{uuid}`, and forwards `Idempotency-Key` plus `X-IAO-Device-Proof`. PR #4 remains draft, disabled by default and undeployed; until a fixed origin and gateway are deliberately configured and activated, this UI still requires a separately configured API origin.
 
 Do not solve the remaining UI gap by assigning all registry capabilities to operator sessions or by adding an agent scope such as `agent.task.claim`. The initial worker continues to claim and execute tasks locally under the existing lease fencing.
 

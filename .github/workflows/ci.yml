@@ -46,6 +46,7 @@ jobs:
           node --check web/api-config.js
           node --check web/device-authority.js
           node --check web/operator-identity.js
+          node --check web/task-intake.js
           node --test web/api-config.test.js
 
       - name: Lint production integration
