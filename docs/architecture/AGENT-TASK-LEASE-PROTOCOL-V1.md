@@ -1,6 +1,6 @@
 # IAO Task Intake and Lease Protocol v1
 
-Status: architecture decision implemented in draft PR #10; CI, merge and end-to-end verification are pending. No production activation.
+Status: implementation spans draft PRs #10, #13 and #16. The isolated mobile end-to-end path and Python suites pass on the current PR #16 head; no merge or production activation.
 
 ## Purpose
 
@@ -20,7 +20,14 @@ The current Store provides:
 
 The current TaskWorker revalidates the policy version, registered capability, read-only effect class, tool allowlist, task expiry, operator session digest and primary-device binding before execution. It runs tools in an isolated process and verifies results before success.
 
-The delegated-agent authority currently permits only `agent.status.read`. It is not authorized to claim tasks or complete them. The Termux client is read-only. Operator capability grants are implemented in draft PR #10, but the browser task-submission/status workflow and end-to-end activation remain incomplete.
+The delegated-agent authority currently permits only `agent.status.read`. It is not authorized to claim tasks or complete them. The Termux client is read-only. Operator capability grants are implemented in draft PR #10. Draft PR #13 provides a restricted task-intake panel; draft PR #16 adds an explicit task action in the chat composer and starts the existing local worker only when opted in. The isolated mobile end-to-end test covers queueing, execution, evidence return and visitor denial; production activation remains blocked.
+
+
+## Chat-to-worker integration (draft PR #16)
+
+The normal chat button continues to call `POST /v1/chat`. A separate button explicitly submits the same composer text as a queued `knowledge.search` task. The browser helper requires an operator bearer session, a live `knowledge.search` grant and the device-authority client's signed queued-request method. Missing identity, missing grant or device-proof failure leaves the task unqueued. Visitor sessions cannot use this path.
+
+After acceptance, the chat polls only the owner-scoped task endpoint and renders the task state, decision, evidence-verification verdict and result. The API worker is started only when `IAO_TASK_WORKER_ENABLED=true`; it shares the API service's Store and authority objects. The mobile Chromium test enables this setting only in a temporary isolated test runtime and verifies a successful worker result plus visitor denial after session loss/reload. This is test evidence, not production activation or a guarantee that a deployed worker is enabled.
 
 ## Decision: do not add remote agent claim/complete in v1
 
@@ -54,7 +61,7 @@ Therefore v1 uses authenticated task intake, not remote task execution:
 - Audit the existing `POST /v1/tasks` handler to confirm queued-mode authorization is cryptographically tied to the primary device, not merely a bearer session.
 - Ensure a task request cannot choose a capability outside the registry allowlist or enlarge its budget, timeout, scopes, or expiry.
 - Ensure task status reads are owner-scoped and never expose lease-owner identifiers or private intent fields to guests.
-- Ensure the browser only submits tasks from the authorized operator session and only after primary-device proof; public chat remains guest/read-only.
+- Preserve and re-run the browser gate proving that only the explicit task action, an authorized operator session, the bound primary device and a live `knowledge.search` grant can enqueue; ordinary visitor chat remains read-only.
 - Add tests for duplicate idempotency keys, guest rejection, unbound-device rejection, invalid signatures, cross-owner reads, revoked identity, policy-version changes, queue transition failures, lease expiry, stale completion, worker restart and audit integrity.
 - Keep the Termux agent read-only until this end-to-end path is proven. Its role may later be narrowed to local health/worker supervision and authenticated status reporting, not task claiming.
 
@@ -89,7 +96,7 @@ This is an intentional security boundary, not a reason to widen the operator tok
 - Operator authentication derives effective scopes from live grants on every request; login remains empty-scope by default.
 - Explicit revocation also requires fresh root and primary-device signatures. Root rotation, device replacement, session replacement, expiry or policy-version change invalidates the grant.
 - Task intake rechecks the live grant immediately before queue transition. TaskWorker checks it again, together with the existing session/device/policy gates, immediately before local tool execution.
-- The browser identity panel exposes explicit grant and revoke controls with confirmation. Draft PR #13 adds a restricted chat task-intake panel for `knowledge.search`, idempotent submission and owner-scoped status lookup. It does not expose general-purpose task or tool selection. The current draft Cloudflare gateway PR #4 already allowlists `POST /v1/tasks` and owner-scoped `GET /v1/tasks/{uuid}`, and forwards `Idempotency-Key` plus `X-IAO-Device-Proof`. PR #4 remains draft, disabled by default and undeployed; until a fixed origin and gateway are deliberately configured and activated, this UI still requires a separately configured API origin.
+- The browser identity panel exposes explicit grant and revoke controls with confirmation. Draft PR #13 adds a restricted task-intake panel; draft PR #16 adds a second, explicit chat-composer action for `knowledge.search`. It requires the active grant and delegates request signing to the existing device-authority client; normal chat submission is unchanged. The UI polls owner-scoped `GET /v1/tasks/{uuid}` and displays the worker's decision, evidence verdict and result. No general-purpose task or tool selection is exposed. The current draft Cloudflare gateway PR #4 allowlists the task routes and forwards `Idempotency-Key` plus `X-IAO-Device-Proof`; it remains draft and disabled by default. Until a fixed origin and gateway are deliberately configured and activated, this UI still requires a separately configured API origin.
 
 Do not solve the remaining UI gap by assigning all registry capabilities to operator sessions or by adding an agent scope such as `agent.task.claim`. The initial worker continues to claim and execute tasks locally under the existing lease fencing.
 
