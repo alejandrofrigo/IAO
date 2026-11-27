@@ -41,8 +41,23 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 16 | Manejo uniforme de errores | Errores internos tipados, códigos públicos estables, no filtración de excepciones ni secretos. | EN CURSO |
 | 17 | Empaquetado reproducible | Dependencias fijadas, instalación limpia y build reproducible en versiones Python soportadas. | PENDIENTE |
 | 18 | Contrato de contenedor | Imagen construible, usuario/permisos adecuados, healthcheck y configuración explícita; sin secretos en capas. | IMPLEMENTADO |
-| 19 | Puertas de calidad y regresión | CI ejecuta compilación, tests, lint, contratos y gates críticos en Python soportado; fallos bloquean integración. | IMPLEMENTADO |
+| 19 | Puertas de calidad y regresión | CI ejecuta compilación, tests, lint, contratos y gates críticos en Python soportado; fallos bloquean integración. | EN CURSO |
 | 20 | Cierre de fase y guía operativa | Informe de evidencia por objetivo, brechas restantes, procedimiento de recuperación y criterios para iniciar Fase 2. | EN CURSO |
+
+## Resumen consolidado de los 20 objetivos
+
+Corte documental del HEAD inspeccionado: `9582a9570704277a11ab5dadbb15732322f055f5`. Los estados describen el grado de implementación, no la aceptación final.
+
+| Estado | Cantidad | Objetivos |
+|---|---:|---|
+| IMPLEMENTADO (pendiente de evidencia de aceptación) | 12 | 02–12 y 18 |
+| EN CURSO | 7 | 01, 13, 14, 15, 16, 19 y 20 |
+| PENDIENTE | 1 | 17 |
+| VERIFICADO | 0 | Ninguno todavía |
+
+**Resultado global:** 0/20 objetivos verificados; 12/20 tienen implementación documentada, 7/20 siguen en curso y 1/20 está pendiente. Por tanto, la Fase 1 permanece **EN CURSO**. No se inicia formalmente la Fase 2 hasta que cada objetivo tenga evidencia aceptada en el HEAD final, CI completo y las dependencias entre PRs resueltas explícitamente.
+
+Los objetivos 02–12 y 18 no se elevan a VERIFICADO por su sola implementación. Los objetivos 01 y 13–16 requieren completar sus brechas de inventario, autorización, privacidad, supervisión y contratos de error. El 17 requiere un `uv.lock` revisado e incorporado y una instalación bloqueada reproducible. El 19 requiere que todas las puertas pasen sobre el mismo SHA final. El 20 requiere reconciliar la evidencia, ejecutar el runbook y aprobar el cierre sin afirmar despliegue o capacidades externas no probadas.
 
 ## Inventario inicial conocido — no equivale a verificación actual
 
