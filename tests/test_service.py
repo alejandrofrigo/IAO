@@ -976,7 +976,7 @@ class AuthTests(Base):
         reader = self.tok("member:reader", ["memory.read"])
         status, payload = self.call("GET", "/v1/memory", reader)
         self.assertEqual(status, 200)
-        self.assertIn("items", payload)
+        self.assertIn("memories", payload)
 
 
 class PolicyToolTests(Base):
