@@ -90,6 +90,7 @@ Comprobaciones locales seguras (cada bloque queda aislado en un subshell y no ci
 - Los peers libp2p y onion se almacenan como candidatos no verificados en registros privados 0700/0600. La asimilación no implica identidad, conectividad, confianza, enrolamiento ni permisos.
 - `omega.p2p_presence.verify_presence` valida una afirmación Ed25519 ligada a nonce y lease; su resultado declara explícitamente `SIGNED_ASSERTION_ONLY` y no permite enrolamiento.
 - `omega.ipfs_content.fetch_public_cid` solo consulta un Kubo local en loopback, valida CID y limita el contenido a 2 MB; no ejecuta el contenido.
+- `ipfs.fetch` es un adaptador opcional de gateway HTTPS: solo acepta CIDv1 DAG-JSON SHA-256, requiere `IAO_IPFS_GATEWAY_HOSTS` configurado por el operador, aplica egress SSRF-safe y verifica el digest del bloque. No se habilita por defecto ni entra en la allowlist de tareas; no se afirma disponibilidad de ningún gateway.
 - El smoke test `iao-runtime-smoke.yml` instala Tor/Kubo efímeros en CI y publica evidencia de conectividad y de las invariantes de cuarentena. Hasta que ese workflow termine correctamente, no declarar Tor/P2P operativo.
 
 ## Publicación web y backend
