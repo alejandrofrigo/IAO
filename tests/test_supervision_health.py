@@ -127,8 +127,8 @@ def test_coordinator_lock_is_private_and_records_its_owner(tmp_path, monkeypatch
 
 def test_supervisor_json_state_is_atomic_and_private(tmp_path):
     path = tmp_path / "private-state" / "children.json"
-    supervisor.save_json(path, {"PADGE": {"pid": os.getpid()}})
-    assert supervisor.load_json(path, {}) == {"PADGE": {"pid": os.getpid()}}
+    supervisor.save_json(path, {"PADGE": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())}})
+    assert supervisor.load_json(path, {}) == {"PADGE": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())}}
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
@@ -270,7 +270,7 @@ def test_supervisor_surfaces_failed_cycle_as_degraded(tmp_path, monkeypatch, cap
     lock_path = tmp_path / ".state" / "iao-autonomy" / "coordinator.lock"
     heartbeat_path = tmp_path / ".state" / "iao-autonomy" / "coordinator-heartbeat.json"
     monkeypatch.setattr(supervisor, "COORDINATOR_LOCK", lock_path)
-    monkeypatch.setattr(supervisor, "read_children", lambda: {"PADGE": {"pid": os.getpid()}})
+    monkeypatch.setattr(supervisor, "read_children", lambda: {"PADGE": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())}})
     monkeypatch.setattr(
         supervisor, "adapters",
         lambda: {"PADGE": {"enabled": True, "command": ["python", "coordinator.py"]}},
