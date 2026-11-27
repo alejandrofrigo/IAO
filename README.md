@@ -14,6 +14,8 @@ See [ChatGPT × IAO: collaboration of construction](docs/CHATGPT_IAO_COLLABORATI
 
 La hoja de ruta técnica activa está en [Fase 1 — Núcleo operativo y arquitectura](docs/PHASE_1_CORE_FOUNDATION.md). Cada fase se cierra con 20 objetivos verificables y evidencia; el código presente no se considera capacidad operativa hasta superar sus pruebas.
 
+La [matriz de autenticación y autorización](docs/AUTHORIZATION_MATRIX.md) describe los requisitos por clase de ruta y las brechas de verificación.
+
 El [contrato de arquitectura del núcleo](docs/CORE_ARCHITECTURE_CONTRACT.md) fija las responsabilidades de los adaptadores, el servicio, el Store, la identidad, la política, las herramientas y la cola persistente.
 
 ## Status honesty
