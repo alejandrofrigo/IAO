@@ -1,0 +1,30 @@
+name: IAO Cloudflare gateway foundation
+
+on:
+  push:
+    branches:
+      - feat/cloudflare-iao-gateway-foundation-20261127
+    paths:
+      - "cloudflare/iao-gateway/**"
+      - ".github/workflows/iao-cloudflare-gateway.yml"
+  pull_request:
+    paths:
+      - "cloudflare/iao-gateway/**"
+      - ".github/workflows/iao-cloudflare-gateway.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare/iao-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run gateway fail-closed tests
+        run: npm test
