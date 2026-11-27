@@ -50,3 +50,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:18080/health/live
           docker exec iao-api-qualification python -c "from pathlib import Path; p=Path('/app/knowledge'); files=sorted(p.glob('*.txt')); assert len(files) >= 1, 'production knowledge corpus missing'; assert (p/'omega-overview.txt').is_file(), 'required corpus document missing'; print('knowledge_corpus_files=' + str(len(files)))"
           docker logs iao-api-qualification
+
+      - name: Verify production OS sandbox inside the built image
+        run: |
+          docker exec iao-api-qualification env APP_ENV=production IAO_TOOL_SANDBOX_MODE=bubblewrap python -c "from omega.tools.knowledge_search import KnowledgeCorpus; from omega.tools.process_runner import run_tool_isolated; corpus=KnowledgeCorpus('/app/knowledge'); payload=corpus.validate_input({'query':'IAO','limit':1}); output, verdict=run_tool_isolated(corpus.run, corpus.verify, payload, 5); assert verdict == 'PASS'; assert output.get('tool') == 'knowledge.search'; print('production_os_sandbox=PASS')"
