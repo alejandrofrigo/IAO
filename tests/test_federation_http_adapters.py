@@ -365,7 +365,7 @@ def test_both_adapters_replace_invalid_federation_correlation_id(monkeypatch, tm
         ("127.0.0.1", 0),
         make_handler(object(), CorrelationNode()),
     )
-    thread = Thread(httpd.serve_forever, daemon=True)
+    thread = Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     request = urllib.request.Request(
         f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/contract",
