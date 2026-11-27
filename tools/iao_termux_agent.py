@@ -63,12 +63,17 @@ def init_key(state_dir: Path) -> dict[str, str]:
 
 
 def _origin(value: str) -> str:
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise AgentClientError("INVALID_HTTPS_API_ORIGIN") from None
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
         raise AgentClientError("INVALID_HTTPS_API_ORIGIN")
-    if parsed.port not in (None, 443):
+    if port not in (None, 443):
         raise AgentClientError("NONSTANDARD_API_PORT_REFUSED")
     return "https://" + parsed.netloc
+
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
