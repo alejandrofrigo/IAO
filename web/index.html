@@ -245,7 +245,13 @@ button:disabled{opacity:.5}
         }
         if (!latest) throw new Error("TASK_STATUS_UNAVAILABLE");
         addMessage("omega", "Resultado de tarea (" + latest.state + "):\n" +
-          JSON.stringify(latest.result || latest, null, 2));
+          JSON.stringify({
+            state: latest.state,
+            decision: latest.decision || null,
+            verification: latest.verification || null,
+            result: latest.result || null,
+            error: latest.error || null
+          }, null, 2));
         status(latest.state === "SUCCEEDED"
           ? "Tarea ejecutada y evidencia verificada."
           : "La tarea terminó en estado " + latest.state + ".");
