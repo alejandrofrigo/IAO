@@ -118,6 +118,21 @@ def discover_feed(url, timeout=10):
     return out
 
 
+
+from omega.onion_discovery import (
+    discover_onion_feed as _discover_onion_feed,
+    merge_onion_candidates as _merge_onion_candidates,
+)
+
+
+def discover_onion_feed(url, timeout=15):
+    return _discover_onion_feed(url, timeout=timeout)
+
+
+def merge_onion_candidates(candidates):
+    return _merge_onion_candidates(candidates, state_dir=STATE)
+
+
 def _validate_local_ipfs_api(value):
     """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
     from urllib.parse import urlsplit
@@ -237,6 +252,11 @@ def run_discovery():
     for f in sources.get("feeds", []):
         if isinstance(f, str) and f.startswith("https://"):
             candidates.extend(discover_feed(f))
+    onion_feeds = sources.get("onion_feeds", [])
+    if isinstance(onion_feeds, list):
+        for feed in onion_feeds[:20]:
+            if isinstance(feed, str):
+                candidates.extend(discover_onion_feed(feed))
     dht = sources.get("dht", {})
     if dht.get("enabled"):
         candidates.extend(discover_dht(dht.get("ipfs_api", "http://127.0.0.1:5001")))
@@ -516,6 +536,8 @@ def run_cycle(dry_run=False, discover=True):
         candidates = run_discovery()
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
         discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
+        onion_candidates = [item for item in candidates if isinstance(item, dict) and item.get("source") == "tor_onion_feed"]
+        discovery_summary["onion_assimilation"] = merge_onion_candidates(onion_candidates)
         discovery_summary["candidates_discovered"] = len(candidates)
         try:
             from omega.libp2p_discovery import discover_sync

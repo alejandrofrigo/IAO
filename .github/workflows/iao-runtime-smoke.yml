@@ -1,0 +1,123 @@
+name: IAO decentralized runtime smoke
+
+on:
+  push:
+    branches:
+      - "feat/tor-p2p-decentralized-runtime-*"
+  pull_request:
+    branches:
+      - "iao-production-build-20261126"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tor-ipfs-libp2p-smoke:
+    name: Ephemeral Tor + Kubo + IAO discovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Tor and runtime utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tor curl jq
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[p2p,tor]"
+
+      - name: Start isolated Tor client
+        run: |
+          mkdir -p "$RUNNER_TEMP/tor-data"
+          chmod 700 "$RUNNER_TEMP/tor-data"
+          cat > "$RUNNER_TEMP/torrc" <<EOF
+          DataDirectory $RUNNER_TEMP/tor-data
+          SocksPort 127.0.0.1:9050
+          ControlPort 0
+          Log notice stdout
+          EOF
+          tor -f "$RUNNER_TEMP/torrc" > "$RUNNER_TEMP/tor.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/tor.pid"
+          for attempt in $(seq 1 90); do
+            if curl --silent --show-error --max-time 8 --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip -o "$RUNNER_TEMP/tor-check.json"; then
+              if jq -e '.IsTor == true' "$RUNNER_TEMP/tor-check.json" >/dev/null; then
+                echo "TOR_SOCKS=READY"
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+          echo "TOR_BOOTSTRAP_FAILED"
+          tail -80 "$RUNNER_TEMP/tor.log"
+          exit 1
+
+      - name: Install and start Kubo
+        run: |
+          curl -fsSL https://dist.ipfs.tech/kubo/v0.42.0/kubo_v0.42.0_linux-amd64.tar.gz -o "$RUNNER_TEMP/kubo.tar.gz"
+          tar -xzf "$RUNNER_TEMP/kubo.tar.gz" -C "$RUNNER_TEMP"
+          sudo "$RUNNER_TEMP/kubo/install.sh"
+          export IPFS_PATH="$RUNNER_TEMP/ipfs"
+          ipfs init
+          ipfs daemon > "$RUNNER_TEMP/ipfs.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ipfs.pid"
+          for attempt in $(seq 1 45); do
+            if ipfs id >/dev/null 2>&1; then
+              echo "KUBO_API=READY"
+              ipfs version
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "KUBO_START_FAILED"
+          tail -80 "$RUNNER_TEMP/ipfs.log"
+          exit 1
+
+      - name: Execute one bounded IAO discovery cycle
+        env:
+          IAO_TOR_SOCKS_HOST: 127.0.0.1
+          IAO_TOR_SOCKS_PORT: "9050"
+          IAO_STATE_DIR: ${{ runner.temp }}/iao-state
+          IPFS_PATH: ${{ runner.temp }}/ipfs
+        run: |
+          python tools/iao_libp2p_discovery.py --once --timeout 30 | tee "$RUNNER_TEMP/iao-discovery.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path(".state/federation/libp2p/discovery-report.json").read_text()) if Path(".state/federation/libp2p/discovery-report.json").exists() else None
+          if report is None:
+              report_path = Path(__import__("os").environ["IAO_STATE_DIR"]) / "federation/libp2p/discovery-report.json"
+              report = json.loads(report_path.read_text())
+          assert report.get("status") in {"DISCOVERY_COMPLETED", "BOOTSTRAP_UNAVAILABLE", "NO_VALID_BOOTSTRAP_PEERS", "DISCOVERY_ERROR"}
+          assert report.get("enrollment_performed") is False
+          assert report.get("capabilities_granted") == []
+          assert report.get("remote_code_executed") is False
+          assert report.get("listener_exposed") is False
+          print("IAO_DISCOVERY_STATUS=" + str(report.get("status")))
+          print("BOOTSTRAPPERS_CONNECTED=" + str(report.get("connected_bootstrappers", 0)))
+          print("PEERS_DISCOVERED=" + str(report.get("routing_peers_discovered", 0)))
+          print("ONION_FEEDS_STATUS=" + str(report.get("tor_onion_discovery", {}).get("status", "UNKNOWN")))
+          print("SAFETY_INVARIANTS=PASS")
+          PY
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iao-runtime-smoke-evidence
+          path: |
+            ${{ runner.temp }}/tor.log
+            ${{ runner.temp }}/ipfs.log
+            ${{ runner.temp }}/tor-check.json
+            ${{ runner.temp }}/iao-discovery.json
+            ${{ runner.temp }}/iao-state/
+            .state/federation/libp2p/discovery-report.json
+          if-no-files-found: ignore
+          retention-days: 7
