@@ -119,13 +119,14 @@ def test_origin_rejects_non_fixed_https_origin(value):
 def test_origin_accepts_https_host():
     assert _origin("https://api.example.org/") == "https://api.example.org"
 
+
 def test_agent_request_fails_closed_after_primary_binding_version_changes(tmp_path):
     authority, key, agent_id = _agent(tmp_path)
     challenge = authority.issue_agent_challenge(agent_id)
     timestamp, signature = _signed_request(authority, key, agent_id, challenge["nonce"])
     with sqlite3.connect(authority.operator_identity.database) as db:
         db.execute("UPDATE primary_device_bindings SET key_version=2")
-    with pytest.raises(AgentAuthorityError, match="AGENT_NOT_ACTIVE"):
+    with pytest.raises(AgentAuthorityError, match="PRIMARY_DEVICE_NOT_AUTHORIZED"):
         authority.verify_agent_request(
             agent_id=agent_id, nonce=challenge["nonce"], timestamp=timestamp,
             signature=signature, method="GET", path="/v1/agent/status", body=b"",
