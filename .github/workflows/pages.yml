@@ -56,7 +56,7 @@ jobs:
               meta = '<meta name="iao-api-base" content="' + html.escape(base, quote=True) + '">'
               if "<head>" not in source:
                   raise SystemExit("HTML_HEAD_MISSING")
-              index.write_text(source.replace("<head>", "<head>\\n    " + meta, 1), encoding="utf-8")
+              index.write_text(source.replace("<head>", "<head>\n    " + meta, 1), encoding="utf-8")
           PY
       - uses: actions/upload-pages-artifact@v3
         with:
