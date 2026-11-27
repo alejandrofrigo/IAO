@@ -16,9 +16,11 @@ must be writable by the unprivileged `iao` user.
 
 Required secret environment variables:
 
-- `OMEGA_DEV_TOKEN_KEY`: at least 32 characters. This currently signs the
-  short-lived public-session tokens; it is a development HMAC mechanism, not
-  OIDC and not a substitute for device-bound proof.
+- `IAO_SESSION_SIGNING_KEY`: at least 32 characters of random secret
+  material, distinct from `AUDIT_HMAC_KEY`. Production reads this key only;
+  it never falls back to `OMEGA_DEV_TOKEN_KEY`. It signs short-lived bearer
+  envelopes after the operator has proved possession of both the root key and
+  the registered primary-device key. Guest tokens have no scopes.
 - `AUDIT_HMAC_KEY`: at least 32 characters. Persistent audit-chain key. Keep
   it stable across restarts and backups; changing it invalidates verification
   of the existing chain.
@@ -65,32 +67,32 @@ provides `IAO_DEVICE_ENROLLMENT_CODE`. Enrollment also requires an authenticated
 browser session. The endpoint returns only the algorithm; the browser derives
 the public-key fingerprint locally and does not display it. The deployment
 operator must ensure TLS at the public edge before enabling enrollment. The code
-is consumed once and is never written to audit events. The authenticated browser
-session is used to request challenges, and the browser signs queued task bodies
-locally. The queued worker and API continue to enforce `READ_ONLY` capabilities.
-This integration does **not** grant write, execution, deployment, credential or
-administrative authority. The current public-session identity is an expiring
-guest identity, not a durable operator account; this change therefore does not
-claim a persistent account-to-device binding. Production worker startup remains
-blocked pending durable operator identity, complete device lifecycle controls,
-and end-to-end validation.
+is consumed once and is never written to audit events. The operator login protocol issues a challenge that must be signed by both the
+root identity key and the registered primary-device key. The server then issues
+a short-lived bearer token and stores its credential digest against the root
+identity; protected routes revalidate that binding. Capability grants are
+separately dual-signed and scoped. Guest sessions remain unprivileged. This is
+an internal cryptographic identity provider, not an OIDC federation. Browser
+keys are non-extractable WebCrypto keys, but hardware-backed attestation is not
+claimed; physical Android validation and recovery/rollback exercises remain
+release gates. No write, deployment, credential or administrative authority is
+granted by the current read-only worker.
 
 ## Durable operator identity
 
-The implementation requirements, key hierarchy, bootstrap/recovery rules,
-device lifecycle, privacy constraints and production release tests are specified
-in [OPERATOR_IDENTITY_PROTOCOL.md](OPERATOR_IDENTITY_PROTOCOL.md). That document
-is a design contract, not evidence of implementation. Until its release gate is
-satisfied, public sessions remain guest identities, device proof remains
-read-only, and production worker startup stays blocked.
+The key hierarchy, bootstrap/recovery rules, device lifecycle and privacy
+constraints are specified in [OPERATOR_IDENTITY_PROTOCOL.md](OPERATOR_IDENTITY_PROTOCOL.md).
+Root/device dual-signature login and session binding are implemented; the
+protocol's physical-device, recovery, rollback and operational acceptance gates
+remain outstanding.
 
 ## Health semantics
 
 - `/health/live` reports only that the HTTP process can answer.
 - `/health/ready` checks the persistent service, database, audit chain and
   registered tools. Its overall status intentionally remains `degraded`
-  while device command authority, OIDC-grade identity, verified upstream model
-  access and independent federation are incomplete.
+  while physical device validation, independent recovery/rollback evidence,
+  verified upstream model access and independent federation are incomplete.
 - `NORMAL` must not be inferred from a live process, configured secret or
   successful container build.
 
@@ -121,11 +123,14 @@ expired worker cannot commit a result. A task whose execution outcome is
 uncertain is failed closed; it is not automatically requeued or replayed.
 
 The HTTP server does **not** launch the worker implicitly. A running worker
-process is not guaranteed by CI or image qualification. The current worker
-entry point still uses development bearer-token authentication and explicitly
-refuses production mode until OIDC/device-bound command authorization is
-integrated. Keep it disabled in production deployments until that gate is
-implemented and verified.
+process is not guaranteed by CI or image qualification. Production startup uses `IAO_SESSION_SIGNING_KEY` and the internal dual-signed
+root/primary-device login; the standalone worker performs the same persistent
+key validation and a live bubblewrap sandbox preflight before starting. The API
+worker starts only when `IAO_TASK_WORKER_ENABLED=true`. The worker remains
+restricted to `knowledge.search` and fails closed when its session, device,
+lease, budget or sandbox checks fail. A passing CI sandbox test does not prove
+the target hosting kernel supports user namespaces; that must be tested on the
+actual deployment runtime.
 
 ## Federation status semantics
 
