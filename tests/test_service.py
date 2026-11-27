@@ -1136,6 +1136,90 @@ class QueuedTaskApiTests(Base):
             "x-iao-device-proof": json.dumps(proof, separators=(",", ":")),
         }
 
+    def test_capability_grant_api_requires_dual_signatures_and_supports_revocation(self) -> None:
+        headers = {"authorization": "Bearer " + self.operator_token}
+        status, current = self.call(
+            "GET", "/v1/operator/capability-grant/status", headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("knowledge.search", current["active_capabilities"])
+        grant_id = next(
+            item["grant_id"] for item in current["grants"]
+            if item["capability"] == "knowledge.search" and item["active"]
+        )
+
+        revoke_status, revoke_challenge = self.call(
+            "POST", "/v1/operator/capability-grant/revoke/challenge",
+            headers,
+            {
+                "device_id": self.device_id,
+                "capability": "knowledge.search",
+                "grant_id": grant_id,
+            },
+        )
+        self.assertEqual(revoke_status, 200)
+        payload = base64.urlsafe_b64decode(
+            revoke_challenge["signing_payload"]
+            + "=" * (-len(revoke_challenge["signing_payload"]) % 4)
+        )
+        root_sig = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+        )
+        device_sig = self.device_private_key.sign(
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        revoke_status, revoked = self.call(
+            "POST", "/v1/operator/capability-grant/revoke/complete",
+            headers,
+            {
+                "challenge": revoke_challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(root_sig).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(device_sig).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(revoke_status, 200)
+        self.assertEqual(revoked["authority"], "OPERATOR_CAPABILITY_REVOKED")
+        status, current = self.call(
+            "GET", "/v1/operator/capability-grant/status", headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(current["active_capabilities"], [])
+
+        grant_status, grant_challenge = self.call(
+            "POST", "/v1/operator/capability-grant/challenge",
+            headers,
+            {"device_id": self.device_id, "capability": "knowledge.search"},
+        )
+        self.assertEqual(grant_status, 200)
+        payload = base64.urlsafe_b64decode(
+            grant_challenge["signing_payload"]
+            + "=" * (-len(grant_challenge["signing_payload"]) % 4)
+        )
+        root_sig = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+        )
+        device_sig = self.device_private_key.sign(
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        grant_status, granted = self.call(
+            "POST", "/v1/operator/capability-grant/complete",
+            headers,
+            {
+                "challenge": grant_challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(root_sig).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(device_sig).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(grant_status, 200)
+        self.assertEqual(granted["authority"], "OPERATOR_CAPABILITY_GRANTED")
+        status, current = self.call(
+            "GET", "/v1/operator/capability-grant/status", headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("knowledge.search", current["active_capabilities"])
+
     def test_queued_task_returns_202_and_worker_completes_it(self) -> None:
         payload = {
             "goal": "search the local knowledge corpus",
