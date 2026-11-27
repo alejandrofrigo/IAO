@@ -78,10 +78,10 @@ def test_operational_log_hashes_unknown_strings_and_untrusted_string_lists():
     assert safe["event"] == "NODE_CANDIDATE_DISCOVERED"
     assert safe["capabilities"] == ["knowledge.search"]
     assert safe["repository_digest"].startswith("sha256:")
-    assert safe["origin"] == "[REDACTED]"
-    assert safe["email"] == "[REDACTED]"
-    assert safe["ip_address"] == "[REDACTED]"
-    assert safe["authorization"] == "[REDACTED]"
+    assert safe["origin_digest"] == "[REDACTED]"
+    assert safe["email_digest"] == "[REDACTED]"
+    assert safe["ip_address_digest"] == "[REDACTED]"
+    assert safe["authorization_digest"] == "[REDACTED]"
     assert safe["annotations_digest"].startswith("sha256:")
     assert safe["status_digest"].startswith("sha256:")
     assert safe["state_digest"].startswith("sha256:")
