@@ -2,7 +2,7 @@
 
 **Estado:** evidencia documental adicional; no sustituye la verificación del HEAD ni de CI.
 **SHA base observado:** `0920643d05833a2a761f9168ae1e89ed9944fcc7`.
-**HEAD observado al actualizar:** `1cde5344903a5a436d6a3221ccc731c2cf8debda` (479 ahead / 0 behind de la base).
+**HEAD observado al actualizar:** `3fe1d9f488b9826e13d67d5fe3ecc879789572f0` (483 ahead / 0 behind de `iao-production-gates-20261127T0856Z`).
 **Rama destino:** `phase-1-core-foundation-20261127`
 **Alcance:** objetivo 01 de `PHASE_1_CORE_FOUNDATION.md`.
 
@@ -28,7 +28,7 @@ La inspección confirma que existen dos adaptadores HTTP (stdlib y FastAPI), un 
 | #16 | Lifecycle opt-in del TaskWorker | Rama apilada sobre chat task intake/capability grants; se adaptó e integró en Fase 1 `apps/api/main.py` (worker opt-in, mismo Store/registry/authority, heartbeat y apagado limitado). | No integrar otra copia; conservar PR original para revisión de divergencias restantes |
 | #19 | Diagnósticos de readiness del TaskWorker | Apilada sobre #16; se integró el estado `blocked/start_failed/running/worker_exited/stop_timeout` y pruebas de lifecycle en Fase 1. | No integrar otra copia; comparar únicamente diferencias pendientes |
 | #18 | Recuperación IPFS DAG-JSON read-only | Rama independiente sobre production gates. | Mantener fuera del núcleo hasta verificar egress, CID, CI y disponibilidad real |
-| #2 | Base Tor/P2P y descubrimiento onion/libp2p | Rama separada sobre `iao-production-build-20261126`; no forma parte de la cadena Fase 1/2. | Bloque crítico de integración para objetivo descentralizado; revisar tests y límites antes de incorporar |
+| #2 | Base Tor/P2P y descubrimiento onion/libp2p | Código adaptado a Fase 1: transporte SOCKS5 con DNS remoto para onion v3/8443, inventario onion privado, asimilación libp2p en cuarentena, verificación de presencia Ed25519, lectura CID vía Kubo local, worker outbound-only y heartbeat NODE_NETWORK. PR original permanece independiente; no se fusionó. | Integración funcional en código; pendiente CI/runtime smoke Tor+Kubo y pruebas de dos nodos |
 | #3–#8 | Gateway Cloudflare, proxy fijo y delegación Termux | Cadena de PRs separada desde main; despliegue/activación explícitamente deshabilitados. | Mantener fuera hasta unificar autoridad y decidir backend sin coste; nunca introducir Quick Tunnel |
 | #9–#10 | Protocolo de lease y grants duales root/dispositivo | Rama de agente separada; PR #10 implementa grants de `knowledge.search` con expiración/revocación. | Reconciliar con el allowlist READ_ONLY de Fase 2; no duplicar autoridades ni otorgar scopes globales |
 | #13 | Chat → task intake | Apilada sobre PR #10; panel y E2E con grants. | Comparar con el panel mínimo de Fase 2 y conservar el flujo con grants si sus pruebas superan CI |
@@ -66,7 +66,7 @@ El ledger de Fase 1 registra la rama como **359 commits ahead / 0 behind** de `i
 ## Cambios de consolidación desde el inventario anterior
 
 - PR #16/#19: el ciclo de vida opt-in del TaskWorker se adaptó a `apps/api/main.py`; usa el Store/registry/autoridad existentes, valida lease/poll, publica heartbeat, distingue `blocked/start_failed/running/worker_exited/stop_timeout` y apaga con join limitado. Se añadieron pruebas en `tests/test_api_task_worker_lifecycle.py`. Esto no activa el worker por defecto ni acredita ejecución de producción.
-- Despliegue: `render.yaml` y el workflow `deploy-cloud-run.yml` se retiraron de Fase 1 por incompatibilidad con la restricción de no usar Render ni infraestructura que pueda generar facturación. El cliente web eliminó Quick Tunnel y ahora bloquea chat/API si no recibe un origen HTTPS explícito. GitHub Pages sigue siendo solo frontend; no constituye backend.
+- Despliegue: `render.yaml` y el workflow `deploy-cloud-run.yml` se retiraron de Fase 1 por incompatibilidad con la restricción de no usar Render ni infraestructura que pueda generar facturación. El motor NODE_NETWORK inicia el descubridor libp2p/Tor solo en el supervisor local y no abre listeners. El cliente web eliminó Quick Tunnel y ahora bloquea chat/API si no recibe un origen HTTPS explícito. GitHub Pages sigue siendo solo frontend; no constituye backend.
 - La PR #21 de Fase 2 continúa apilada sobre esta rama; sus cambios no se consideran aceptados ni sustituyen el cierre de Fase 1.
 
 **Resultado:** inventario y mapa de dependencias actualizados con refs exactos. El objetivo 01 permanece **EN CURSO** hasta CI verde en los HEAD exactos, revisión final de las ramas independientes y cierre de discrepancias. Esta auditoría no declara producción.

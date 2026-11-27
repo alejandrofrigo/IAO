@@ -72,6 +72,30 @@ PADGE trabaja con candidatos acotados y protegidos. La promoción requiere compi
 
 Los eventos operativos son diagnósticos; no sustituyen la cadena HMAC de auditoría.
 
+## Red descentralizada Tor / libp2p / IPFS
+
+El motor `NODE_NETWORK` utiliza `tools/iao_libp2p_discovery.py --run` cuando el supervisor crea por primera vez su configuración. Si ya existe `.state/iao-five-motors/adapters.json`, se preserva la decisión configurada del operador. El worker es outbound-only: no abre listener, no ejecuta código remoto, no enrola peers y no concede capacidades.
+
+Comprobaciones locales seguras (cada bloque queda aislado en un subshell y no cierra Termux):
+
+```sh
+( cd "$HOME/so-omega-prime" && python tools/iao_libp2p_discovery.py --status )
+( cd "$HOME/so-omega-prime" && python tools/iao_libp2p_discovery.py --once --timeout 30 )
+( cd "$HOME/so-omega-prime" && python tools/iao_five_motor_supervisor.py status )
+```
+
+- `--status` lee el último informe y heartbeat; no inicia ni detiene procesos.
+- `--once` ejecuta un ciclo acotado de descubrimiento libp2p y feeds onion configurados. Si Tor SOCKS no está disponible, el descubrimiento onion falla cerrado; no se resuelve `.onion` por DNS local.
+- El supervisor valida `NODE_NETWORK` con heartbeat atómico ligado al PID y `/proc/<pid>/stat`. Un PID vivo sin heartbeat fresco no se declara sano.
+- Los peers libp2p y onion se almacenan como candidatos no verificados en registros privados 0700/0600. La asimilación no implica identidad, conectividad, confianza, enrolamiento ni permisos.
+- `omega.p2p_presence.verify_presence` valida una afirmación Ed25519 ligada a nonce y lease; su resultado declara explícitamente `SIGNED_ASSERTION_ONLY` y no permite enrolamiento.
+- `omega.ipfs_content.fetch_public_cid` solo consulta un Kubo local en loopback, valida CID y limita el contenido a 2 MB; no ejecuta el contenido.
+- El smoke test `iao-runtime-smoke.yml` instala Tor/Kubo efímeros en CI y publica evidencia de conectividad y de las invariantes de cuarentena. Hasta que ese workflow termine correctamente, no declarar Tor/P2P operativo.
+
+## Publicación web y backend
+
+`web/api-config.js` ya no contiene Quick Tunnel. GitHub Pages solo inyecta el origen cuando existe la variable de repositorio `IAO_API_BASE` y su valor supera la validación HTTPS. Si no está configurada, el chat permanece bloqueado deliberadamente. Pages es frontend estático, no backend. Se retiraron `render.yaml` y el workflow Cloud Run que podía requerir facturación; no se debe volver a introducir Render, un Quick Tunnel ni infraestructura con coste.
+
 ## Puertas de aceptación antes de integrar
 
 - CI verde en el SHA exacto que se pretende integrar: Python 3.12/3.13, lint/quality gate, contrato API, construcción y arranque de contenedor, e integración Chromium.

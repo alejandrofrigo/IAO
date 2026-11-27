@@ -69,36 +69,50 @@ def save_json(path, value):
 
 
 def adapters():
+    defaults = {
+        "PADGE": {
+            "command": [
+                sys.executable,
+                "tools/iao_autonomous_coordinator.py",
+                "loop",
+            ],
+            "enabled": True,
+            "group": "PADGE + AUTONOMIA CONTINUA",
+        },
+        "GUARDIAN": {
+            "command": [],
+            "enabled": False,
+            "group": "VIGILANCIA Y RECUPERACION",
+        },
+        "NODE_NETWORK": {
+            "command": [
+                sys.executable,
+                "tools/iao_libp2p_discovery.py",
+                "--run",
+            ],
+            "enabled": True,
+            "group": "RED P2P LIBP2P — DESCUBRIMIENTO AISLADO",
+        },
+        "DISTRIBUTED_INTELLIGENCE": {
+            "command": [],
+            "enabled": False,
+            "group": "WORKERS + MULTI-LLM",
+        },
+    }
     if not CONFIG.exists():
-        save_json(CONFIG, {
-            "motors": {
-                "PADGE": {
-                    "command": [
-                        sys.executable,
-                        "tools/iao_autonomous_coordinator.py",
-                        "loop",
-                    ],
-                    "enabled": True,
-                    "group": "PADGE + AUTONOMIA CONTINUA",
-                },
-                "GUARDIAN": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "VIGILANCIA Y RECUPERACION",
-                },
-                "NODE_NETWORK": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "RED DE NODOS",
-                },
-                "DISTRIBUTED_INTELLIGENCE": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "WORKERS + MULTI-LLM",
-                },
-            }
-        })
-    return load_json(CONFIG, {}).get("motors", {})
+        save_json(CONFIG, {"motors": defaults})
+        return defaults
+    data = load_json(CONFIG, {})
+    motors = data.get("motors", {})
+    if not isinstance(motors, dict):
+        return {}
+    # Migration additive: preserve every operator-defined setting. Only add
+    # the P2P worker when this motor has never been configured.
+    if "NODE_NETWORK" not in motors:
+        motors["NODE_NETWORK"] = defaults["NODE_NETWORK"]
+        data["motors"] = motors
+        save_json(CONFIG, data)
+    return motors
 
 
 def read_children():
