@@ -11,7 +11,10 @@ from typing import Any
 _REDACTED_FIELDS = {
     "backup", "command", "content", "input", "message", "output",
     "prompt", "query", "source", "stderr", "stdout", "traceback",
-    "working_changes",
+    "working_changes", "authorization", "token", "secret", "password",
+    "email", "ip", "ip_address", "address", "host", "url", "origin",
+    "endpoint", "user_agent", "subject", "owner", "actor", "principal",
+    "device_id", "peer_id", "public_key",
 }
 _PATH_FIELDS = {"file", "path"}
 _COUNT_FIELDS = {"files", "paths"}
