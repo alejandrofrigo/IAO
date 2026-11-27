@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import time
 
 import pytest
@@ -18,9 +19,17 @@ def _pem(key):
 
 
 class FakeOperatorIdentity:
-    def __init__(self):
+    def __init__(self, database):
+        self.database = database
         self.root = ec.generate_private_key(ec.SECP256R1())
         self.primary = ec.generate_private_key(ec.SECP256R1())
+        with sqlite3.connect(self.database) as db:
+            db.executescript(
+                "CREATE TABLE operator_identities(identity_id TEXT PRIMARY KEY,key_version INTEGER,status TEXT);"
+                "CREATE TABLE primary_device_bindings(identity_id TEXT PRIMARY KEY,key_version INTEGER);"
+            )
+            db.execute("INSERT INTO operator_identities VALUES(?,?,?)", ("a" * 32, 3, "ACTIVE"))
+            db.execute("INSERT INTO primary_device_bindings VALUES(?,?)", ("a" * 32, 3))
 
     def primary_device_public_key(self):
         return _pem(self.primary)
@@ -40,7 +49,7 @@ class FakeOperatorIdentity:
 
 
 def _setup(tmp_path):
-    operator = FakeOperatorIdentity()
+    operator = FakeOperatorIdentity(tmp_path / "operator.sqlite3")
     authority = AgentAuthority(tmp_path / "agents.sqlite3", operator)
     agent = ec.generate_private_key(ec.SECP256R1())
     return authority, operator, agent
