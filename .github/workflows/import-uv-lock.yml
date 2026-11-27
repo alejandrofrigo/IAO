@@ -1,0 +1,51 @@
+name: Import qualified uv lock
+
+on:
+  push:
+    branches:
+      - phase-1-core-foundation-20261127
+    paths:
+      - .github/workflows/import-uv-lock.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 46065905092
+          artifact-ids: 15231320262
+          github-token: ${{ github.token }}
+          path: .lock-artifact
+      - name: Verify lock artifact
+        run: |
+          test -s .lock-artifact/uv.lock
+          echo '7ff36a28b9e3469879993a16a83990577cbf18aed2dd51017bf80850f2ec2b3f  .lock-artifact/uv.lock' | sha256sum --check
+          cp .lock-artifact/uv.lock uv.lock
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+      - name: Validate lock against current project metadata
+        run: uv lock --check
+      - name: Commit lockfile to phase one branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add uv.lock
+          if git diff --cached --quiet; then
+            echo 'uv.lock already present and unchanged'
+          else
+            git commit -m 'Add CI-qualified uv lockfile'
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
