@@ -63,7 +63,7 @@ def log(event, **data):
     from omega.operational_log import append_private_jsonl
 
     entry = append_private_jsonl(
-        EVENTS, {"time": utc(), "event": event, **data},
+        EVENTS, {"time": now(), "event": event, **data},
     )
     print(json.dumps(entry, ensure_ascii=False), flush=True)
 
