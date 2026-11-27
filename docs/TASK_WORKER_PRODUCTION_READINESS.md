@@ -2,9 +2,7 @@
 
 ## Current enforced state
 
-The task worker is an independent process. The HTTP server does not start it
-implicitly. Its current `main()` refuses to start when `APP_ENV=production`.
-This is an intentional production block, not a deployment instruction.
+The task worker is an independent execution loop hosted by the FastAPI API lifespan only when `IAO_TASK_WORKER_ENABLED=true`. It reuses the API service's existing Store, registry and operator identity authority; it does not create a second queue. The standalone worker entry point still refuses to start when `APP_ENV=production`. API readiness reports `disabled_by_default`, `blocked`, `start_failed`, `running`, `worker_exited`, or `stop_timeout`, with a bounded reason code when startup or shutdown fails. An explicitly requested worker is never silently reported as healthy. The lifespan supplies a task-worker heartbeat path; readiness distinguishes a live thread from a fresh worker-cycle heartbeat.
 
 Queued task execution is restricted to an explicit allowlist containing only
 `knowledge.search`, the deterministic local corpus lookup. The general tool
@@ -36,6 +34,7 @@ mechanism, not proof of exactly-once tool effects.
 ## Required evidence before removing the production block
 
 - [ ] Full Python test matrix passes on supported Python versions.
+- [x] API lifespan exposes fail-closed worker startup diagnostics for missing persistent keys and invalid worker settings; regression tests cover both states.
 - [ ] Browser integration passes on supported Chromium; physical Android
       browser validation is still required and is not implied by CI.
 - [x] Unit test covers an expired `VERIFYING` lease: startup recovery marks it
