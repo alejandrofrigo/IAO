@@ -1,4 +1,4 @@
-"""Stdlib HTTP runtime for IAO. Refuses to start in production with dev auth."""
+"""Stdlib HTTP runtime for IAO with persistent root/device-bound operator sessions."""
 import hashlib
 import json
 import os
