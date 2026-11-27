@@ -48,9 +48,25 @@ def _sign(key: Ed25519PrivateKey, env: dict[str, Any]) -> dict[str, Any]:
     return {**env, "sig": _b64(key.sign(canonical_json(env)))}
 
 
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate JSON members at every object nesting level."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("DUPLICATE_JSON_MEMBER")
+        result[key] = value
+    return result
+
 def _verify(pub_raw: bytes, env: dict[str, Any]) -> bool:
     try:
-        sig = base64.b64decode(env["sig"], validate=True)
+        encoded = env["sig"]
+        if not isinstance(encoded, str) or len(encoded) != 88:
+            return False
+        sig = base64.b64decode(encoded, validate=True)
+        if len(sig) != 64 or _b64(sig) != encoded:
+            return False
         body = {k: v for k, v in env.items() if k != "sig"}
         Ed25519PublicKey.from_public_bytes(pub_raw).verify(sig, canonical_json(body))
         return True
@@ -377,17 +393,17 @@ class Node:
         if not isinstance(raw, bytes) or len(raw) > MAX_MSG:
             return 413, {"error": "PAYLOAD_TOO_LARGE"}
         try:
-            request = json.loads(raw)
+            request = json.loads(raw, object_pairs_hook=_unique_json_object)
         except (ValueError, UnicodeDecodeError):
             return 400, {"error": "INVALID_CHALLENGE"}
-        if not isinstance(request, dict):
+        if not isinstance(request, dict) or set(request) != {"v", "from", "to", "nonce", "ts"}:
             return 400, {"error": "INVALID_CHALLENGE"}
 
         requester = request.get("from")
         recipient = request.get("to")
         nonce = request.get("nonce")
         ts = request.get("ts")
-        if (request.get("v") != 1
+        if (isinstance(request.get("v"), bool) or request.get("v") != 1
                 or not isinstance(requester, str)
                 or len(requester) != 16
                 or any(ch not in "0123456789abcdef" for ch in requester)
@@ -517,25 +533,37 @@ class Node:
             if len(raw) > MAX_MSG:
                 raise FedDenied(413, "PAYLOAD_TOO_LARGE")
             try:
-                env = json.loads(raw)
-                peer = str(env["from"])
-                if not isinstance(env, dict) or env.get("v") != 1:
-                    raise ValueError
-            except (ValueError, KeyError, TypeError):
+                env = json.loads(raw, object_pairs_hook=_unique_json_object)
+            except (ValueError, UnicodeDecodeError):
                 raise FedDenied(400, "MALFORMED") from None
+            required = {"v", "from", "to", "ts", "nonce", "capability", "body", "sig"}
+            if not isinstance(env, dict) or set(env) != required:
+                raise FedDenied(400, "MALFORMED")
+            peer = env.get("from")
+            ts = env.get("ts")
+            nonce = env.get("nonce")
+            capability = env.get("capability")
+            if (isinstance(env.get("v"), bool) or env.get("v") != 1
+                    or not isinstance(peer, str) or len(peer) != 16
+                    or any(ch not in "0123456789abcdef" for ch in peer)
+                    or not isinstance(env.get("to"), str)
+                    or not isinstance(ts, (int, float)) or isinstance(ts, bool)
+                    or not math.isfinite(float(ts))
+                    or not isinstance(nonce, str) or not 16 <= len(nonce) <= 128
+                    or not nonce.isascii() or not all(ch.isalnum() or ch in "_-" for ch in nonce)
+                    or not isinstance(capability, str) or not 1 <= len(capability) <= 128
+                    or not isinstance(env.get("body"), dict)):
+                raise FedDenied(400, "MALFORMED")
             if env.get("to") != self.node_id:
-                raise FedDenied(403, "WRONG_RECIPIENT")          # a message captured for node X is useless at node Y
+                raise FedDenied(403, "WRONG_RECIPIENT")
             c = self.peers.get(peer)
             if c is None:
                 raise FedDenied(403, "UNKNOWN_PEER")
             if not _verify(c["pub"], env):
                 raise FedDenied(403, "BAD_SIGNATURE")
             now = self.clock()
-            if abs(now - float(env.get("ts", 0))) > self.skew:
+            if abs(now - float(ts)) > self.skew:
                 raise FedDenied(403, "CLOCK_SKEW")
-            nonce = str(env.get("nonce", ""))
-            if len(nonce) < 16:
-                raise FedDenied(400, "MALFORMED")
             with self._lock:
                 self._seen = {k: t for k, t in self._seen.items() if now - t <= 2 * self.skew}
                 if (peer, nonce) in self._seen:
