@@ -40,6 +40,9 @@ class _ClaimedTaskStore:
     def task_cancel_requested(self, task_id, worker_id, lease_generation):
         return self.cancel_requested
 
+    def consume_task_budget(self, task_id, worker_id, lease_generation, budget_kind, amount):
+        return amount >= 1
+
     def renew_task_lease(self, task_id, worker_id, lease_generation, lease_seconds):
         return (
             not self.cancel_requested
@@ -86,7 +89,13 @@ def _worker(authority):
         "input": {"query": "safe test"},
         "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
         "policy_version": POLICY_VERSION,
-        "budget": {"timeout_seconds": 2},
+        "budget": {
+            "max_model_calls": 0,
+            "max_tool_calls": 1,
+            "max_input_bytes": 65_536,
+            "max_output_bytes": 1_048_576,
+            "timeout_seconds": 2,
+        },
         "operator_session_digest": "a" * 64,
         "operator_device_id": "b" * 64,
     }
