@@ -3,7 +3,7 @@
 **Estado:** EN CURSO  
 **Rama de trabajo:** phase-1-core-foundation-20261127  
 **Base:** iao-production-gates-20261127T0856Z  
-**Política:** no modificar main, no fusionar PRs apilados, no desplegar ni habilitar workers privilegiados desde esta fase.
+**Política:** no modificar main, no fusionar PRs apilados ni desplegar desde esta fase. TaskWorker solo puede iniciarse explícitamente en modo opt-in para tareas READ_ONLY; permanece desactivado por defecto y no obtiene autoridad privilegiada.
 
 ## Propósito
 
