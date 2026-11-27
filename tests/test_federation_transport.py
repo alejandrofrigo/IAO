@@ -333,8 +333,10 @@ def test_post_public_json_rejects_redirect(monkeypatch):
         transport.post_public_json("https://peer.example.org/fed/v1/handshake", {"x": 1})
 
 def test_fetch_public_json_rejects_duplicate_object_members(monkeypatch):
-    FakeConnection.response = FakeResponse(
-        body=b'{"peers":[],"peers":[{"peer_id":"attacker"}]}'
+    monkeypatch.setattr(
+        FakeConnection,
+        "response",
+        FakeResponse(body=b'{"peers":[],"peers":[{"peer_id":"attacker"}]}'),
     )
     monkeypatch.setattr(
         transport, "resolve_public_addresses", lambda *args: ["8.8.8.8"]
