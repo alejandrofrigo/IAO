@@ -40,6 +40,15 @@ class TaskWorker:
         heartbeat_path: Path | None = None,
         heartbeat_stale_after_seconds: int | None = None,
     ) -> None:
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int) or lease_seconds < 1:
+            raise ValueError("INVALID_WORKER_LEASE")
+        if (
+            isinstance(poll_seconds, bool)
+            or not isinstance(poll_seconds, (int, float))
+            or not math.isfinite(float(poll_seconds))
+            or poll_seconds <= 0
+        ):
+            raise ValueError("INVALID_WORKER_POLL_INTERVAL")
         self.store = store
         self.registry = registry
         self.operator_identity_authority = operator_identity_authority
@@ -50,10 +59,18 @@ class TaskWorker:
         self._stop = threading.Event()
         self.heartbeat_path = Path(heartbeat_path) if heartbeat_path is not None else None
         self._heartbeat_interval = max(1, math.ceil(float(poll_seconds)))
-        self._heartbeat_stale_after = max(
-            self._heartbeat_interval * 3,
-            int(heartbeat_stale_after_seconds or max(60, lease_seconds * 2)),
+        configured_stale_after = (
+            max(60, lease_seconds * 2)
+            if heartbeat_stale_after_seconds is None
+            else heartbeat_stale_after_seconds
         )
+        if (
+            isinstance(configured_stale_after, bool)
+            or not isinstance(configured_stale_after, int)
+            or configured_stale_after < self._heartbeat_interval
+        ):
+            raise ValueError("INVALID_WORKER_HEARTBEAT_STALENESS")
+        self._heartbeat_stale_after = configured_stale_after
         self._last_cycle_completed_at: float | None = None
         self._last_cycle_result: bool | None = None
     def stop(self) -> None:
