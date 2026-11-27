@@ -100,18 +100,16 @@ def _get_device_authority():
 async def _read_bounded_service_body(request: Request):
     """Read API bodies incrementally and reject invalid or oversized requests."""
     if request.headers.get("transfer-encoding"):
-        return None, JSONResponse(
-            status_code=400,
-            content={"error": "INVALID_TRANSFER_ENCODING", "correlation_id": uuid.uuid4().hex},
+        return None, _service_response(
+            400, {"error": "INVALID_TRANSFER_ENCODING", "correlation_id": uuid.uuid4().hex}
         )
     raw_length = request.headers.get("content-length")
     if raw_length is not None:
         try:
             declared_length = int(raw_length)
         except ValueError:
-            return None, JSONResponse(
-                status_code=400,
-                content={"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex},
+            return None, _service_response(
+                400, {"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex}
             )
         if declared_length < 0:
             return None, JSONResponse(
@@ -119,9 +117,8 @@ async def _read_bounded_service_body(request: Request):
                 content={"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex},
             )
         if declared_length > MAX_BODY:
-            return None, JSONResponse(
-                status_code=413,
-                content={"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex},
+            return None, _service_response(
+                413, {"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex}
             )
     chunks = bytearray()
     async for chunk in request.stream():
@@ -132,9 +129,8 @@ async def _read_bounded_service_body(request: Request):
                 content={"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex},
             )
     if raw_length is not None and len(chunks) != declared_length:
-        return None, JSONResponse(
-            status_code=400,
-            content={"error": "INCOMPLETE_BODY", "correlation_id": uuid.uuid4().hex},
+        return None, _service_response(
+            400, {"error": "INCOMPLETE_BODY", "correlation_id": uuid.uuid4().hex}
         )
     return bytes(chunks), None
 
