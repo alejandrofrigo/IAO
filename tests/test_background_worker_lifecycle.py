@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 from omega import external_network, federation_autojoin, federation_discovery
