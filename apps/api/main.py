@@ -112,9 +112,8 @@ async def _read_bounded_service_body(request: Request):
                 400, {"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex}
             )
         if declared_length < 0:
-            return None, JSONResponse(
-                status_code=400,
-                content={"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex},
+            return None, _service_response(
+                400, {"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex}
             )
         if declared_length > MAX_BODY:
             return None, _service_response(
@@ -124,9 +123,8 @@ async def _read_bounded_service_body(request: Request):
     async for chunk in request.stream():
         chunks.extend(chunk)
         if len(chunks) > MAX_BODY:
-            return None, JSONResponse(
-                status_code=413,
-                content={"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex},
+            return None, _service_response(
+                413, {"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex}
             )
     if raw_length is not None and len(chunks) != declared_length:
         return None, _service_response(
@@ -490,10 +488,12 @@ async def _device_service_route(request: Request, path: str):
         status, payload = service.handle("POST", path, headers, body)
         return _service_response(status, payload)
     except RuntimeError:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
-            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        return _service_response(
+            503, {"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex}
+        )
+    except Exception:
+        return _service_response(
+            503, {"error": "IAO_SERVICE_UNAVAILABLE", "correlation_id": uuid.uuid4().hex}
         )
 
 
