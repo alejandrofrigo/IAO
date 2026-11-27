@@ -26,7 +26,7 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 01 | Inventario técnico y fuente de verdad | Identificar HEAD/base, ramas y PRs apilados; inventariar API, núcleo, stores, configuración, workers y pruebas sin sobrescribir trabajo previo. | EN CURSO |
 | 02 | Contrato de arquitectura del núcleo | Documentar límites entre API, servicio, dominio, persistencia, herramientas y adaptadores; no duplicar autoridades ni colas. | IMPLEMENTADO |
 | 03 | Configuración tipada y validada | Validar entorno, puertos, host, URL pública y adaptadores; rechazar valores inválidos de forma determinista y sin filtrar secretos. | IMPLEMENTADO |
-| 04 | Gestión segura de secretos | Exigir secretos persistentes donde corresponda; no generar identidades silenciosamente en producción ni registrar valores sensibles. | PENDIENTE |
+| 04 | Gestión segura de secretos | Exigir secretos persistentes donde corresponda; no generar identidades silenciosamente en producción ni registrar valores sensibles. | EN CURSO |
 | 05 | Ciclo de vida de la API | Arranque y parada explícitos, idempotentes y observables; fallos críticos reflejados en readiness sin ocultar excepciones. | EN CURSO |
 | 06 | Servicio de aplicación único | Una única construcción del servicio y sus autoridades por proceso; inicialización segura y concurrencia controlada. | PENDIENTE |
 | 07 | Persistencia y esquema | Definir backend soportado, inicialización/migraciones repetibles, integridad y comportamiento ante corrupción o indisponibilidad. | PENDIENTE |
@@ -72,3 +72,4 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 01 | Rama aislada, base identificada, comparación GitHub (2 commits ahead/0 behind antes de esta continuación), PRs #16–#20 localizados; inspección de README, pyproject, entrypoints, servicio, Store, auditoría, worker lifecycle y workflows. | Inventario sustancial; falta resolver SHA exacto/dependencias completas de PRs apilados y estado CI de esta rama. |
 | 02 | `docs/CORE_ARCHITECTURE_CONTRACT.md`, enlazado desde README. | Límites y fuentes de verdad documentados; falta prueba de integración de ambos adaptadores. |
 | 03 | `omega/config.py` y `tests/test_config.py`; validación de APP_ENV, PORT, HOST, adaptador y URL pública; casos inválidos y representación sin datos de configuración. | Implementado; pendiente CI Python 3.12/3.13 y verificación del contrato en los entrypoints. |
+| 04 | `validate_persistent_keys` en `omega/config.py`; FastAPI `_get_service` valida claves de 32+ caracteres y rechaza reutilización; cinco pruebas unitarias nuevas. | Aplicado al runtime FastAPI; el entrypoint stdlib aún necesita adoptar el mismo validador. No marcar completo. |
