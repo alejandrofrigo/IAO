@@ -195,7 +195,11 @@ class OmegaService:
             audit = self.store.audit_status()
             legacy = self.store.legacy_audit_status()
             chain_ok = audit["valid"]
-            operational = ok_db and chain_ok and bool(self.registry.names())
+            audit_authenticated = bool(audit.get("authenticated", False))
+            operational = (
+                ok_db and chain_ok and audit_authenticated
+                and bool(self.registry.names())
+            )
             degraded = legacy["status"] != "no_legacy_history"
             status = (
                 "not_ready" if not operational
@@ -207,6 +211,7 @@ class OmegaService:
                 "checks": {
                     "database": ok_db,
                     "audit_chain": chain_ok,
+                    "audit_authenticated": audit_authenticated,
                     "audit_event_count": audit["event_count"],
                     "audit_first_invalid_index": audit["first_invalid_index"],
                     "audit_first_invalid_event_id": audit["first_invalid_event_id"],
