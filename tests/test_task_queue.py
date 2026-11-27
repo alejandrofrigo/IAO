@@ -220,6 +220,58 @@ class DurableTaskQueueTests(unittest.TestCase):
             release=True, lease_generation=second["lease_generation"],
         ))
 
+    def test_task_budget_ledger_charges_limits_and_requires_live_lease(self) -> None:
+        intent = {
+            "goal": "budget test",
+            "allowed_capabilities": ["knowledge.search"],
+            "budget": {
+                "max_model_calls": 0,
+                "max_tool_calls": 1,
+                "max_input_bytes": 16,
+                "max_output_bytes": 16,
+                "timeout_seconds": 5,
+            },
+        }
+        task, created = self.store.create_task(
+            "budget-task", "owner-a", intent, None,
+        )
+        self.assertTrue(created)
+        self.store.set_task_state(task["id"], "AUTHORIZED")
+        self.assertTrue(self.store.queue_task(task["id"]))
+        claimed = self.store.claim_next_task("budget-worker", lease_seconds=60)
+        self.assertIsNotNone(claimed)
+        generation = claimed["lease_generation"]
+
+        self.assertFalse(self.store.consume_task_budget(
+            task["id"], "budget-worker", generation, "model_calls", 1,
+        ))
+        self.assertTrue(self.store.consume_task_budget(
+            task["id"], "budget-worker", generation, "tool_calls", 1,
+        ))
+        self.assertFalse(self.store.consume_task_budget(
+            task["id"], "budget-worker", generation, "tool_calls", 1,
+        ))
+        self.assertTrue(self.store.consume_task_budget(
+            task["id"], "budget-worker", generation, "input_bytes", 16,
+        ))
+        self.assertFalse(self.store.consume_task_budget(
+            task["id"], "budget-worker", generation, "input_bytes", 1,
+        ))
+        self.assertTrue(self.store.consume_task_budget(
+            task["id"], "budget-worker", generation, "output_bytes", 16,
+        ))
+        self.assertFalse(self.store.consume_task_budget(
+            task["id"], "budget-worker", generation, "output_bytes", 1,
+        ))
+        self.assertFalse(self.store.consume_task_budget(
+            task["id"], "stale-worker", generation, "tool_calls", 1,
+        ))
+        usage = self.store.task_budget_status(task["id"], "owner-a")
+        self.assertEqual(usage["used_tool_calls"], 1)
+        self.assertEqual(usage["used_input_bytes"], 16)
+        self.assertEqual(usage["used_output_bytes"], 16)
+        self.assertIsNone(self.store.task_budget_status(task["id"], "other-owner"))
+
     def test_state_transition_uses_compare_and_swap(self) -> None:
         self._queue_one()
         self.store.set_task_state("task-1", "CREATED")
