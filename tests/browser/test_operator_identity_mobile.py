@@ -316,6 +316,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 assert after_reload["sessionStatus"] == 200, after_reload
                 assert after_reload["session"]["subject"].startswith("guest:"), after_reload
                 assert after_reload["session"]["scopes"] == [], after_reload
+                assert page.locator("#iao-task-submit").is_disabled()
 
                 queued_denial = page.evaluate(
                     """async () => {
