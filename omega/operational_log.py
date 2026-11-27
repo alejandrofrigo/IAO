@@ -13,7 +13,7 @@ _REDACTED_FIELDS = {
     "prompt", "query", "source", "stderr", "stdout", "traceback",
     "working_changes",
 }
-_PATH_FIELDS = {"path"}
+_PATH_FIELDS = {"file", "path"}
 _COUNT_FIELDS = {"files", "paths"}
 
 
