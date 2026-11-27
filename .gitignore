@@ -33,3 +33,7 @@ e
 .state/
 .federation_state/
 nodes_memory.json
+
+# Private production secrets
+.env.production
+.env.production.*
