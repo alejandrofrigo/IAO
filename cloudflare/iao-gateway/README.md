@@ -9,6 +9,7 @@ The Worker forwards a narrow set of requests to one operator-configured, fixed H
 - Exposes liveness independently of readiness.
 - Forwards only an explicit allowlist of public-chat, operator/device authentication, signed task submission/status, health and read-only agent challenge/status routes to the fixed IAO_API_ORIGIN. Unknown `/v1/*` paths are rejected by default.
 - Forwards only POST /v1/agent/challenge and GET /v1/agent/status for the signed, read-only Termux agent protocol.
+- Forwards the explicit dual-signed operator capability grant/revocation challenge and status routes; the upstream API remains responsible for verifying root/device signatures, session binding, expiry, policy and revocation.
 - Preserves the four signed agent headers: X-IAO-Agent-Id, X-IAO-Agent-Nonce, X-IAO-Agent-Timestamp and X-IAO-Agent-Signature.
 - Also preserves only the existing API headers required for ordinary authentication: Authorization, Content-Type, Idempotency-Key and X-IAO-Device-Proof.
 - Does not forward cookies, client IP headers, browser identity headers or arbitrary incoming headers.
