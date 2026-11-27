@@ -68,3 +68,58 @@ def test_onion_url_validator_rejects_non_v3_and_unsafe_urls():
         "http://127.0.0.1/feed",
     ):
         assert not federation._validate_onion_peer_url(value)
+
+def test_public_iao_candidates_use_signed_pinned_autojoin_not_legacy_probe(
+    monkeypatch, tmp_path
+):
+    from omega import federation_autonomous as trusted
+
+    monkeypatch.setattr(federation, "STATE", tmp_path)
+    monkeypatch.setattr(federation, "NODES", tmp_path / "nodes.json")
+    monkeypatch.setattr(federation, "POLICY", tmp_path / "policy.json")
+    monkeypatch.setattr(federation, "REPORT", tmp_path / "report.json")
+    monkeypatch.setattr(federation, "AUDIT", tmp_path / "audit" / "events.jsonl")
+    federation.NODES.write_text(json.dumps({
+        "nodes": [{
+            "url": "https://public-peer.example.org",
+            "id": "0123456789abcdef",
+            "source": "public_feed",
+            "authorized": False,
+            "capabilities": ["knowledge.search"],
+        }]
+    }))
+    federation.POLICY.write_text(json.dumps({
+        "enabled": True,
+        "allowed_capabilities": ["knowledge.search"],
+    }))
+    monkeypatch.setattr(federation, "make_node", lambda policy: object())
+    calls = []
+
+    def fake_trusted_cycle(node, state_dir, registry_path):
+        data = json.loads(registry_path.read_text())
+        candidate = next(iter(data["candidates"].values()))
+        calls.append((node, state_dir, candidate))
+        assert candidate["origin"] == "https://public-peer.example.org"
+        assert candidate["node_id"] == "0123456789abcdef"
+        assert candidate["status"] == "DISCOVERED_UNVERIFIED"
+        assert candidate["granted_capabilities"] == []
+        return {
+            "status": "COMPLETED",
+            "checked": 1,
+            "enrolled": 1,
+            "failed": 0,
+            "inbound_capabilities_granted": 0,
+        }
+
+    monkeypatch.setattr(trusted, "run_discovered_cycle", fake_trusted_cycle)
+    monkeypatch.setattr(
+        federation, "probe_and_verify",
+        lambda *_: (_ for _ in ()).throw(AssertionError("legacy probe must not run")),
+    )
+
+    report = federation.run_cycle(dry_run=False, discover=False)
+    assert len(calls) == 1
+    assert report["discovery"]["trusted_public_federation"]["enrolled"] == 1
+    assert report["summary"]["enrolled"] == 1
+    assert report["summary"]["failed"] == 0
+
