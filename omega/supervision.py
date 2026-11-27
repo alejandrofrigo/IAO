@@ -58,6 +58,7 @@ def write_heartbeat(
     }
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
     fd, temporary = tempfile.mkstemp(prefix=".heartbeat-", dir=str(path.parent))
     try:
         os.fchmod(fd, 0o600)
