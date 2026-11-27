@@ -11,7 +11,7 @@ body{margin:0;background:#10141d;color:#edf2fa}
 main{max-width:760px;margin:auto;padding:20px}
 .panel{background:#1b2330;border:1px solid #354154;border-radius:14px;padding:14px;margin:14px 0}
 small,.muted{color:#aab6c8}
-textarea,button{box-sizing:border-box;width:100%;padding:12px;margin:5px 0;border-radius:9px;border:1px solid #46546a;background:#111824;color:#fff;font:inherit}
+textarea,input,button{box-sizing:border-box;width:100%;padding:12px;margin:5px 0;border-radius:9px;border:1px solid #46546a;background:#111824;color:#fff;font:inherit}
 button{background:#315caa;border:0;font-weight:650}
 button:disabled{opacity:.5}
 #messages{display:flex;flex-direction:column;gap:10px}
@@ -38,6 +38,16 @@ button:disabled{opacity:.5}
 <button id="send" disabled>Enviar mensaje</button>
 <small>No compartas contraseñas, claves privadas ni datos sensibles.</small>
 </section>
+
+<section class="panel" id="taskPanel" hidden>
+<h2>Centro de mando del dispositivo</h2>
+<p>Consultas locales de solo lectura. Cada envío y cancelación requiere la firma del dispositivo primario vinculado; una sesión de visitante no puede usar este panel.</p>
+<label for="taskQuery">Consulta en la base de conocimiento local</label>
+<input id="taskQuery" type="text" maxlength="500" minlength="2" autocomplete="off" placeholder="Escribe qué información buscar...">
+<button id="enqueueTask" type="button">Encolar consulta de solo lectura</button>
+<div id="taskResult" class="status" role="status" aria-live="polite"></div>
+</section>
+
 </main>
 <script src="./api-config.js"></script>
 <script>
@@ -47,7 +57,11 @@ button:disabled{opacity:.5}
   const messageEl = document.querySelector("#message");
   const connectBtn = document.querySelector("#connect");
   const sendBtn = document.querySelector("#send");
-  let token = null, conversationId = null, busy = false;
+  const taskPanel = document.querySelector("#taskPanel");
+  const taskQuery = document.querySelector("#taskQuery");
+  const enqueueTaskBtn = document.querySelector("#enqueueTask");
+  const taskResult = document.querySelector("#taskResult");
+  let token = null, conversationId = null, busy = false, activeTaskId = null;
   window.iaoGetSessionToken = () => token;
 
   function status(s) { statusEl.textContent = s; }
@@ -86,7 +100,8 @@ button:disabled{opacity:.5}
       messagesEl.replaceChildren();
       messageEl.disabled = false;
       sendBtn.disabled = false;
-      status("Sesión de operador autenticada. Solo lectura; sin permisos de mando. Caduca en 15 minutos.");
+      taskPanel.hidden = false;
+      status("Sesión de operador autenticada. El centro de mando solo admite consultas locales de lectura con firma del dispositivo primario. Caduca en 15 minutos.");
       messageEl.focus();
     } catch (error) {
       token = null;
@@ -100,6 +115,9 @@ button:disabled{opacity:.5}
     token = null;
     conversationId = null;
     messagesEl.replaceChildren();
+    taskPanel.hidden = true;
+    taskResult.textContent = "";
+    activeTaskId = null;
     messageEl.disabled = true;
     sendBtn.disabled = true;
     window.dispatchEvent(new Event("iao-session-changed"));
@@ -163,6 +181,91 @@ button:disabled{opacity:.5}
       busy = false;
       connectBtn.disabled = false;
     }
+  });
+
+
+  async function enqueueReadOnlyTask() {
+    const query = taskQuery.value.trim();
+    if (!query || query.length < 2 || query.length > 500 || busy) return;
+    if (!token || taskPanel.hidden) {
+      taskResult.textContent = "Inicia sesión de operador en el dispositivo vinculado.";
+      return;
+    }
+    const device = window.IAODeviceAuthority;
+    if (!device || typeof device.submitQueuedTask !== "function") {
+      taskResult.textContent = "La autoridad criptográfica del dispositivo no está disponible.";
+      return;
+    }
+    busy = true;
+    enqueueTaskBtn.disabled = true;
+    taskResult.textContent = "Firmando la petición y verificando el dispositivo...";
+    try {
+      const result = await device.submitQueuedTask({
+        goal: "Buscar en el corpus local: " + query,
+        capability: "knowledge.search",
+        input: {query},
+        execution_mode: "queued"
+      });
+      activeTaskId = result.task_id;
+      taskQuery.value = "";
+      taskResult.textContent = "Tarea " + activeTaskId + " — estado: " + result.state;
+      const statusButton = document.createElement("button");
+      statusButton.type = "button";
+      statusButton.textContent = "Consultar estado";
+      statusButton.addEventListener("click", refreshTaskStatus);
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.textContent = "Cancelar tarea";
+      cancelButton.addEventListener("click", cancelActiveTask);
+      taskResult.append(document.createElement("br"), statusButton, cancelButton);
+    } catch (error) {
+      taskResult.textContent = "No se pudo encolar: " + error.message;
+    } finally {
+      busy = false;
+      enqueueTaskBtn.disabled = false;
+    }
+  }
+
+  async function refreshTaskStatus() {
+    if (!activeTaskId || !token || busy) return;
+    busy = true;
+    try {
+      const result = await request("/v1/tasks/" + activeTaskId);
+      taskResult.firstChild.textContent =
+        "Tarea " + activeTaskId + " — estado: " + result.state;
+      if (["SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED", "DENIED"].includes(result.state)) {
+        taskResult.textContent = "Tarea " + activeTaskId + " — estado terminal: " + result.state;
+      }
+    } catch (error) {
+      taskResult.firstChild.textContent = "No se pudo consultar la tarea: " + error.message;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function cancelActiveTask() {
+    if (!activeTaskId || !token || busy) return;
+    const device = window.IAODeviceAuthority;
+    if (!device || typeof device.cancelQueuedTask !== "function") {
+      taskResult.firstChild.textContent = "La autoridad criptográfica del dispositivo no está disponible.";
+      return;
+    }
+    busy = true;
+    try {
+      const result = await device.cancelQueuedTask(activeTaskId);
+      taskResult.textContent =
+        "Tarea " + activeTaskId + " — cancelación: " + result.cancellation +
+        " — estado: " + result.state;
+    } catch (error) {
+      taskResult.firstChild.textContent = "No se pudo cancelar: " + error.message;
+    } finally {
+      busy = false;
+    }
+  }
+
+  enqueueTaskBtn.addEventListener("click", enqueueReadOnlyTask);
+  taskQuery.addEventListener("keydown", event => {
+    if (event.key === "Enter") enqueueReadOnlyTask();
   });
 
   async function sendMessage() {
