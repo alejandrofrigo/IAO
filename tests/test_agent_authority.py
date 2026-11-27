@@ -159,3 +159,14 @@ def test_duplicate_active_agent_key_rejected(tmp_path):
     _grant(authority, operator, agent)
     with pytest.raises(AgentAuthorityError, match="AGENT_ALREADY_ENROLLED"):
         _grant(authority, operator, agent)
+
+def test_root_rotation_invalidates_existing_delegation(tmp_path):
+    authority, operator, agent = _setup(tmp_path)
+    _grant(authority, operator, agent)
+    with sqlite3.connect(operator.database) as db:
+        db.execute("UPDATE operator_identities SET key_version=4")
+        db.execute("UPDATE primary_device_bindings SET key_version=4")
+    status = authority.status("a" * 32)
+    assert status["agents"][0]["active"] is False
+    with pytest.raises(AgentAuthorityError, match="OPERATOR_ROOT_KEY_VERSION_MISMATCH"):
+        authority.issue_challenge("a" * 32, 3)
