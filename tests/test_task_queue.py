@@ -316,6 +316,15 @@ class DurableTaskQueueTests(unittest.TestCase):
             self.assertTrue(
                 {"lease_owner", "lease_until", "attempt_count", "lease_generation", "cancel_requested_at"}.issubset(columns)
             )
+            self.assertIsNotNone(migrated.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_budget_usage'"
+            ).fetchone())
+            self.assertEqual(
+                migrated.db.execute(
+                    "SELECT MAX(version) FROM schema_migrations"
+                ).fetchone()[0],
+                5,
+            )
         finally:
             migrated.close()
 
