@@ -7,7 +7,7 @@ from dataclasses import dataclass
 EFFECT_CLASSES = frozenset({
     "READ_ONLY", "REVERSIBLE", "EXTERNAL", "IRREVERSIBLE",
     # Compatibility labels are treated as restrictive aliases, never implicit grants.
-    "WRITE", "DESTRUCTIVE",
+    "WRITE", "DESTRUCTIVE", "CHANGE_REVERSIBLE", "CHANGE_EXTERNAL", "CHANGE_IRREVERSIBLE",
 })
 
 
