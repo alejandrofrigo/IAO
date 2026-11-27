@@ -717,7 +717,10 @@ class OmegaService:
                 raise ApiError(400, "MISSING_QUERY")
             from omega.deepseek_web import obtener_respuesta_internet
             respuesta = obtener_respuesta_internet(pregunta)
-            self.store.audit(pr.subject, "INTERNET_QUERY", "federation", query=pregunta[:100])
+            self.store.audit(
+                pr.subject, "INTERNET_QUERY", "federation",
+                query_digest=_digest(pregunta),
+            )
             return 200, {"answer": respuesta}
 
 
