@@ -1908,7 +1908,7 @@ class LimitsAndIntegrityTests(Base):
             if event["event_type"] == "CHAT_COMPLETED"
         ]
         self.assertEqual(len(events), 1)
-        details = json.loads(events[0]["details"])
+        details = events[0]["details"]
         self.assertEqual(details["model_provider_id"], "provider-a")
         self.assertEqual(details["model_configured_id"], "model-a")
         self.assertEqual(details["model_upstream_id"], "model-a-v2")
