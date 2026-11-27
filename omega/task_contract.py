@@ -95,13 +95,40 @@ def validate_task_intent_v1(intent: Any) -> dict[str, Any]:
     if intent["risk_class"] != "R0":
         raise TaskContractError("TASK_RISK_CLASS_UNSUPPORTED")
     budget = intent["budget"]
-    if not isinstance(budget, dict) or set(budget) != {"max_model_calls", "timeout_seconds"}:
+    required_budget_fields = {"max_model_calls", "timeout_seconds"}
+    optional_budget_fields = {
+        "max_tool_calls", "max_input_bytes", "max_output_bytes",
+    }
+    if (
+        not isinstance(budget, dict)
+        or not required_budget_fields.issubset(budget)
+        or set(budget) - required_budget_fields - optional_budget_fields
+    ):
         raise TaskContractError("TASK_BUDGET_INVALID")
     calls, timeout = budget["max_model_calls"], budget["timeout_seconds"]
     if isinstance(calls, bool) or not isinstance(calls, int) or not 0 <= calls <= 100:
         raise TaskContractError("TASK_BUDGET_INVALID")
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(float(timeout)) or not 0 < timeout <= 300:
+    if (
+        isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+        or not math.isfinite(float(timeout)) or not 0 < timeout <= 300
+    ):
         raise TaskContractError("TASK_BUDGET_INVALID")
+    tool_calls = budget.get("max_tool_calls", 1)
+    input_bytes = budget.get("max_input_bytes", 65_536)
+    output_bytes = budget.get("max_output_bytes", 1_048_576)
+    for value, maximum in (
+        (tool_calls, 20), (input_bytes, 65_536), (output_bytes, 1_048_576),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
+            raise TaskContractError("TASK_BUDGET_INVALID")
+    intent = dict(intent)
+    intent["budget"] = {
+        "max_model_calls": calls,
+        "max_tool_calls": tool_calls,
+        "max_input_bytes": input_bytes,
+        "max_output_bytes": output_bytes,
+        "timeout_seconds": float(timeout),
+    }
     if not isinstance(intent["termination_condition"], str) or not 1 <= len(intent["termination_condition"]) <= 256:
         raise TaskContractError("TASK_TERMINATION_INVALID")
     if not isinstance(intent["policy_version"], str) or not 1 <= len(intent["policy_version"]) <= 128:
