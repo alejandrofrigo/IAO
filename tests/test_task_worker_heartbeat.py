@@ -56,3 +56,17 @@ def test_task_worker_failure_leaves_bounded_cycle_evidence(tmp_path):
     assert result["phase"] == "cycle_completed"
     assert result["last_cycle_result"] is False
     assert "private-task-marker" not in heartbeat.read_text(encoding="utf-8")
+
+def test_task_worker_rejects_invalid_poll_and_heartbeat_bounds():
+    for kwargs, expected in (
+        ({"lease_seconds": 0}, "INVALID_WORKER_LEASE"),
+        ({"poll_seconds": 0}, "INVALID_WORKER_POLL_INTERVAL"),
+        ({"poll_seconds": float("nan")}, "INVALID_WORKER_POLL_INTERVAL"),
+        ({"heartbeat_stale_after_seconds": 0}, "INVALID_WORKER_HEARTBEAT_STALENESS"),
+    ):
+        try:
+            TaskWorker(IdleStore(), object(), **kwargs)
+        except ValueError as exc:
+            assert str(exc) == expected
+        else:
+            raise AssertionError("invalid worker timing accepted")
