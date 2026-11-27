@@ -76,8 +76,8 @@ def test_readiness_hides_internal_runtime_exception(monkeypatch):
     response = api_main.ready(_ready_request())
     payload = _response_payload(response)
     assert response.status_code == 503
-    assert payload == {
-        "status": "not_ready",
-        "reason": "PERSISTENT_RUNTIME_UNAVAILABLE",
-    }
+    assert payload["status"] == "not_ready"
+    assert payload["reason"] == "PERSISTENT_RUNTIME_UNAVAILABLE"
+    assert isinstance(payload["correlation_id"], str)
+    assert len(payload["correlation_id"]) == 32
     assert "private-runtime-detail" not in response.body.decode()
