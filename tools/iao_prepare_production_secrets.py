@@ -27,7 +27,7 @@ def write_production_secrets(path: Path, *, now: int | None = None) -> Path:
         "IAO_CORPUS_DIR": "/app/knowledge",
         "IAO_TASK_WORKER_ENABLED": "true",
         "MODEL_ADAPTER": "disabled",
-        "PUBLIC_BASE_URL": "CHANGE_ME_HTTPS_ORIGIN",
+        "IAO_DOMAIN": "CHANGE_ME_DOMAIN",
         "IAO_CORS_ORIGINS": "CHANGE_ME_EXACT_BROWSER_ORIGIN",
         "IAO_SESSION_SIGNING_KEY": secrets.token_urlsafe(64),
         "AUDIT_HMAC_KEY": secrets.token_urlsafe(64),
