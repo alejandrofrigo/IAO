@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import subprocess
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -339,8 +340,21 @@ def run_once():
 
 def acquire_lock():
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not stat.S_ISDIR(os.lstat(STATE).st_mode):
+        raise RuntimeError("COORDINATOR_STATE_INVALID")
     os.chmod(STATE, 0o700)
-    stream = LOCK.open("a+", encoding="utf-8")
+    try:
+        fd = os.open(
+            LOCK,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError:
+        raise RuntimeError("COORDINATOR_LOCK_UNAVAILABLE") from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise RuntimeError("COORDINATOR_LOCK_INVALID")
+    stream = os.fdopen(fd, "r+", encoding="utf-8")
     os.fchmod(stream.fileno(), 0o600)
     try:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
