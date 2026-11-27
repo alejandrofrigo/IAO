@@ -20,7 +20,7 @@ from omega.policy import authorize
 from omega.effect_policy import authorize_effect
 from omega.server import build_service
 from omega.env_loader import load_env_files
-from omega.config import load_settings
+from omega.config import load_settings, session_signing_key
 from omega.service import POLICY_VERSION, _digest
 from omega.store import Store
 from omega.tools.registry import QUEUED_TOOL_ALLOWLIST, ToolRegistry
