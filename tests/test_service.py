@@ -1554,7 +1554,7 @@ class QueuedTaskApiTests(Base):
 
         class ActiveOperatorSession:
             def verify_authenticated_session(self, subject, token):
-                return subject == "operator:device-test" and bool(token)
+                return subject.startswith("operator:") and bool(token)
 
         self.svc.operator_identity_authority = ActiveOperatorSession()
         operator_headers = self.tok("operator:device-test", ["knowledge.search"])
@@ -1630,7 +1630,7 @@ class QueuedTaskApiTests(Base):
         ).decode("ascii")
         with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "1"}):
             status, enrolled = self.call(
-                "POST", "/v1/device/enroll", self.tok("device-owner"),
+                "POST", "/v1/device/enroll", self.tok("operator:device-owner"),
                 {"code": code, "public_key_pem": public_pem},
             )
         self.assertEqual(status, 201)
@@ -1652,12 +1652,12 @@ class QueuedTaskApiTests(Base):
             (403, "OPERATOR_SESSION_REQUIRED"),
         )
         status, challenge = self.call(
-            "POST", "/v1/device/challenge", self.tok("device-owner"),
+            "POST", "/v1/device/challenge", self.tok("operator:device-owner"),
             {"device_id": device_id},
         )
         self.assertEqual(status, 200)
         wrong_owner_challenge = self.call(
-            "POST", "/v1/device/challenge", self.tok("different-owner"),
+            "POST", "/v1/device/challenge", self.tok("operator:different-owner"),
             {"device_id": device_id},
         )
         self.assertEqual(
@@ -1689,14 +1689,14 @@ class QueuedTaskApiTests(Base):
             (401, "AUTHENTICATION_REQUIRED"),
         )
         wrong_owner_status = self.call(
-            "POST", "/v1/device/command", self.tok("different-owner"), proof
+            "POST", "/v1/device/command", self.tok("operator:different-owner"), proof
         )
         self.assertEqual(
             (wrong_owner_status[0], wrong_owner_status[1]["error"]),
             (403, "DEVICE_OWNER_MISMATCH"),
         )
         status, result = self.call(
-            "POST", "/v1/device/command", self.tok("device-owner"), proof
+            "POST", "/v1/device/command", self.tok("operator:device-owner"), proof
         )
         self.assertEqual(status, 200)
         self.assertEqual(result["authority"], "READ_ONLY_DEVICE_VERIFIED")
@@ -1709,7 +1709,7 @@ class QueuedTaskApiTests(Base):
             if event["event_type"] == "DEVICE_ENROLLED"
         ]
         self.assertEqual(len(enrollment_events), 1)
-        self.assertEqual(enrollment_events[0]["details"]["actor"], "device-owner")
+        self.assertEqual(enrollment_events[0]["details"]["actor"], "operator:device-owner")
         self.assertEqual(enrollment_events[0]["subject"], "primary_device")
 
     def test_queued_submission_requires_primary_device_proof(self) -> None:
