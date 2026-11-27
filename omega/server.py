@@ -315,7 +315,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 }
                 if (
                     origin.rstrip("/") not in allowed
-                    or requested_method not in {"POST", "GET"}
+                    or requested_method not in {"GET", "POST", "PUT", "DELETE"}
                     or not requested_headers.issubset(
                         {"authorization", "content-type", "x-iao-device-proof"}
                     )
@@ -328,7 +328,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     return
                 self.send_response(204)
                 self._cors_headers()
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-IAO-Device-Proof")
                 self.send_header("Access-Control-Max-Age", "600")
                 self.send_header("Content-Length", "0")
