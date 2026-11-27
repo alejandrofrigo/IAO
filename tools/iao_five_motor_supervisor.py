@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / ".state" / "iao-five-motors"
 LOGS = STATE / "logs"
 PID_FILE = STATE / "supervisor.pid"
+COORDINATOR_LOCK = ROOT / ".state" / "iao-autonomy" / "coordinator.lock"
 CHILD_FILE = STATE / "children.json"
 EVENTS = STATE / "events.jsonl"
 CONFIG = STATE / "adapters.json"
@@ -121,13 +122,14 @@ def status():
         if alive:
             state = "PROCESS_ALIVE_UNVERIFIED"
             if name in {"PADGE", "AUTONOMY_CONTINUOUS"}:
-                from omega.supervision import read_heartbeat
+                from omega.supervision import read_heartbeat, read_lock_owner
 
                 heartbeat = read_heartbeat(
                     ROOT / ".state" / "iao-autonomy" / "coordinator-heartbeat.json",
                     expected_component="PADGE_AUTONOMY",
                 )
-                if heartbeat.get("pid") == int(pid):
+                lock_owner = read_lock_owner(COORDINATOR_LOCK)
+                if heartbeat.get("pid") == int(pid) == lock_owner:
                     if heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
                         state = heartbeat["status"]
                     elif heartbeat["status"] == "STALE":
