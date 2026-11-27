@@ -93,6 +93,11 @@ def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tm
         assert method_response.headers["x-correlation-id"] == method_payload["correlation_id"]
         assert len(method_payload["correlation_id"]) == 32
         assert method_response.headers["cache-control"] == "no-store"
+        device_patch = client.patch("/v1/device/enroll")
+        assert device_patch.status_code == 405
+        assert device_patch.json()["error"] == "METHOD_NOT_ALLOWED"
+        assert device_patch.headers["allow"] == "POST"
+        assert device_patch.headers["x-correlation-id"] == device_patch.json()["correlation_id"]
         unknown_response = client.get("/fed/v1/not-a-route")
         assert unknown_response.status_code == 404
         assert unknown_response.json()["error"] == "NOT_FOUND"
@@ -178,6 +183,19 @@ def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path, monkey
             assert response.headers["Allow"] == "GET"
             assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
             assert response.headers["Cache-Control"] == "no-store"
+        patch_request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/v1/device/enroll",
+            data=b"", method="PATCH",
+        )
+        try:
+            urllib.request.urlopen(patch_request, timeout=3)
+            raise AssertionError("unsupported PATCH method was accepted")
+        except urllib.error.HTTPError as response:
+            payload = json.loads(response.read())
+            assert response.code == 405
+            assert payload["error"] == "METHOD_NOT_ALLOWED"
+            assert response.headers["Allow"] == "POST"
+            assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
         unknown_request = urllib.request.Request(
             f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/not-a-route",
             method="GET",
