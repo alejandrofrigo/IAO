@@ -404,9 +404,10 @@ def main() -> None:
         httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
         pid_path.write_text(str(os.getpid()), encoding="ascii")
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
-        sys.stderr.write(json.dumps({"event": "listening", "host": s.host, "port": s.port}) + "\\n")
+        sys.stderr.write(json.dumps({"event": "listening", "host": s.host, "port": s.port}) + "\n")
         httpd.serve_forever()
     finally:
+        workers_stopped = True
         for module_name, stop_name in (
             ("omega.federation_autojoin", "stop_federation_autojoin"),
             ("omega.federation_discovery", "stop_federation_discovery"),
@@ -414,8 +415,15 @@ def main() -> None:
         ):
             try:
                 module = __import__(module_name, fromlist=[stop_name])
-                getattr(module, stop_name)(timeout=5.0)
+                stopped = getattr(module, stop_name)(timeout=15.0)
+                if stopped is not True:
+                    workers_stopped = False
+                    sys.stderr.write(json.dumps({
+                        "event": "runtime_worker_stop_timeout",
+                        "worker": module_name,
+                    }) + "\\n")
             except Exception as exc:
+                workers_stopped = False
                 sys.stderr.write(json.dumps({
                     "event": "runtime_worker_stop_failed",
                     "worker": module_name,
@@ -423,17 +431,22 @@ def main() -> None:
                 }) + "\\n")
         if httpd is not None:
             httpd.server_close()
-        try:
-            svc.store.audit("system", "RUNTIME_STOP", "omega")
-        finally:
-            svc.store.close()
+        if workers_stopped:
             try:
-                if pid_path.read_text(encoding="ascii").strip() == str(os.getpid()):
-                    pid_path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                pass
+                svc.store.audit("system", "RUNTIME_STOP", "omega")
+            finally:
+                svc.store.close()
+        else:
+            sys.stderr.write(json.dumps({
+                "event": "runtime_store_close_skipped_workers_active",
+            }) + "\\n")
+        try:
+            if pid_path.read_text(encoding="ascii").strip() == str(os.getpid()):
+                pid_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
