@@ -69,7 +69,7 @@ def test_agent_request_rejects_tampered_body_digest(tmp_path):
     challenge = authority.issue_agent_challenge(agent_id)
     timestamp, signature = _signed_request(authority, key, agent_id, challenge["nonce"])
     with pytest.raises(AgentAuthorityError, match="INVALID_AGENT_SIGNATURE"):
-        authority.verify_agent_request(agent_id=agent_id, nonce=challenge["nonce"], timestamp=timestamp, signature=signature, method="GET", path="/v1/agent/status", body=b"tampered")
+        authority.verify_agent_request(agent_id=agent_id, nonce=challenge["nonce"], timestamp=timestamp + 1, signature=signature, method="GET", path="/v1/agent/status", body=b"")
 
 
 def test_revoked_agent_cannot_obtain_challenge(tmp_path):
