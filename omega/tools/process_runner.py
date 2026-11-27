@@ -8,6 +8,10 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import pickle
+import shutil
+import subprocess
+import sys
 from typing import Any, Callable
 
 MAX_RESULT_BYTES = 1_048_576
@@ -74,11 +78,88 @@ def _child_entry(send_conn: Any, run: Callable[..., Any], verify: Callable[..., 
         send_conn.close()
 
 
+
+
+
+def _run_tool_bubblewrap(
+    run: Callable[..., Any],
+    verify: Callable[..., Any],
+    payload: dict[str, Any],
+    timeout_seconds: float,
+) -> tuple[dict[str, Any], str]:
+    """Execute a trusted registered tool inside a read-only, networkless namespace."""
+    binary = shutil.which("bwrap")
+    if not binary:
+        raise ToolProcessError("OS_SANDBOX_UNAVAILABLE")
+    command = [
+        binary,
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-all",
+        "--ro-bind", "/", "/",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--tmpfs", "/tmp",
+        "--tmpfs", "/home",
+        "--tmpfs", "/var/lib",
+        "--tmpfs", "/run",
+        "--cap-drop", "ALL",
+        "--clearenv",
+        "--setenv", "HOME", "/tmp",
+        "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
+        "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
+        "--chdir", os.getcwd(),
+        sys.executable, "-m", "omega.tools.sandbox_child",
+    ]
+    try:
+        serialized = pickle.dumps(
+            (run, verify, payload, timeout_seconds),
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        if len(serialized) > MAX_INPUT_BYTES + 262_144:
+            raise ValueError("TOOL_SANDBOX_INPUT_TOO_LARGE")
+        completed = subprocess.run(
+            command,
+            input=serialized,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds + 2,
+            check=False,
+            close_fds=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ToolProcessTimeout("TOOL_PROCESS_TIMED_OUT") from exc
+    except (OSError, pickle.PickleError) as exc:
+        raise ToolProcessError("OS_SANDBOX_LAUNCH_FAILED") from exc
+    if completed.returncode != 0:
+        raise ToolProcessError("OS_SANDBOX_EXECUTION_FAILED")
+    try:
+        message = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ToolProcessError("OS_SANDBOX_INVALID_RESULT") from exc
+    if not isinstance(message, dict) or not message.get("ok"):
+        raise ToolProcessError("TOOL_PROCESS_ERROR")
+    try:
+        output = json.loads(message["output"])
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ToolProcessError("OS_SANDBOX_INVALID_RESULT") from exc
+    verdict = message.get("verdict")
+    if not isinstance(output, dict) or not isinstance(verdict, str) or len(verdict) > 32:
+        raise ToolProcessError("OS_SANDBOX_INVALID_RESULT")
+    return output, verdict
+
 def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
                       payload: dict[str, Any], timeout_seconds: float
                       ) -> tuple[dict[str, Any], str]:
     if not 0 < timeout_seconds <= 300:
         raise ValueError("INVALID_TOOL_TIMEOUT")
+    mode = os.environ.get("IAO_TOOL_SANDBOX_MODE")
+    if mode is None:
+        mode = "bubblewrap" if os.environ.get("APP_ENV", "").lower() == "production" else "process"
+    if mode in {"bubblewrap", "required"}:
+        return _run_tool_bubblewrap(run, verify, payload, timeout_seconds)
+    if mode != "process":
+        raise ValueError("INVALID_TOOL_SANDBOX_MODE")
     input_bytes = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
