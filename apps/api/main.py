@@ -442,6 +442,44 @@ def federation_not_found(path: str, request: Request):
     return _federation_json(404, {"error": "NOT_FOUND"})
 
 
+def _task_worker_health() -> str:
+    """Require a fresh worker-cycle heartbeat and a live matching process PID."""
+    from omega.supervision import read_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get("OMEGA_STATE_DIR", "/var/lib/iao"),
+        )
+    )
+    heartbeat = read_heartbeat(
+        state_dir / "task-worker-heartbeat.json",
+        expected_component="TASK_WORKER",
+    )
+    state = heartbeat.get("status")
+    if state == "UNVERIFIED":
+        return "heartbeat_unverified"
+    if state == "STALE":
+        return "stale_heartbeat"
+    pid = heartbeat.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid < 2:
+        return "heartbeat_unverified"
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "process_not_alive"
+    except PermissionError:
+        pass
+    except (OSError, OverflowError, ValueError):
+        return "process_not_alive"
+    return {
+        "HEALTHY": "healthy",
+        "CYCLE_IN_PROGRESS": "cycle_in_progress",
+        "DEGRADED": "degraded",
+        "STARTING": "starting",
+    }.get(state, "heartbeat_unverified")
+
+
 @app.api_route(
     "/health/live",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -491,6 +529,7 @@ def ready(request: Request):
         **payload.get("checks", {}),
         "federation_workers": worker_checks,
         "model_adapter": model_state,
+        "task_worker": _task_worker_health(),
     }
     payload["production_gates"] = {
         "device_identity_verification": "integrated_read_only",
