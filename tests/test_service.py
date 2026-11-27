@@ -1741,14 +1741,24 @@ class LimitsAndIntegrityTests(Base):
             {"decision": "INTERRUPTED", "error": "PROCESS_INTERRUPTED"},
         )
         events = self.svc.store._all_events()
-        self.assertTrue(any(
-            event["event_type"] == "TASK_INTERRUPTED_ON_RESTART"
-            and event["subject"] == task["id"]
-            and event["details"].get("actor") == "alice"
-            and event["details"].get("decision") == "FAIL_CLOSED"
-            and event["details"].get("reason") == "PROCESS_INTERRUPTED"
-            for event in events
-        ))
+        recovery_events = [
+            event for event in events
+            if event["event_type"] == "TASK_INTERRUPTED_ON_RESTART"
+        ]
+        self.assertEqual(len(recovery_events), 1)
+        recovery_event = recovery_events[0]
+        self.assertEqual(recovery_event["subject"], "task_recovery")
+        self.assertEqual(
+            recovery_event["details"],
+            {
+                "actor": "system",
+                "recovered_count": 1,
+                "decision": "FAIL_CLOSED",
+                "reason": "PROCESS_INTERRUPTED",
+            },
+        )
+        self.assertNotIn("interrupted-task-id", repr(recovery_event))
+        self.assertNotIn("alice", repr(recovery_event))
 
     def test_persistence_survives_restart(self) -> None:
         tid = self.task("alice", "knowledge.search")[1]["task_id"]

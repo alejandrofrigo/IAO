@@ -73,11 +73,14 @@ class OmegaService:
 
         # A RUNNING task after restart has an unknown execution outcome.
         # Fail closed and require an explicit new request; never replay it.
-        for interrupted in self.store.recover_interrupted_tasks():
+        interrupted = self.store.recover_interrupted_tasks()
+        if interrupted:
+            # Do not place task IDs or owner identifiers in audit metadata.
             self.store.audit(
-                interrupted["owner"],
+                "system",
                 "TASK_INTERRUPTED_ON_RESTART",
-                interrupted["id"],
+                "task_recovery",
+                recovered_count=len(interrupted),
                 decision="FAIL_CLOSED",
                 reason="PROCESS_INTERRUPTED",
             )

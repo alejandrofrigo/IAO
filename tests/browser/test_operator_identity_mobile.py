@@ -79,6 +79,8 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
             "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT": str(time.time() + 1800),
             "IAO_DEVICE_ENROLLMENT_CODE": "browser-e2e-device-" + "d" * 40,
             "MODEL_ADAPTER": "disabled",
+            "IAO_TASK_WORKER_ENABLED": "true",
+            "IAO_TASK_WORKER_POLL_SECONDS": "0.1",
         })
         api = subprocess.Popen(
             [
@@ -258,7 +260,33 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 task_panel.get_by_role(
                     "button", name="Consultar estado de la última tarea"
                 ).click()
-                page.get_by_text("Estado consultado: QUEUED.", exact=True).wait_for(timeout=15000)
+                page.wait_for_function(
+                    """() => {
+                      const status = document.querySelector('#iao-task-status');
+                      return status && /^Estado consultado: (QUEUED|RUNNING|VERIFYING|SUCCEEDED|FAILED|EXPIRED)\\.$/.test(status.textContent);
+                    }""",
+                    timeout=15000,
+                )
+
+                # Exercise the real chat composer: the separate task panel is
+                # not the command path. Only the explicit task button may queue
+                # this message, and the API-lifespan worker must return evidence.
+                chat_message = page.locator("#message")
+                chat_task_button = page.get_by_role(
+                    "button", name="Enviar mensaje como tarea autorizada de solo lectura"
+                )
+                page.wait_for_function(
+                    "() => !document.querySelector('#send-chat-task').disabled",
+                    timeout=10000,
+                )
+                chat_message.fill("buscar evidencia de auditoría en el corpus")
+                chat_task_button.click()
+                page.get_by_text(
+                    "Tarea ejecutada y evidencia verificada.", exact=True
+                ).wait_for(timeout=40000)
+                chat_result = page.locator("#messages").inner_text()
+                assert "Resultado de tarea (SUCCEEDED)" in chat_result, chat_result
+                assert '"verification": "PASS"' in chat_result, chat_result
 
                 revoke_grant = panel.get_by_role(
                     "button", name="Revocar autorización de búsqueda"

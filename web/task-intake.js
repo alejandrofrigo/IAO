@@ -40,6 +40,8 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = true;
+      const chatTaskButton = document.querySelector("#send-chat-task");
+      if (chatTaskButton) chatTaskButton.disabled = true;
       setAuthStatus("Inicia sesión como operador y vincula el dispositivo primario.");
       return false;
     }
@@ -48,6 +50,8 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = true;
+      const chatTaskButton = document.querySelector("#send-chat-task");
+      if (chatTaskButton) chatTaskButton.disabled = true;
       setAuthStatus("La autoridad de capacidades no está disponible.");
       return false;
     }
@@ -58,6 +62,8 @@
       queryEl.disabled = !active || busy;
       submitButton.disabled = !active || busy;
       refreshButton.disabled = !latestTaskId || busy;
+      const chatTaskButton = document.querySelector("#send-chat-task");
+      if (chatTaskButton) chatTaskButton.disabled = !active || busy;
       setAuthStatus(active
         ? "Autorización activa: knowledge.search (solo lectura, corpus IAO)."
         : "Sin autorización activa. Concede knowledge.search desde el panel de identidad.");
@@ -66,10 +72,41 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = true;
+      const chatTaskButton = document.querySelector("#send-chat-task");
+      if (chatTaskButton) chatTaskButton.disabled = true;
       setAuthStatus("No se pudo verificar la autorización: " + String(error.message || error));
       return false;
     }
   }
+
+  async function submitChatTask(message) {
+    const query = typeof message === "string" ? message.trim() : "";
+    if (!query || query.length > 500 || busy) throw new Error("INVALID_CHAT_TASK_INPUT");
+    if (!sessionToken() || typeof window.iaoApiUrl !== "function") {
+      throw new Error("OPERATOR_SESSION_REQUIRED");
+    }
+    const active = await refreshGate();
+    if (!active) throw new Error("CAPABILITY_NOT_GRANTED");
+    if (!window.IAODeviceAuthority ||
+        typeof window.IAODeviceAuthority.submitQueuedTask !== "function") {
+      throw new Error("DEVICE_AUTHORITY_NOT_AVAILABLE");
+    }
+    const result = await window.IAODeviceAuthority.submitQueuedTask({
+      goal: "Solicitud explícita desde el Chat público IAO",
+      capability: "knowledge.search",
+      input: { query },
+      execution_mode: "queued"
+    }, newIdempotencyKey());
+    if (!result || typeof result.task_id !== "string" ||
+        !/^[0-9a-f-]{36}$/.test(result.task_id) ||
+        result.state !== "QUEUED") {
+      throw new Error("INVALID_QUEUED_TASK_RESPONSE");
+    }
+    latestTaskId = result.task_id;
+    return { task_id: result.task_id, state: result.state };
+  }
+
+  window.iaoSubmitChatTask = submitChatTask;
 
   async function submitTask() {
     const query = queryEl.value.trim();
