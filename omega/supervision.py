@@ -14,6 +14,17 @@ from typing import Any
 _HEARTBEAT_PHASES = {"starting", "cycle_running", "cycle_completed"}
 
 
+def _process_start_ticks(pid: int) -> str | None:
+    """Bind a heartbeat to a Linux process instance, not merely its reusable PID."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        fields = raw[raw.rfind(")") + 2:].split()
+        value = fields[19]
+        return value if value.isascii() and value.isdigit() else None
+    except (OSError, UnicodeError, IndexError):
+        return None
+
+
 def write_heartbeat(
     path: Path,
     *,
@@ -47,9 +58,10 @@ def write_heartbeat(
     completed_at = timestamp if phase == "cycle_completed" else last_cycle_completed_at
     result = last_cycle_result if phase != "cycle_completed" else last_cycle_result
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "component": component,
         "pid": pid,
+        "process_start_ticks": _process_start_ticks(pid),
         "phase": phase,
         "updated_at": timestamp,
         "interval_seconds": interval_seconds,
@@ -94,17 +106,20 @@ def read_heartbeat(
         if (
             not isinstance(payload, dict)
             or isinstance(payload.get("schema_version"), bool)
-            or payload.get("schema_version") != 1
+            or payload.get("schema_version") != 2
         ):
             raise ValueError
         if payload.get("component") != expected_component:
             raise ValueError
         pid = payload.get("pid")
+        process_start = payload.get("process_start_ticks")
         updated_at = payload.get("updated_at")
         stale_after = payload.get("stale_after_seconds")
         phase = payload.get("phase")
         if (
             isinstance(pid, bool) or not isinstance(pid, int) or pid < 1
+            or not isinstance(process_start, str) or not process_start.isascii() or not process_start.isdigit()
+            or _process_start_ticks(pid) != process_start
             or isinstance(updated_at, bool) or not isinstance(updated_at, (int, float))
             or not math.isfinite(float(updated_at))
             or isinstance(stale_after, bool) or not isinstance(stale_after, int)
