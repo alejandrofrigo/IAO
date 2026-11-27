@@ -205,7 +205,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 )
                 assert "SESIÓN DE OPERADOR AUTENTICADA" in output.inner_text(), output.inner_text()
                 page.get_by_text(
-                    "Sesión de operador autenticada. Solo lectura; sin permisos de mando.",
+                    "Permisos: ninguno (solo lectura)",
                     exact=False,
                 ).wait_for(timeout=15000)
                 bind.wait_for(state="visible")
