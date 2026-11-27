@@ -76,6 +76,8 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
     public_base_url = _validate_public_base_url(
         e.get("PUBLIC_BASE_URL", "http://localhost:8080")
     )
+    if app_env == "production" and not public_base_url.startswith("https://"):
+        raise ValueError("PUBLIC_BASE_URL must use HTTPS in production")
     return Settings(
         app_env=app_env,
         host=host,
