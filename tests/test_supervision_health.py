@@ -25,7 +25,7 @@ def test_heartbeat_reports_cycle_completion_and_staleness(tmp_path):
     fresh = read_heartbeat(
         path, expected_component="PADGE_AUTONOMY", now=1010,
     )
-    assert fresh["status"] == "HEALTHY"
+    assert fresh["status"] == "DEGRADED"
     assert fresh["last_cycle_result"] is False
 
     stale = read_heartbeat(
