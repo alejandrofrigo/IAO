@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ REPORTS = STATE / "reports"
 
 for directory in (STATE, WORK, VERSIONS, REPORTS):
     directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
 
 ALLOWED = ("omega/", "tools/", "docs/")
 PROTECTED = {
@@ -40,9 +42,12 @@ def utc():
 
 
 def log(event, **data):
-    entry = {"time": utc(), "event": event, **data}
-    with (STATE / "events.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    from omega.operational_log import append_private_jsonl
+
+    entry = append_private_jsonl(
+        STATE / "events.jsonl",
+        {"time": utc(), "event": event, **data},
+    )
     print(json.dumps(entry, ensure_ascii=False), flush=True)
 
 
