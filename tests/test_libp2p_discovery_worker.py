@@ -1,15 +1,21 @@
 import json
+import os
+import tempfile
+import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools import iao_libp2p_discovery as worker
 
 
-def test_cycle_persists_only_safe_discovery_status(tmp_path, monkeypatch):
-    monkeypatch.setattr(worker, "state_dir", lambda: tmp_path)
-    monkeypatch.setattr(
-        worker.libp2p_discovery,
-        "discover_sync",
-        lambda **kwargs: {
+class Libp2pDiscoveryWorkerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.state = Path(self.temp.name)
+
+    def test_cycle_persists_only_safe_discovery_status(self):
+        result = {
             "status": "DISCOVERY_COMPLETED",
             "connected_bootstrappers": 2,
             "routing_peers_discovered": 7,
@@ -17,45 +23,51 @@ def test_cycle_persists_only_safe_discovery_status(tmp_path, monkeypatch):
             "enrollment_performed": False,
             "capabilities_granted": [],
             "remote_code_executed": False,
-        },
-    )
-    report = worker.cycle(timeout=5)
-    stored = json.loads((tmp_path / "discovery-report.json").read_text())
-    assert report == stored
-    assert report["status"] == "DISCOVERY_COMPLETED"
-    assert report["routing_peers_discovered"] == 7
-    assert report["enrollment_performed"] is False
-    assert report["capabilities_granted"] == []
-    assert report["remote_code_executed"] is False
-    assert report["listener_exposed"] is False
+        }
+        with patch.object(worker, "state_dir", return_value=self.state), patch.object(
+            worker.libp2p_discovery, "discover_sync", return_value=result
+        ):
+            report = worker.cycle(timeout=5)
+        stored = json.loads((self.state / "discovery-report.json").read_text())
+        self.assertEqual(report, stored)
+        self.assertEqual(report["status"], "DISCOVERY_COMPLETED")
+        self.assertEqual(report["routing_peers_discovered"], 7)
+        self.assertFalse(report["enrollment_performed"])
+        self.assertEqual(report["capabilities_granted"], [])
+        self.assertFalse(report["remote_code_executed"])
+        self.assertFalse(report["listener_exposed"])
+
+    def test_optional_dependency_failure_is_not_reported_as_success(self):
+        def fail(**kwargs):
+            raise ImportError("optional dependency unavailable")
+        with patch.object(worker, "state_dir", return_value=self.state), patch.object(
+            worker.libp2p_discovery, "discover_sync", side_effect=fail
+        ):
+            report = worker.cycle()
+        self.assertEqual(report["status"], "DISCOVERY_ERROR")
+        self.assertEqual(report["error_class"], "ImportError")
+        self.assertFalse(report["enrollment_performed"])
+
+    def test_interval_is_bounded(self):
+        with patch.dict(os.environ, {"IAO_LIBP2P_DISCOVERY_INTERVAL": "1"}):
+            self.assertEqual(worker.read_interval(), worker.MIN_INTERVAL)
+        with patch.dict(os.environ, {"IAO_LIBP2P_DISCOVERY_INTERVAL": "999999"}):
+            self.assertEqual(worker.read_interval(), worker.MAX_INTERVAL)
+        with patch.dict(os.environ, {"IAO_LIBP2P_DISCOVERY_INTERVAL": "bad"}):
+            self.assertEqual(worker.read_interval(), worker.DEFAULT_INTERVAL)
+
+    def test_report_refuses_symlink(self):
+        target = self.state / "outside"
+        target.write_text("{}")
+        link = self.state / "discovery-report.json"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        with self.assertRaisesRegex(RuntimeError, "SYMLINK"):
+            worker._atomic_report(link, {"status": "x"})
+        self.assertEqual(target.read_text(), "{}")
 
 
-def test_cycle_reports_optional_dependency_failure_without_claiming_success(tmp_path, monkeypatch):
-    monkeypatch.setattr(worker, "state_dir", lambda: tmp_path)
-    def fail(**kwargs):
-        raise ImportError("optional libp2p dependency unavailable")
-    monkeypatch.setattr(worker.libp2p_discovery, "discover_sync", fail)
-    report = worker.cycle()
-    assert report["status"] == "DISCOVERY_ERROR"
-    assert report["error_class"] == "ImportError"
-    assert report["enrollment_performed"] is False
-
-
-def test_interval_is_bounded(monkeypatch):
-    monkeypatch.setenv("IAO_LIBP2P_DISCOVERY_INTERVAL", "1")
-    assert worker.read_interval() == worker.MIN_INTERVAL
-    monkeypatch.setenv("IAO_LIBP2P_DISCOVERY_INTERVAL", "999999")
-    assert worker.read_interval() == worker.MAX_INTERVAL
-    monkeypatch.setenv("IAO_LIBP2P_DISCOVERY_INTERVAL", "bad")
-    assert worker.read_interval() == worker.DEFAULT_INTERVAL
-
-
-def test_report_refuses_symlink(tmp_path):
-    target = tmp_path / "outside"
-    target.write_text("{}")
-    link = tmp_path / "discovery-report.json"
-    link.symlink_to(target)
-    import pytest
-    with pytest.raises(RuntimeError, match="SYMLINK"):
-        worker._atomic_report(link, {"status": "x"})
-    assert target.read_text() == "{}"
+if __name__ == "__main__":
+    unittest.main()
