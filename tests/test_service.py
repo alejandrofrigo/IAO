@@ -1580,7 +1580,7 @@ class LimitsAndIntegrityTests(Base):
     def test_content_length_mismatch_is_rejected_before_route_dispatch(self) -> None:
         status, payload = self.svc.handle(
             "POST", "/v1/public/session",
-            {"content-length": "2"}, b"{}",
+            {"content-length": "3"}, b"{}",
         )
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"], "INCOMPLETE_BODY")
