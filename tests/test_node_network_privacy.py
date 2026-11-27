@@ -19,3 +19,18 @@ def test_node_network_event_details_are_hashed(tmp_path, monkeypatch):
     assert marker not in row[1]
     assert node_engine.DATA.stat().st_mode & 0o777 == 0o700
     assert node_engine.DB.stat().st_mode & 0o777 == 0o600
+
+
+def test_node_network_heartbeat_publishes_current_process(tmp_path, monkeypatch):
+    from omega.supervision import read_heartbeat
+
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    node_engine.write_node_network_heartbeat(
+        "cycle_completed", interval_seconds=60, result=True,
+    )
+    result = read_heartbeat(
+        tmp_path / "node-network-heartbeat.json",
+        expected_component="NODE_NETWORK",
+    )
+    assert result["status"] == "HEALTHY"
+    assert result["pid"] == __import__("os").getpid()
