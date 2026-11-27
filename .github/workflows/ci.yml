@@ -56,12 +56,21 @@ jobs:
         run: python -m pytest -q
 
   dependency-lock-resolution:
-    name: Resolve and qualify complete dependency lock
+    name: Locked install / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -69,14 +78,15 @@ jobs:
           enable-cache: true
 
       - name: Resolve complete lockfile
-        run: uv lock --no-progress
+        run: uv lock --python 3.12 --no-progress
 
       - name: Verify locked development installation
         run: |
-          uv sync --locked --extra dev
-          uv run --locked --with pip python -m pip check
+          uv sync --locked --python ${{ matrix.python-version }} --extra dev
+          uv run --locked --python ${{ matrix.python-version }} --with pip python -m pip check
 
       - name: Publish resolved lockfile for review
+        if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
         with:
           name: iao-uv-lock
