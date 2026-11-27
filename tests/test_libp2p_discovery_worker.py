@@ -34,6 +34,7 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(report, stored)
         self.assertEqual(report["status"], "DISCOVERY_COMPLETED")
         self.assertEqual(report["routing_peers_discovered"], 1)
+        self.assertTrue(report["bootstrap_connection_confirmed"])
         self.assertEqual(report["auto_assimilated_new_peers"], 1)
         self.assertEqual(report["auto_assimilation"], "QUARANTINED_INVENTORY_ONLY")
         self.assertEqual(report["identity_verification"], "NOT_PERFORMED")
@@ -47,6 +48,41 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(inventory["assimilation_state"], "AUTO_ASSIMILATED_UNVERIFIED")
         self.assertEqual(inventory["participation_state"], "CANDIDATE_ONLY")
         self.assertEqual(inventory["capabilities"], [])
+
+    def test_success_without_bootstrap_is_rejected_and_not_assimilated(self):
+        result = {
+            "status": "DISCOVERY_COMPLETED",
+            "connected_bootstrappers": 0,
+            "routing_peers_discovered": 1,
+            "persisted_new_peers": 0,
+            "peers": [{
+                "peer_id": "R" * 40,
+                "multiaddrs": ["/ip4/8.8.4.4/tcp/4001"],
+            }],
+        }
+        with patch.object(worker, "state_dir", return_value=self.state), patch.object(
+            worker.libp2p_discovery, "discover_sync", return_value=result
+        ):
+            report = worker.cycle()
+        self.assertEqual(report["status"], "DISCOVERY_ERROR")
+        self.assertEqual(report["error_class"], "RuntimeError")
+        self.assertFalse((self.state / "p2p-assimilated-peers.json").exists())
+
+    def test_bootstrap_unavailable_does_not_assimilate(self):
+        result = {
+            "status": "BOOTSTRAP_UNAVAILABLE",
+            "connected_bootstrappers": 0,
+            "routing_peers_discovered": 0,
+            "persisted_new_peers": 0,
+            "peers": [],
+        }
+        with patch.object(worker, "state_dir", return_value=self.state), patch.object(
+            worker.libp2p_discovery, "discover_sync", return_value=result
+        ):
+            report = worker.cycle()
+        self.assertEqual(report["status"], "BOOTSTRAP_UNAVAILABLE")
+        self.assertEqual(report["auto_assimilation"], "SKIPPED_NO_BOOTSTRAP")
+        self.assertFalse((self.state / "p2p-assimilated-peers.json").exists())
 
     def test_optional_dependency_failure_is_not_reported_as_success(self):
         def fail(**kwargs):
