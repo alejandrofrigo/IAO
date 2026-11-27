@@ -14,7 +14,7 @@ def test_operational_log_redacts_content_paths_and_nested_errors(tmp_path):
             "goal": "private-goal-marker",
             "reason": "free-form private reason marker",
             "files": ["/home/private/path.py", "omega/service.py"],
-            "error": "RuntimeError('private-exception-marker')",
+            "error": RuntimeError("private-exception-marker"),
             "traceback": "private-traceback-marker",
             "decision": {
                 "approved": False,
@@ -136,3 +136,14 @@ def test_operational_log_redacts_camel_case_sensitive_field_names():
     ):
         assert marker not in serialized
     assert safe["ordinary_count"] == 9
+
+
+
+def test_operational_log_never_promotes_free_form_error_text_to_error_type():
+    safe = sanitize_log_data({
+        "error": "private.operator@example.invalid: connection failed",
+    })
+    serialized = str(safe)
+    assert "private.operator" not in serialized
+    assert "example.invalid" not in serialized
+    assert safe["error_type"] == "REDACTED"
