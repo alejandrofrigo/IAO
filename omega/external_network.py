@@ -486,7 +486,7 @@ def start_external_network(state_dir: str | Path | None = None, fed_node=None) -
     global _THREAD
     with _LOCK:
         if _THREAD is not None and _THREAD.is_alive():
-            return False
+            return True
         _STOP_EVENT.clear()
         network = build_network(state_dir)
         interval = max(300, int(os.environ.get("IAO_EXTERNAL_NETWORK_INTERVAL", DEFAULT_INTERVAL)))
