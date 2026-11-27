@@ -61,12 +61,14 @@
   global.iaoApiUrl = function iaoApiUrl(path) {
     if (!base) throw new Error(configError || "API_BASE_NOT_CONFIGURED");
     if (typeof path !== "string" ||
-        !/^\/(?:v1|health)\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/.test(path) ||
-        path.includes("\\\\") || path.includes("//")) {
+        !(path.startsWith("/v1/") || path.startsWith("/health/")) ||
+        path.startsWith("//") || path.includes("\\\\")) {
       throw new Error("INVALID_API_PATH");
     }
     const target = new URL(path.slice(1), base + "/");
-    if (target.origin !== base || target.username || target.password) {
+    if (target.origin !== base || target.username || target.password ||
+        !(target.pathname.startsWith("/v1/") ||
+          target.pathname.startsWith("/health/"))) {
       throw new Error("INVALID_API_PATH");
     }
     return target.toString();
