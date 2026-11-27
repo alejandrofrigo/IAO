@@ -239,3 +239,57 @@ def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path, monkey
         httpd.server_close()
         thread.join(timeout=3)
         service.store.close()
+
+
+def test_fastapi_federation_runtime_exception_is_non_disclosing(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+
+    def fail_node():
+        raise RuntimeError("private-federation-runtime-marker")
+
+    monkeypatch.setattr(main, "_get_federation_node", fail_node)
+    response = client.get("/fed/v1/contract")
+    payload = response.json()
+    assert response.status_code == 503
+    assert payload["error"] == "FEDERATION_UNAVAILABLE"
+    assert len(payload["correlation_id"]) == 32
+    assert response.headers["x-correlation-id"] == payload["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "private-federation-runtime-marker" not in response.text
+
+
+def test_stdlib_federation_runtime_exception_is_non_disclosing():
+    class BrokenNode:
+        served = {"knowledge.search"}
+
+        def contract_for_self(self, _capabilities):
+            raise RuntimeError("private-federation-runtime-marker")
+
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        make_handler(object(), BrokenNode()),
+    )
+    thread = Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/contract",
+        method="GET",
+    )
+    try:
+        try:
+            urllib.request.urlopen(request, timeout=3)
+            raise AssertionError("federation exception must return 503")
+        except urllib.error.HTTPError as response:
+            payload = json.loads(response.read())
+            assert response.code == 503
+            assert payload["error"] == "FEDERATION_UNAVAILABLE"
+            assert len(payload["correlation_id"]) == 32
+            assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert "private-federation-runtime-marker" not in json.dumps(payload)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=3)
