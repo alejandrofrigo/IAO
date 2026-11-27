@@ -36,7 +36,7 @@ def envelope(now=1_800_000_000):
 def test_command_envelope_is_closed_and_canonical():
     value = envelope()
     assert validate_command_envelope(value, now=1_800_000_010) is value
-    assert canonical_command_bytes(value, now=1_800_000_010).startswith(b"IAO-COMMAND-V1\\x00")
+    assert canonical_command_bytes(value, now=1_800_000_010).startswith(b"IAO-COMMAND-V1\x00")
     assert command_digest(value, now=1_800_000_010).startswith("sha256:")
 
 
