@@ -1794,7 +1794,7 @@ class QueuedTaskApiTests(Base):
         )
         timestamp = int(time.time())
         digest = hashlib.sha256(body).hexdigest()
-        signed = "\\n".join(
+        signed = "\n".join(
             ["POST", path, str(timestamp), challenge["nonce"], digest]
         ).encode()
         signature = self.device_private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
