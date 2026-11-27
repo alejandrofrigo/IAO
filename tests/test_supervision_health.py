@@ -218,3 +218,16 @@ def test_coordinator_lock_creation_rejects_symlink_substitution(tmp_path, monkey
     else:
         raise AssertionError("symlinked coordinator lock was accepted")
     assert target.read_text(encoding="utf-8") == "do-not-overwrite"
+
+def test_supervisor_treats_permission_denied_process_probe_as_alive(monkeypatch):
+    def denied(_pid, _signal):
+        raise PermissionError
+
+    monkeypatch.setattr(supervisor.os, "kill", denied)
+    assert supervisor.process_alive(12345) is True
+
+    def missing(_pid, _signal):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(supervisor.os, "kill", missing)
+    assert supervisor.process_alive(12345) is False
