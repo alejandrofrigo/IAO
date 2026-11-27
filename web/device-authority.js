@@ -436,11 +436,19 @@
     };
   }
 
-  async function submitQueuedTask(payload) {
+  async function submitQueuedTask(payload, idempotencyKey) {
     const identity = await dbGet();
     if (!identity) throw new Error("DEVICE_NOT_ENROLLED");
+    if (
+      idempotencyKey !== undefined &&
+      (typeof idempotencyKey !== "string" ||
+       !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey))
+    ) {
+      throw new Error("INVALID_IDEMPOTENCY_KEY");
+    }
     const proofHeaders = await signedTaskHeaders(payload);
     const headers = { "Content-Type": "application/json", ...proofHeaders };
+    if (idempotencyKey !== undefined) headers["Idempotency-Key"] = idempotencyKey;
     if (typeof window.iaoGetSessionToken === "function") {
       const token = window.iaoGetSessionToken();
       if (token) headers.Authorization = "Bearer " + token;
