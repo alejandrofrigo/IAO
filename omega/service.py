@@ -741,10 +741,12 @@ class OmegaService:
         if p.startswith("/v1/operator/capability-grant/"):
             if self.operator_identity_authority is None:
                 raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
-            if not pr.subject.startswith("operator:"):
-                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             token = self._verified_bearer_token(headers)
             try:
+                if not self.operator_identity_authority.verify_authenticated_session(
+                    pr.subject, token,
+                ):
+                    raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
                 if method == "POST" and p == "/v1/operator/capability-grant/challenge":
                     data = self._json(body)
                     result = self.operator_identity_authority.create_capability_challenge(
