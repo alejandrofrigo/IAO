@@ -117,3 +117,23 @@ def test_operational_log_redacts_numeric_and_variant_sensitive_field_names():
     assert safe["client_ip_digest"] == "[REDACTED]"
     assert safe["identity_id_digest"] == "[REDACTED]"
     assert safe["session_id_digest"] == "[REDACTED]"
+
+
+
+def test_operational_log_redacts_camel_case_sensitive_field_names():
+    safe = sanitize_log_data({
+        "clientIp": "203.0.113.77",
+        "remoteAddress": "private-address-marker",
+        "sessionId": 987654,
+        "devicePublicKey": "private-key-marker",
+        "authorizationHeader": "private-auth-marker",
+        "ordinaryCount": 9,
+    })
+    serialized = str(safe)
+    for marker in (
+        "203.0.113.77", "private-address-marker", "987654",
+        "private-key-marker", "private-auth-marker",
+    ):
+        assert marker not in serialized
+    assert safe["ordinary_count_digest"] == "[REDACTED]"
+    assert safe["ordinary_count"] == 9
