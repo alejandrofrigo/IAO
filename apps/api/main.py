@@ -179,19 +179,12 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 def _method_not_allowed(allowed_methods: tuple[str, ...]):
-    correlation_id = uuid.uuid4().hex
-    return JSONResponse(
-        status_code=405,
-        content={
+    return _service_response(
+        405,
+        {
             "error": "METHOD_NOT_ALLOWED",
             "allowed_methods": list(allowed_methods),
-            "correlation_id": correlation_id,
-        },
-        headers={
-            "Allow": ", ".join(allowed_methods),
-            "X-Correlation-ID": correlation_id,
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
+            "correlation_id": uuid.uuid4().hex,
         },
     )
 
@@ -553,14 +546,12 @@ async def api_v1(path: str, request: Request):
         )
         return _service_response(status, payload)
     except RuntimeError:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
-            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        return _service_response(
+            503,
+            {"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
         )
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "IAO_SERVICE_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
-            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        return _service_response(
+            503,
+            {"error": "IAO_SERVICE_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
         )
