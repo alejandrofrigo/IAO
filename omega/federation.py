@@ -403,7 +403,7 @@ class Node:
         recipient = request.get("to")
         nonce = request.get("nonce")
         ts = request.get("ts")
-        if (isinstance(request.get("v"), bool) or request.get("v") != 1
+        if (not isinstance(request.get("v"), int) or isinstance(request.get("v"), bool) or request.get("v") != 1
                 or not isinstance(requester, str)
                 or len(requester) != 16
                 or any(ch not in "0123456789abcdef" for ch in requester)
@@ -413,7 +413,8 @@ class Node:
                 or any(ch not in "0123456789abcdef" for ch in nonce)
                 or isinstance(ts, bool)
                 or not isinstance(ts, (int, float))
-                or not math.isfinite(float(ts))):
+                or (isinstance(ts, int) and abs(ts) > 2**53)
+                or (isinstance(ts, float) and not math.isfinite(ts))):
             return 400, {"error": "INVALID_CHALLENGE"}
         if abs(self.clock() - float(ts)) > self.skew:
             return 400, {"error": "CHALLENGE_CLOCK_SKEW"}
@@ -543,12 +544,13 @@ class Node:
             ts = env.get("ts")
             nonce = env.get("nonce")
             capability = env.get("capability")
-            if (isinstance(env.get("v"), bool) or env.get("v") != 1
+            if (not isinstance(env.get("v"), int) or isinstance(env.get("v"), bool) or env.get("v") != 1
                     or not isinstance(peer, str) or len(peer) != 16
                     or any(ch not in "0123456789abcdef" for ch in peer)
                     or not isinstance(env.get("to"), str)
                     or not isinstance(ts, (int, float)) or isinstance(ts, bool)
-                    or not math.isfinite(float(ts))
+                    or (isinstance(ts, int) and abs(ts) > 2**53)
+                    or (isinstance(ts, float) and not math.isfinite(ts))
                     or not isinstance(nonce, str) or not 16 <= len(nonce) <= 128
                     or not nonce.isascii() or not all(ch.isalnum() or ch in "_-" for ch in nonce)
                     or not isinstance(capability, str) or not 1 <= len(capability) <= 128
