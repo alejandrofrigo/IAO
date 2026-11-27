@@ -704,6 +704,8 @@ class OmegaService:
                 raise ApiError(exc.status, exc.code) from None
 
         if self.agent_authority is not None and method == "GET" and p == "/v1/agent/status":
+            if u.query or u.fragment:
+                raise ApiError(400, "AGENT_REQUEST_PATH_INVALID")
             agent_id = headers.get("x-iao-agent-id", "")
             nonce = headers.get("x-iao-agent-nonce", "")
             timestamp_raw = headers.get("x-iao-agent-timestamp", "")
