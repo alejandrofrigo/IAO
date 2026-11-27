@@ -135,6 +135,21 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(report["status"], "DISCOVERY_ERROR")
         self.assertEqual(report["tor_onion_discovery"], tor)
 
+
+    def test_multiaddresses_are_classified_without_claiming_connectivity(self):
+        from omega.p2p_assimilation import classify_multiaddr
+        tcp = classify_multiaddr("/ip4/8.8.8.8/tcp/4001/p2p/" + "A" * 40)
+        quic = classify_multiaddr("/ip4/8.8.8.8/udp/4001/quic-v1/p2p/" + "A" * 40)
+        relay = classify_multiaddr("/ip4/8.8.8.8/tcp/4001/p2p-circuit/p2p/" + "A" * 40)
+        onion = classify_multiaddr("/onion3/" + "a" * 56 + ":443/p2p/" + "A" * 40)
+        self.assertEqual(tcp["route_class"], "TCP")
+        self.assertEqual(quic["route_class"], "QUIC_UDP")
+        self.assertEqual(relay["route_class"], "LIBP2P_RELAY_ADVERTISED")
+        self.assertEqual(onion["route_class"], "TOR_ONION_ADVERTISED")
+        self.assertTrue(onion["onion_advertised"])
+        for item in (tcp, quic, relay, onion):
+            self.assertFalse(item["connectivity_verified"])
+
     def test_interval_is_bounded(self):
         with patch.dict(os.environ, {"IAO_LIBP2P_DISCOVERY_INTERVAL": "1"}):
             self.assertEqual(worker.read_interval(), worker.MIN_INTERVAL)
