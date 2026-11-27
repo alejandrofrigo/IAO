@@ -59,12 +59,27 @@ def _digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _is_sensitive_field(normalized: str) -> bool:
+    """Match sensitive field-name variants, including numeric-valued fields."""
+    tokens = set(re.split(r"[^a-z0-9]+", normalized))
+    sensitive_tokens = {
+        "email", "ip", "ipaddress", "address", "host", "url", "origin",
+        "endpoint", "useragent", "subject", "owner", "actor", "principal",
+        "identity", "device", "peer", "publickey", "token", "secret",
+        "password", "cookie", "session", "credential", "authorization",
+        "auth", "forwarded", "remote", "client", "content", "input",
+        "output", "message", "prompt", "query", "traceback", "stderr",
+        "stdout", "command", "path", "file", "backup",
+    }
+    return normalized in _REDACTED_FIELDS or bool(tokens & sensitive_tokens)
+
+
 def sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
     """Redact free-form content and filesystem paths while retaining safe metrics."""
     safe: dict[str, Any] = {}
     for key, value in data.items():
         normalized = str(key).lower()
-        if normalized in _REDACTED_FIELDS:
+        if _is_sensitive_field(normalized):
             safe[f"{normalized}_digest"] = _digest(value) if normalized in {
                 "content", "input", "message", "prompt", "query",
             } else "[REDACTED]"
