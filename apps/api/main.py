@@ -38,14 +38,8 @@ def _start_task_worker(service) -> bool:
             raise RuntimeError("TASK_WORKER_SETTINGS_OUT_OF_RANGE")
         from omega.task_worker import TaskWorker
 
-        # Reconcile only expired RUNNING/VERIFYING leases before claiming work.
-        # Store recovery marks them FAILED and never re-enqueues or replays tasks.
-        recovered = service.store.recover_interrupted_tasks()
-        if recovered:
-            service.store.audit(
-                "system", "TASK_WORKER_INTERRUPTED_RECOVERED", "api_lifespan",
-                recovered_count=len(recovered), decision="FAIL_CLOSED",
-            )
+        # OmegaService already reconciles expired leases during construction.
+        # Do not run a second recovery pass in the API lifespan.
         worker = TaskWorker(
             service.store,
             service.registry,
