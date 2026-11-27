@@ -46,7 +46,7 @@ class ToolRegistry:
             or not isinstance(spec.effect_class, str)
             or spec.effect_class not in {
                 "READ_ONLY", "REVERSIBLE", "EXTERNAL", "IRREVERSIBLE",
-                "WRITE", "DESTRUCTIVE",
+                "WRITE", "DESTRUCTIVE", "CHANGE_REVERSIBLE", "CHANGE_EXTERNAL", "CHANGE_IRREVERSIBLE",
             }
             or isinstance(spec.timeout_seconds, bool)
             or not isinstance(spec.timeout_seconds, (int, float))
