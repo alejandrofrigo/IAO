@@ -87,6 +87,22 @@ class AgentAuthority:
         finally:
             db.close()
 
+    def _current_parent_key_version(self, identity_id: str) -> int:
+        identity_db = getattr(self.operator_identity, "database", None)
+        if identity_db is None:
+            raise AgentAuthorityError("OPERATOR_IDENTITY_UNAVAILABLE", 503)
+        try:
+            with sqlite3.connect(str(identity_db), timeout=5) as db:
+                row = db.execute(
+                    "SELECT i.key_version,i.status,b.key_version FROM operator_identities i JOIN primary_device_bindings b ON b.identity_id=i.identity_id WHERE i.identity_id=?",
+                    (identity_id,),
+                ).fetchone()
+        except sqlite3.Error:
+            raise AgentAuthorityError("OPERATOR_IDENTITY_UNAVAILABLE", 503) from None
+        if row is None or row[1] != "ACTIVE" or row[0] != row[2]:
+            raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        return int(row[0])
+
     @staticmethod
     def _public_key(value: Any) -> tuple[Any, str, str]:
         if not isinstance(value, str) or not 1 <= len(value) <= 4096:
@@ -119,8 +135,12 @@ class AgentAuthority:
         if not isinstance(identity_id, str) or len(identity_id) != 32 or isinstance(key_version, bool) or not isinstance(key_version, int) or key_version < 1:
             raise AgentAuthorityError("INVALID_OPERATOR_BINDING", 403)
         try:
+            if self._current_parent_key_version(identity_id) != key_version:
+                raise AgentAuthorityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
             primary_pem = self.operator_identity.primary_device_public_key()
             self.operator_identity.verify_primary_device(identity_id, primary_pem)
+        except AgentAuthorityError:
+            raise
         except Exception:
             raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403) from None
         now = time.time()
@@ -193,6 +213,7 @@ class AgentAuthority:
     def status(self, identity_id: str) -> dict[str, Any]:
         now = time.time()
         try:
+            current_key_version = self._current_parent_key_version(identity_id)
             primary_pem = self.operator_identity.primary_device_public_key()
             self.operator_identity.verify_primary_device(identity_id, primary_pem)
         except Exception:
@@ -202,7 +223,7 @@ class AgentAuthority:
         agents = []
         for row in rows:
             _, _, fingerprint = self._public_key(row["public_key_pem"])
-            agents.append({"agent_id": row["agent_id"], "fingerprint": fingerprint, "scopes": json.loads(row["scopes_json"]), "created_at": int(row["created_at"]), "expires_at": int(row["expires_at"]), "revoked": row["revoked_at"] is not None, "active": row["revoked_at"] is None and row["expires_at"] > now and row["key_version"] > 0})
+            agents.append({"agent_id": row["agent_id"], "fingerprint": fingerprint, "scopes": json.loads(row["scopes_json"]), "created_at": int(row["created_at"]), "expires_at": int(row["expires_at"]), "revoked": row["revoked_at"] is not None, "active": row["revoked_at"] is None and row["expires_at"] > now and row["key_version"] == current_key_version})
         return {"agents": agents, "authority": "READ_ONLY"}
 
     def revoke(self, *, identity_id: str, key_version: int, agent_id: str,
