@@ -1801,7 +1801,7 @@ class QueuedTaskApiTests(Base):
         task_id = accepted["task_id"]
         denied = self.call(
             "POST", f"/v1/tasks/{task_id}/cancel",
-            self.tok("queued-user"),
+            {"authorization": "Bearer " + self.operator_token},
         )
         self.assertEqual((denied[0], denied[1]["error"]), (401, "DEVICE_PROOF_REQUIRED"))
         cancelled = self.call(
