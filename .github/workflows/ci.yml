@@ -54,3 +54,32 @@ jobs:
 
       - name: Run complete test suite
         run: python -m pytest -q
+
+  dependency-lock-resolution:
+    name: Resolve and qualify complete dependency lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Resolve complete lockfile
+        run: uv lock --no-progress
+
+      - name: Verify locked development installation
+        run: |
+          uv sync --locked --extra dev
+          uv run --locked python -m pip check
+
+      - name: Publish resolved lockfile for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: iao-uv-lock
+          path: uv.lock
+          if-no-files-found: error
+          retention-days: 3
