@@ -13,6 +13,7 @@
 - Los errores de método para rutas conocidas producen `405 METHOD_NOT_ALLOWED`, incluyen `allowed_methods` en el JSON y la cabecera HTTP `Allow`. Una ruta desconocida produce `404 NOT_FOUND`.
 - La envoltura de servicio incluye `correlation_id` en respuestas de aplicación y los adaptadores lo reflejan en `X-Correlation-ID`. No se incluye el texto de excepciones internas en respuestas públicas.
 - Las respuestas de aplicación llevan `Cache-Control: no-store` y `X-Content-Type-Options: nosniff`.
+- Los errores internos no registran path, query ni texto de excepción; el adaptador stdlib registra solo el grupo de ruta. El contenedor deshabilita los access logs de Uvicorn para no registrar direcciones de clientes; otros launchers deben aplicar una política equivalente.
 - Los errores de autenticación, autorización y límites conservan códigos estables: `401 AUTHENTICATION_REQUIRED`, `403` para denegaciones de política, `429 RATE_LIMITED`, `413 PAYLOAD_TOO_LARGE`, `503` para dependencias no disponibles y `500 INTERNAL_ERROR` para fallos internos no clasificados.
 
 ## Métodos fijados para las rutas principales
