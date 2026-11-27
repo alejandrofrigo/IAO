@@ -1,6 +1,5 @@
 """TaskWorker emits lifecycle heartbeats without task or operator identifiers."""
 import os
-from pathlib import Path
 
 from omega.supervision import read_heartbeat
 from omega.task_worker import TaskWorker
