@@ -59,3 +59,22 @@ def test_operational_log_does_not_follow_symlink(tmp_path):
     else:
         raise AssertionError("symlink log target was followed")
     assert target.read_text(encoding="utf-8") == "do not overwrite"
+
+def test_operational_log_hashes_unknown_strings_and_untrusted_string_lists():
+    safe = sanitize_log_data({
+        "time": "2026-11-27T00:00:00+00:00",
+        "event": "NODE_CANDIDATE_DISCOVERED",
+        "repository": "owner/private-repository-marker",
+        "origin": "https://private-host.example/private-path-marker",
+        "annotations": ["private-list-marker", "another-private-value"],
+        "capabilities": ["knowledge.search"],
+    })
+    assert safe["time"] == "2026-11-27T00:00:00+00:00"
+    assert safe["event"] == "NODE_CANDIDATE_DISCOVERED"
+    assert safe["capabilities"] == ["knowledge.search"]
+    assert safe["repository_digest"].startswith("sha256:")
+    assert safe["origin_digest"].startswith("sha256:")
+    assert safe["annotations_digest"].startswith("sha256:")
+    assert "repository" not in safe
+    assert "origin" not in safe
+    assert "annotations" not in safe
