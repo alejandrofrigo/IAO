@@ -25,3 +25,10 @@ This document is a living, reproducible gate ledger. A capability is not conside
 ## Acceptance rule
 
 Only a green `deterministic-gates` job plus the full repository CI on the same commit may be cited as reproducible evidence for this change. A green CI run does not prove live provider availability, production hosting, or independent federation.
+
+## Latest CI evidence (2026-11-27)
+
+- PR #17 production-gates run #3: compile and browser syntax passed on Python 3.12 and 3.13; deterministic tests passed on both (86 passed each).
+- The run failed only at Ruff because `omega/server.py` assigned a lambda to `state_supplier` (E731).
+- Follow-up commit `367b96785cd283b1781866c02fea9570330e5872` replaces that lambda with an equivalent local function; behavior is unchanged.
+- The corrected commit has not yet completed CI. Do not mark the production gate green until the rerun succeeds on that exact commit.
