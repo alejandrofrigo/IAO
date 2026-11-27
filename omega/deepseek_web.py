@@ -21,8 +21,8 @@ def _buscar_tavily(pregunta: str) -> str:
         for i, r in enumerate(resultados, 1):
             contexto += f"{i}. {r.get('title', '')}\n   {r.get('content', '')[:300]}\n\n"
         return contexto
-    except Exception as e:
-        print(f"[TAVILY FAIL] {e}")
+    except Exception as exc:
+        print(f"[TAVILY FAIL] {type(exc).__name__}")
         return ""
 
 def _buscar_duckduckgo(pregunta: str) -> str:
@@ -43,8 +43,8 @@ def _buscar_duckduckgo(pregunta: str) -> str:
         if len(contexto) > 50:
             return contexto
         return ""
-    except Exception as e:
-        print(f"[DUCKDUCKGO FAIL] {e}")
+    except Exception as exc:
+        print(f"[DUCKDUCKGO FAIL] {type(exc).__name__}")
         return ""
 
 def _redactar_gratis(pregunta: str, contexto: str) -> str:
@@ -56,8 +56,8 @@ def _redactar_gratis(pregunta: str, contexto: str) -> str:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read().decode('utf-8')
-    except Exception as e:
-        print(f"[POLLINATIONS FAIL] {e}")
+    except Exception as exc:
+        print(f"[POLLINATIONS FAIL] {type(exc).__name__}")
         return f"[Respuesta de respaldo]: {contexto}" if contexto else ""
 
 def obtener_respuesta_internet(pregunta: str) -> str:
@@ -79,8 +79,8 @@ def obtener_respuesta_internet(pregunta: str) -> str:
                 for i, r in enumerate(resultados, 1):
                     contexto += f"{i}. {r.get('title', '')}\n   {r.get('summary', '')}\n\n"
                 return _redactar_gratis(pregunta, contexto)
-        except Exception as e:
-            print(f"[DEEPSEEK FAIL] {e}")
+        except Exception as exc:
+            print(f"[DEEPSEEK FAIL] {type(exc).__name__}")
 
     # 2. Tavily + Pollinations
     print("[FEDERATION] Intentando Tavily...")
