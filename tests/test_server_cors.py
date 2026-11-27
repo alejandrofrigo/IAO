@@ -104,10 +104,10 @@ def test_stdlib_api_rejects_invalid_and_oversized_content_length():
         for header, expected_status, expected_error in cases:
             with socket.create_connection(httpd.server_address, timeout=3) as sock:
                 request = (
-                    "POST /v1/memory HTTP/1.1\\r\\n"
-                    "Host: localhost\\r\\n"
-                    f"{header}\\r\\n"
-                    "Connection: close\\r\\n\\r\\n"
+                    "POST /v1/memory HTTP/1.1\r\n"
+                    "Host: localhost\r\n"
+                    f"{header}\r\n"
+                    "Connection: close\r\n\r\n"
                 )
                 sock.sendall(request.encode("ascii"))
                 response = bytearray()
@@ -116,8 +116,8 @@ def test_stdlib_api_rejects_invalid_and_oversized_content_length():
                     if not chunk:
                         break
                     response.extend(chunk)
-            head, _, body = bytes(response).partition(b"\\r\\n\\r\\n")
-            status_line = head.split(b"\\r\\n", 1)[0]
+            head, _, body = bytes(response).partition(b"\r\n\r\n")
+            status_line = head.split(b"\r\n", 1)[0]
             assert int(status_line.split()[1]) == expected_status
             payload = __import__("json").loads(body)
             assert payload["error"] == expected_error
