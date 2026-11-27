@@ -1,5 +1,4 @@
 """Operational event logs redact free-form data and use private filesystem modes."""
-import json
 import stat
 
 from omega.operational_log import append_private_jsonl, sanitize_log_data
