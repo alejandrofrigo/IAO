@@ -1352,6 +1352,17 @@ class QueuedTaskApiTests(Base):
             (403, "OPERATOR_SESSION_REQUIRED"),
         )
 
+        guest_headers = self.tok("guest:device-test", [])
+        for route, body in (
+            ("/v1/device/challenge", {"device_id": "unknown"}),
+            ("/v1/device/command", {"device_id": "unknown"}),
+        ):
+            guest_response = self.call("POST", route, guest_headers, body)
+            self.assertEqual(
+                (guest_response[0], guest_response[1]["error"]),
+                (403, "OPERATOR_SESSION_REQUIRED"),
+            )
+
         guest_status, guest_session = self.call(
             "POST", "/v1/public/session", {}, {}
         )
