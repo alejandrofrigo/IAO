@@ -453,11 +453,15 @@ class StrictFederationEnvelopeTests(FedBase):
             self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
 
     def test_non_finite_boolean_and_string_timestamps_are_rejected(self):
-        for index, timestamp in enumerate((float("nan"), float("inf"), float("-inf"), True, "1000000")):
+        for index, timestamp in enumerate((float("nan"), float("inf"), float("-inf"), True, "1000000", 10**400)):
             status, payload = self.raw(self.env(
                 ts=timestamp, nonce=f"invalid-ts-envelope-{index:02d}",
             ))
             self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+        version_float = self.env(nonce="invalid-version-float-0001")
+        version_float["v"] = 1.0
+        status, payload = self.raw(version_float)
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
 
     def test_invalid_nonce_and_non_object_body_are_rejected(self):
         for index, changes in enumerate((
@@ -479,6 +483,9 @@ class StrictFederationEnvelopeTests(FedBase):
         raw = json.dumps(request, separators=(",", ":"))
         raw = raw[:-1] + ',"v":1}'
         self.assertEqual(self.b.answer_challenge(raw.encode())[0], 400)
-        for timestamp in (float("nan"), float("inf"), True, "1000000"):
+        for timestamp in (float("nan"), float("inf"), True, "1000000", 10**400):
             request["ts"] = timestamp
             self.assertEqual(self.b.answer_challenge(json.dumps(request).encode())[0], 400)
+        request["ts"] = self.clock()
+        request["v"] = 1.0
+        self.assertEqual(self.b.answer_challenge(json.dumps(request).encode())[0], 400)
