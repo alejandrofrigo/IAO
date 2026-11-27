@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -84,9 +85,10 @@ def test_challenge_is_single_use(tmp_path):
     authority, operator, agent = _setup(tmp_path)
     _, challenge, _ = _grant(authority, operator, agent)
     _, _, fingerprint = authority._public_key(_pem(agent))
+    expiry = json.loads(payload.decode("ascii"))["expires_at"]
     payload = authority._grant_payload(
         "a" * 32, 3, challenge["nonce"], fingerprint,
-        ["agent.status.read"], int(time.time()) + 300,
+        ["agent.status.read"], expiry,
     )
     root_sig = operator.root.sign(ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
     device_sig = operator.primary.sign(DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
@@ -94,7 +96,7 @@ def test_challenge_is_single_use(tmp_path):
         authority.create_delegation(
             identity_id="a" * 32, key_version=3, nonce=challenge["nonce"],
             agent_public_key_pem=_pem(agent), scopes=["agent.status.read"],
-            expires_at=int(time.time()) + 300, root_signature=root_sig,
+            expires_at=expiry, root_signature=root_sig,
             primary_signature=device_sig,
         )
 
