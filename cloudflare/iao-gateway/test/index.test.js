@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
+import { allowedRoute } from "../src/proxy.js";
 
 const disabledEnv = {};
 
@@ -94,6 +95,16 @@ test("allowed browser API responses include the exact CORS origin", async () => 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("operator capability grant and revocation routes are explicitly allowlisted", () => {
+  assert.equal(allowedRoute("POST", "/v1/operator/capability-grant/challenge"), true);
+  assert.equal(allowedRoute("POST", "/v1/operator/capability-grant/complete"), true);
+  assert.equal(allowedRoute("POST", "/v1/operator/capability-grant/revoke/challenge"), true);
+  assert.equal(allowedRoute("POST", "/v1/operator/capability-grant/revoke/complete"), true);
+  assert.equal(allowedRoute("GET", "/v1/operator/capability-grant/status"), true);
+  assert.equal(allowedRoute("POST", "/v1/operator/capability-grant/admin"), false);
+  assert.equal(allowedRoute("DELETE", "/v1/operator/capability-grant/status"), false);
 });
 
 test("API routes fail closed when no fixed origin is configured", async () => {
