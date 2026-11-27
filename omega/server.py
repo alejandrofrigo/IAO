@@ -30,18 +30,18 @@ def _load_persistent_audit_key() -> str:
     if not key_path.is_file():
         raise RuntimeError("PERSISTENT_AUDIT_KEY_MISSING")
     try:
-        return key_path.read_text(encoding="utf-8").strip()
+        return key_path.read_text(encoding="utf-8").rstrip("\r\n")
     except (OSError, UnicodeError):
         raise RuntimeError("PERSISTENT_AUDIT_KEY_UNREADABLE") from None
 
 
 def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: object) -> OmegaService:
-    state_dir.mkdir(parents=True, exist_ok=True)
     audit_key = _load_persistent_audit_key()
     try:
         validate_persistent_keys(token_key, audit_key)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from None
+    state_dir.mkdir(parents=True, exist_ok=True)
     audit_key_bytes = audit_key.encode("utf-8")
     store = Store(state_dir / "omega.db", audit_key=audit_key_bytes)
     corpus = KnowledgeCorpus(corpus_dir)
