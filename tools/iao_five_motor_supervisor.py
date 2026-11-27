@@ -133,6 +133,31 @@ def process_alive(pid):
         return False
 
 
+def process_start_ticks(pid):
+    """Read Linux process start ticks to distinguish a child from PID reuse."""
+    value = _valid_pid(pid)
+    if value is None:
+        return None
+    try:
+        raw = Path(f"/proc/{value}/stat").read_text(encoding="ascii")
+        fields = raw[raw.rfind(")") + 2:].split()
+        ticks = fields[19]
+        return ticks if ticks.isascii() and ticks.isdigit() else None
+    except (OSError, UnicodeError, IndexError):
+        return None
+
+
+def process_identity_matches(child):
+    pid = _valid_pid(child.get("pid")) if isinstance(child, dict) else None
+    expected = child.get("process_start_ticks") if isinstance(child, dict) else None
+    return bool(
+        pid is not None and isinstance(expected, str)
+        and expected.isascii() and expected.isdigit()
+        and process_alive(pid)
+        and process_start_ticks(pid) == expected
+    )
+
+
 def managed_process_group(pid):
     """Only signal process groups created with start_new_session=True."""
     value = _valid_pid(pid)
@@ -200,7 +225,7 @@ def stop_children():
 
     for name, child in children.items():
         pid = child.get("pid")
-        if not managed_process_group(pid):
+        if not process_identity_matches(child) or not managed_process_group(pid):
             if pid and process_alive(pid):
                 event("stop_skipped_unverified_process_group", motor=name)
             continue
@@ -223,7 +248,7 @@ def stop_children():
 
     for name, child in children.items():
         pid = child.get("pid")
-        if pid and managed_process_group(pid):
+        if pid and process_identity_matches(child) and managed_process_group(pid):
             try:
                 os.killpg(_valid_pid(pid), signal.SIGKILL)
                 event("forced_stop", motor=name, pid=pid)
@@ -288,6 +313,7 @@ def launch(name, spec):
     child = {
         "pid": proc.pid,
         "started": now(),
+        "process_start_ticks": process_start_ticks(proc.pid),
     }
     children = read_children()
     children[name] = child
