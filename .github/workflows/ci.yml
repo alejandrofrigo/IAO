@@ -37,13 +37,15 @@ jobs:
       - name: Check installed dependencies
         run: python -m pip check
 
-      - name: Validate browser JavaScript syntax
+      - name: Validate browser JavaScript syntax and fail-closed API origin
         run: |
+          node --check web/api-config.js
           node --check web/device-authority.js
           node --check web/operator-identity.js
+          node --test web/api-config.test.js
 
       - name: Lint production integration
-        run: python -m ruff check apps/api/main.py omega/device_authority.py omega/service.py omega/store.py omega/task_worker.py tests/test_production_api.py tests/test_federation_status_truth.py tests/test_store_file_permissions.py tests/test_device_authority_permissions.py tests/test_device_authority.py tests/test_task_queue.py tests/test_service.py omega/server.py omega/auth.py tests/test_auth_tokens.py tests/test_server_cors.py tests/test_federation_http_adapters.py tests/test_federation.py tests/test_runtime_privacy.py omega/federation_autojoin.py omega/federation_discovery.py omega/external_network.py tests/test_config.py tests/test_server_persistent_keys.py tests/test_api_runtime_lifespan.py tests/test_background_worker_lifecycle.py tests/test_api_readiness_diagnostics.py tests/test_server_http_contract.py omega/supervision.py tools/iao_autonomous_coordinator.py tools/iao_five_motor_supervisor.py tests/test_supervision_health.py tests/test_container_contract.py omega/federation_transport.py tests/test_federation_transport.py omega/federation_autojoin.py omega/federation_discovery.py tests/test_federation_autojoin_privacy.py omega/operational_log.py tests/test_operational_log_privacy.py omega/padge.py omega/deepseek_web.py tests/test_deepseek_web_privacy.py tests/test_api_route_method_matrix.py tests/test_api_error_contract.py tests/test_packaging_contract.py tests/test_task_worker_heartbeat.py
+        run: python -m ruff check apps/api/main.py omega/device_authority.py omega/service.py omega/store.py omega/task_worker.py tests/test_production_api.py tests/test_federation_status_truth.py tests/test_store_file_permissions.py tests/test_device_authority_permissions.py tests/test_device_authority.py tests/test_task_queue.py tests/test_service.py omega/server.py omega/auth.py tests/test_auth_tokens.py tests/test_server_cors.py tests/test_federation_http_adapters.py tests/test_federation.py tests/test_runtime_privacy.py omega/federation_autojoin.py omega/federation_discovery.py omega/external_network.py tests/test_config.py tests/test_server_persistent_keys.py tests/test_api_runtime_lifespan.py tests/test_background_worker_lifecycle.py tests/test_api_readiness_diagnostics.py tests/test_server_http_contract.py omega/supervision.py tools/iao_autonomous_coordinator.py tools/iao_five_motor_supervisor.py tests/test_supervision_health.py tests/test_container_contract.py omega/federation_transport.py omega/ipfs_content.py omega/onion_discovery.py omega/p2p_assimilation.py omega/p2p_presence.py tools/iao_federation_autonomous.py tools/iao_libp2p_discovery.py tests/test_federation_transport.py tests/test_five_motor_p2p_integration.py tests/test_ipfs_content.py tests/test_libp2p_discovery_worker.py tests/test_p2p_presence.py tests/test_tor_onion_discovery.py omega/federation_autojoin.py omega/federation_discovery.py tests/test_federation_autojoin_privacy.py omega/operational_log.py tests/test_operational_log_privacy.py omega/padge.py omega/deepseek_web.py tests/test_deepseek_web_privacy.py tests/test_api_route_method_matrix.py tests/test_api_error_contract.py tests/test_packaging_contract.py tests/test_task_worker_heartbeat.py
 
       - name: Report repository-wide legacy lint debt
         continue-on-error: true
@@ -77,8 +79,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Resolve complete lockfile
-        run: uv lock --python 3.12 --no-progress
+      - name: Verify checked-in lockfile is current
+        run: uv lock --check --python 3.12 --no-progress
 
       - name: Verify locked development installation
         run: |
