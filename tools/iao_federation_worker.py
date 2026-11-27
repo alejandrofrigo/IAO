@@ -41,11 +41,13 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 def log(message):
-    line = f"{now()} {message}"
-    print(line, flush=True)
-    LOGDIR.mkdir(exist_ok=True)
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    from omega.operational_log import append_private_jsonl
+
+    entry = append_private_jsonl(
+        LOG,
+        {"time": now(), "event": "FEDERATION_WORKER_LOG", "message": message},
+    )
+    print(json.dumps(entry, ensure_ascii=False, sort_keys=True), flush=True)
 
 def stop_handler(signum, frame):
     global STOP
@@ -99,10 +101,13 @@ def save_report(cycle, results):
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    os.chmod(REPORT, 0o600)
 
 def main():
-    STATE.mkdir(exist_ok=True)
-    LOGDIR.mkdir(exist_ok=True)
+    STATE.mkdir(exist_ok=True, mode=0o700)
+    os.chmod(STATE, 0o700)
+    LOGDIR.mkdir(exist_ok=True, mode=0o700)
+    os.chmod(LOGDIR, 0o700)
 
     if PIDFILE.exists():
         try:
@@ -114,6 +119,7 @@ def main():
             pass
 
     PIDFILE.write_text(str(os.getpid()), encoding="utf-8")
+    os.chmod(PIDFILE, 0o600)
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
 
