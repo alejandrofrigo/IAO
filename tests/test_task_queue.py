@@ -164,6 +164,37 @@ class DurableTaskQueueTests(unittest.TestCase):
             )
         )
 
+    def test_recovery_is_atomic_across_database_connections(self) -> None:
+        self._queue_one()
+        self.store.set_task_state("task-1", "RUNNING")
+        second = Store(self.db_path, AUDIT_KEY)
+        barrier = threading.Barrier(2)
+        results: list[list[dict[str, str]]] = []
+
+        def recover(store: Store) -> None:
+            barrier.wait(timeout=5)
+            results.append(store.recover_interrupted_tasks(
+                now="2026-11-27T12:00:00+00:00"
+            ))
+
+        try:
+            workers = [
+                threading.Thread(target=recover, args=(self.store,)),
+                threading.Thread(target=recover, args=(second,)),
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=10)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(len(results), 2)
+            self.assertEqual(sum(len(result) for result in results), 1)
+            final = self.store.get_task("task-1", "owner-a")
+            self.assertEqual(final["state"], "FAILED")
+            self.assertIsNone(final["lease_owner"])
+        finally:
+            second.close()
+
     def test_existing_task_table_receives_additive_lease_migration(self) -> None:
         self.store.close()
         connection = sqlite3.connect(self.db_path)
