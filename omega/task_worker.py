@@ -421,16 +421,19 @@ def main() -> None:
     root = Path(__file__).resolve().parent.parent
     load_env_files((root / ".env", Path.home() / ".iao-runtime.env"))
     settings = load_settings()
+    token_key = session_signing_key()
+    if len(token_key) < 32:
+        raise RuntimeError("PERSISTENT_SESSION_SIGNING_KEY_REQUIRED")
     if settings.app_env == "production":
-        raise RuntimeError("BLOCKED_EXTERNAL: configure production identity before worker startup")
-    token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
-    if len(token_key) < 16:
-        raise RuntimeError("OMEGA_DEV_TOKEN_KEY is required")
+        from omega.tools.process_runner import verify_os_sandbox
+
+        verify_os_sandbox()
     state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
     service = build_service(
         state_dir,
         token_key,
         Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
+        identity_rollback_anchor_enabled=settings.app_env == "production",
     )
     worker = TaskWorker(
         service.store,
