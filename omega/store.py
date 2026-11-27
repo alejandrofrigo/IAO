@@ -14,7 +14,7 @@ from typing import Any
 from omega.audit import GENESIS_HASH, make_event, verify_chain
 from omega.control import InvalidTransition, transition
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversation(
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS task(
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL, intent_json TEXT NOT NULL,
   result_json TEXT, idem_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   lease_owner TEXT, lease_until TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
-  lease_generation INTEGER NOT NULL DEFAULT 0,
+  lease_generation INTEGER NOT NULL DEFAULT 0, cancel_requested_at TEXT,
   UNIQUE(owner, idem_key));
 CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner, created_at);
 CREATE TABLE IF NOT EXISTS tool_execution(
@@ -157,7 +157,20 @@ class Store:
                         "INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)",
                         (now_iso(),),
                     )
+                    version = 3
+                    columns.add("lease_generation")
                 elif "lease_generation" not in columns:
+                    raise RuntimeError("DATABASE_SCHEMA_MIGRATION_STATE_INVALID")
+                if version < 4:
+                    if "cancel_requested_at" not in columns:
+                        self.db.execute(
+                            "ALTER TABLE task ADD COLUMN cancel_requested_at TEXT"
+                        )
+                    self.db.execute(
+                        "INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)",
+                        (now_iso(),),
+                    )
+                elif "cancel_requested_at" not in columns:
                     raise RuntimeError("DATABASE_SCHEMA_MIGRATION_STATE_INVALID")
                 self.db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_task_queue "
@@ -522,8 +535,9 @@ class Store:
                     "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
                     "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
                     "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
-                    "AND lease_owner=? AND lease_generation=? AND lease_until>?",
-                    (state, now, int(release), int(release), task_id, worker_id, lease_generation, now),
+                    "AND lease_owner=? AND lease_generation=? AND lease_until>? "
+                    "AND (cancel_requested_at IS NULL OR ?=1)",
+                    (state, now, int(release), int(release), task_id, worker_id, lease_generation, now, int(state == "CANCELLED")),
                 ).rowcount
             else:
                 changed = self.db.execute(
@@ -531,11 +545,66 @@ class Store:
                     "lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END, "
                     "lease_until=CASE WHEN ? THEN NULL ELSE lease_until END "
                     "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
-                    "AND lease_owner=? AND lease_generation=? AND lease_until>?",
+                    "AND lease_owner=? AND lease_generation=? AND lease_until>? "
+                    "AND (cancel_requested_at IS NULL OR ?=1)",
                     (state, json.dumps(result, sort_keys=True), now,
-                     int(release), int(release), task_id, worker_id, lease_generation, now),
+                     int(release), int(release), task_id, worker_id, lease_generation, now, int(state == "CANCELLED")),
                 ).rowcount
         return changed == 1
+
+
+    def request_task_cancel(self, task_id: str, owner: str) -> str:
+        """Cancel queued work atomically or request cooperative cancellation for live work."""
+        now = now_iso()
+        cancelled_result = json.dumps(
+            {"decision": "CANCELLED", "reason": "CANCELLED_BEFORE_START"},
+            sort_keys=True,
+        )
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.db.execute(
+                    "SELECT state FROM task WHERE id=? AND owner=?",
+                    (task_id, owner),
+                ).fetchone()
+                if row is None:
+                    self.db.execute("COMMIT")
+                    return "NOT_FOUND"
+                state = row["state"]
+                if state == "QUEUED":
+                    changed = self.db.execute(
+                        "UPDATE task SET state='CANCELLED', result_json=?, "
+                        "updated_at=?, lease_owner=NULL, lease_until=NULL "
+                        "WHERE id=? AND owner=? AND state='QUEUED'",
+                        (cancelled_result, now, task_id, owner),
+                    ).rowcount
+                    self.db.execute("COMMIT")
+                    return "CANCELLED" if changed == 1 else "CONFLICT"
+                if state in {"RUNNING", "VERIFYING"}:
+                    self.db.execute(
+                        "UPDATE task SET cancel_requested_at=COALESCE(cancel_requested_at, ?), "
+                        "updated_at=? WHERE id=? AND owner=? AND state=?",
+                        (now, now, task_id, owner, state),
+                    )
+                    self.db.execute("COMMIT")
+                    return "REQUESTED"
+                self.db.execute("COMMIT")
+                return "TERMINAL"
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+
+    def task_cancel_requested(
+        self, task_id: str, worker_id: str, lease_generation: int
+    ) -> bool:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT cancel_requested_at FROM task WHERE id=? "
+                "AND state IN ('RUNNING','VERIFYING') AND lease_owner=? "
+                "AND lease_generation=? AND lease_until>?",
+                (task_id, worker_id, lease_generation, now_iso()),
+            ).fetchone()
+        return bool(row and row["cancel_requested_at"] is not None)
 
     def recover_interrupted_tasks(
         self, *, now: str | None = None
