@@ -692,7 +692,9 @@
       if (!window.IAODeviceAuthority || typeof window.IAODeviceAuthority.publicKeyPem !== "function") {
         throw new Error("DEVICE_AUTHORITY_NOT_AVAILABLE");
       }
-      return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
+      const result = await bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
+      await refreshSessionGates();
+      return result;
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
     grantCapabilityButton.addEventListener("click", () => {
       if (!window.confirm(
