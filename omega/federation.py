@@ -617,7 +617,11 @@ class Node:
             return {"ok": False, "error": "LEASE_EXPIRED"}
         if not isinstance(capability, str):
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
-        if capability not in c["capabilities"] or capability not in self.served:
+        spec = self.registry.get(capability)
+        if (
+            capability not in c["capabilities"] or capability not in self.served
+            or spec is None or spec.effect_class != "READ_ONLY"
+        ):
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
         try:
             endpoint_scheme = validate_message_endpoint(url)[0]
@@ -636,7 +640,7 @@ class Node:
         nonce = os.urandom(16).hex()
         env = _sign(self.key, {"v": 1, "from": self.node_id, "to": peer_id, "ts": self.clock(), "nonce": nonce,
                                "capability": capability, "body": body})
-        return self._post(c, url, env, nonce, timeout)
+        return self._post(c, url, env, nonce, capability, spec, timeout)
 
     def _ssl_context(self) -> "ssl.SSLContext | None":
         """Contexto TLS desde IAO_TLS_CA_FILE si está definido."""
@@ -648,7 +652,16 @@ class Node:
         ctx.verify_mode = ssl.CERT_REQUIRED
         return ctx
 
-    def _post(self, c: dict[str, Any], url: str, env: dict[str, Any], nonce: str, timeout: float) -> dict[str, Any]:
+    def _post(
+        self,
+        c: dict[str, Any],
+        url: str,
+        env: dict[str, Any],
+        nonce: str,
+        capability: str,
+        spec: Any,
+        timeout: float,
+    ) -> dict[str, Any]:
         try:
             status, resp = post_federation_json(
                 url, env, timeout=timeout, max_bytes=MAX_MSG * 8
@@ -668,25 +681,53 @@ class Node:
             return {"ok": False, "status": status, "error": error}
         if not isinstance(resp, dict):
             return {"ok": False, "error": "BAD_RESPONSE"}
+        required = {
+            "v", "from", "to", "ts", "in_reply_to",
+            "capability", "result", "verification", "sig",
+        }
+        if (
+            set(resp) != required
+            or not isinstance(resp.get("v"), int)
+            or isinstance(resp.get("v"), bool)
+            or resp.get("v") != 1
+            or not isinstance(resp.get("from"), str)
+            or not isinstance(resp.get("to"), str)
+            or not isinstance(resp.get("in_reply_to"), str)
+            or not isinstance(resp.get("capability"), str)
+            or not isinstance(resp.get("verification"), str)
+            or len(resp["verification"]) > 64
+            or not isinstance(resp.get("result"), dict)
+        ):
+            return {"ok": False, "error": "BAD_RESPONSE"}
         if not _verify(c["pub"], resp):
             return {"ok": False, "error": "BAD_RESPONSE_SIGNATURE"}
-        if "result" not in resp:
-            return {"ok": False, "error": "BAD_RESPONSE"}
         if (
             resp.get("to") != self.node_id
             or resp.get("from") != c["peer_id"]
             or resp.get("in_reply_to") != nonce
+            or resp.get("capability") != capability
         ):
             return {"ok": False, "error": "REPLAYED_OR_MISROUTED_RESPONSE"}
+        response_ts = resp.get("ts")
+        if (
+            not isinstance(response_ts, (int, float))
+            or isinstance(response_ts, bool)
+            or (isinstance(response_ts, int) and abs(response_ts) > 2**53)
+            or (isinstance(response_ts, float) and not math.isfinite(response_ts))
+        ):
+            return {"ok": False, "error": "CLOCK_SKEW"}
+        if abs(self.clock() - float(response_ts)) > self.skew:
+            return {"ok": False, "error": "CLOCK_SKEW"}
         try:
-            response_ts = float(resp.get("ts", 0))
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "CLOCK_SKEW"}
-        if not math.isfinite(response_ts) or abs(self.clock() - response_ts) > self.skew:
-            return {"ok": False, "error": "CLOCK_SKEW"}
+            local_verification = spec.verify(resp["result"])
+        except Exception:
+            return {"ok": False, "error": "RESULT_VERIFICATION_FAILED"}
+        if local_verification != "PASS":
+            return {"ok": False, "error": "RESULT_VERIFICATION_FAILED"}
         return {
             "ok": True,
-            "verification": resp.get("verification"),
+            "verification": local_verification,
+            "peer_verification": resp["verification"],
             "result": resp["result"],
             "untrusted": True,
         }
