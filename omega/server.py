@@ -210,7 +210,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     sys.stderr.write(json.dumps({
                         "event": "FEDERATION_HTTP_ERROR",
                         "error_type": type(exc).__name__,
-                    }) + "\\n")
+                    }) + "\n")
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
                 self._send_fed_json(200, payload)
@@ -261,7 +261,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     sys.stderr.write(json.dumps({
                         "event": "FEDERATION_HTTP_ERROR",
                         "error_type": type(exc).__name__,
-                    }) + "\\n")
+                    }) + "\n")
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
                 self._send_fed_json(200, payload)
@@ -302,7 +302,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     sys.stderr.write(json.dumps({
                         "event": "FEDERATION_HTTP_ERROR",
                         "error_type": type(exc).__name__,
-                    }) + "\\n")
+                    }) + "\n")
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
                 self._send_fed_json(status, payload)
@@ -344,7 +344,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     sys.stderr.write(json.dumps({
                         "event": "FEDERATION_HTTP_ERROR",
                         "error_type": type(exc).__name__,
-                    }) + "\\n")
+                    }) + "\n")
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
                 self._send_fed_json(status, payload)
