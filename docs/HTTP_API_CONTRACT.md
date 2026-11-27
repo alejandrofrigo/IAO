@@ -70,3 +70,10 @@ Este documento fija el sobre HTTP común, límites de cuerpo, cabeceras, errores
 | Respuesta de error | — | Incluye `correlation_id` y `X-Correlation-ID`, `no-store` y `nosniff` |
 
 Los dos adaptadores deben mantener el mismo contrato para estas rutas. Los errores de infraestructura nunca deben devolver mensajes de excepción, rutas locales ni material de claves. El método HTTP `PATCH` también llega al enrutador de ambos adaptadores y recibe 405 con `Allow` en lugar de un 501 de transporte.
+
+## CORS
+
+- La allowlist de origen está vacía por defecto; solo `IAO_CORS_ORIGINS` configura orígenes explícitos.
+- Los métodos admitidos para preflight son GET, POST, PUT y DELETE. `PATCH` no forma parte del contrato y su preflight se rechaza.
+- El adaptador stdlib y FastAPI deben mantener la misma política; las pruebas del adaptador stdlib comprueban PUT/DELETE y rechazo de PATCH.
+- CORS no autentica al solicitante ni concede permisos de API.
