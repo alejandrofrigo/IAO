@@ -342,7 +342,11 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 n = int(raw_length) if raw_length is not None else 0
             except ValueError:
                 n = -1
-            body = self.rfile.read(min(n, MAX_BODY + 1)) if n > 0 else b""
+            if n < 0 or n > MAX_BODY:
+                self.close_connection = True
+                body = b""
+            else:
+                body = self.rfile.read(n) if n else b""
             hdrs = {k.lower(): v for k, v in self.headers.items()}
             hdrs["x-omega-client-ip"] = self.client_address[0]
             status, payload = svc.handle(self.command, self.path, hdrs, body)
