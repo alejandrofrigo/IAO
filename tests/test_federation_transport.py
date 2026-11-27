@@ -331,3 +331,24 @@ def test_post_public_json_rejects_redirect(monkeypatch):
     FakeConnection.response = FakeResponse(status=307, headers={"Location": "https://other.example/"})
     with pytest.raises(transport.FederationTransportError, match="REDIRECT_REFUSED"):
         transport.post_public_json("https://peer.example.org/fed/v1/handshake", {"x": 1})
+
+def test_fetch_public_json_rejects_duplicate_object_members(monkeypatch):
+    FakeConnection.response = FakeResponse(
+        body=b'{"peers":[],"peers":[{"peer_id":"attacker"}]}'
+    )
+    monkeypatch.setattr(
+        transport, "resolve_public_addresses", lambda *args: ["8.8.8.8"]
+    )
+    monkeypatch.setattr(transport, "_client_tls_context", lambda: object())
+    monkeypatch.setattr(
+        transport,
+        "_PinnedHTTPSConnection",
+        lambda *args, **kwargs: FakeConnection(
+            args[0], args[1], port=kwargs["port"],
+            timeout=kwargs["timeout"], context=kwargs["context"],
+        ),
+    )
+    with pytest.raises(
+        transport.FederationTransportError, match="INVALID_JSON_RESPONSE"
+    ):
+        transport.fetch_public_json("https://directory.example.org/peers")
