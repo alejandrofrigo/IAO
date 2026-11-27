@@ -82,7 +82,7 @@ function preflight(request, env, origin) {
   return withCors(new Response(null, {
     status: 204,
     headers: {
-      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-methods": "GET, POST",
       "access-control-allow-headers": Array.from(CORS_ALLOWED_HEADERS).join(", "),
       "access-control-max-age": "600",
       "cache-control": "no-store",
