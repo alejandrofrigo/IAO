@@ -514,16 +514,6 @@ class OperatorIdentityAuthority:
                     raise OperatorIdentityError("ANOTHER_OPERATOR_IDENTITY_ACTIVE", 409)
                 root_key = serialization.load_pem_public_key(row["root_public_key_pem"].encode("ascii"))
                 device_key = serialization.load_pem_public_key(row["device_public_key_pem"].encode("ascii"))
-                device_der = device_key.public_bytes(
-                    serialization.Encoding.DER,
-                    serialization.PublicFormat.SubjectPublicKeyInfo,
-                )
-                if not hmac.compare_digest(
-                    hashlib.sha256(device_der).hexdigest(), row["device_id"],
-                ):
-                    raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
-                if row["purpose"] == "REVOKE" and obj.get("grant_expires_at") is not None:
-                    raise OperatorIdentityError("CAPABILITY_PAYLOAD_MISMATCH", 409)
                 try:
                     root_key.verify(
                         root_signature, b"IAO-OPERATOR-RECOVERY-V1\x00" + row["signing_payload"],
@@ -1554,6 +1544,16 @@ class OperatorIdentityAuthority:
                     raise OperatorIdentityError("CAPABILITY_PAYLOAD_MISMATCH", 409)
                 root_key = serialization.load_pem_public_key(row["root_public_key_pem"].encode("ascii"))
                 device_key = serialization.load_pem_public_key(row["device_public_key_pem"].encode("ascii"))
+                device_der = device_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                if not hmac.compare_digest(
+                    hashlib.sha256(device_der).hexdigest(), row["device_id"],
+                ):
+                    raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                if row["purpose"] == "REVOKE" and obj.get("grant_expires_at") is not None:
+                    raise OperatorIdentityError("CAPABILITY_PAYLOAD_MISMATCH", 409)
                 try:
                     root_key.verify(root_signature, ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
                     device_key.verify(
