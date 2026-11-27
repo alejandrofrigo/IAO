@@ -16,6 +16,8 @@ La hoja de ruta técnica activa está en [Fase 1 — Núcleo operativo y arquite
 
 La [matriz de autenticación y autorización](docs/AUTHORIZATION_MATRIX.md) describe los requisitos por clase de ruta y las brechas de verificación.
 
+La [auditoría de inventario y dependencias de Fase 1](docs/PHASE_1_INVENTORY_AUDIT_20261127.md) registra los límites de la arquitectura y las relaciones entre PRs sin inferir capacidades no verificadas.
+
 El [contrato de arquitectura del núcleo](docs/CORE_ARCHITECTURE_CONTRACT.md) fija las responsabilidades de los adaptadores, el servicio, el Store, la identidad, la política, las herramientas y la cola persistente.
 
 Consulta también el [contrato HTTP](docs/HTTP_API_CONTRACT.md) y la [guía operativa y criterios de salida de Fase 1](docs/PHASE_1_OPERATIONS_RUNBOOK.md).
