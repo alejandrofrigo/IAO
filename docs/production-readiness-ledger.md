@@ -43,3 +43,12 @@ Commit `367b96785cd283b1781866c02fea9570330e5872`:
 - Mobile browser integration run #633: **success**, mobile Chromium identity flow passed.
 - Earlier production-gates run #3 failed only on Ruff E731; the failure was corrected in `367b967`. The 86 deterministic tests passed on each Python version in run #3.
 - These checks validate the commit above. Any subsequent source or workflow change must be validated again on its own resulting commit.
+
+## Router and federation verification (2026-11-27)
+
+- Added `tests/test_llm_router.py` with mocked provider calls for priority-based failover, cooldown skipping, success metadata, sanitized provider failures, and secret-free health/status output. CI does not send provider credentials or call live providers.
+- Added the router test module to the deterministic production-gates workflow.
+- Added `tests/test_federation.py` to the deterministic gate. This suite creates two separately keyed Ed25519 nodes and exercises signed challenge verification, signed request/response, READ_ONLY capability grants, revocation, replay rejection, and partition/recovery over a local test HTTP server. This is reproducible two-node protocol evidence, not proof of an independently operated public node.
+- Production-gates run #15 initially found a defect in the new router test fixture: the mocked health reader did not retain persisted state between failover attempts. The product router was not implicated; 127 other selected tests passed in the failing job. Test fixture corrected in commit `eb109bc208f0b7e60637b9f90e15601ddf90efe3`; validation on this correction is pending.
+- Independent external federation remains unverified. `omega/federation_autonomous.py` has mocked transport tests for signed publication, explicit remote consent, identity challenge, contract-key matching and local revocation. `tools/iao_federation_autonomous.py` still blocks non-loopback enrollment while trusted public transport is not integrated. No external peer endpoint or independently operated node has been supplied or verified; no peer was enrolled.
+- Provider inventory distinction: the repository contains fixed adapters for Anthropic, Gemini and Groq, plus a separate OpenAI-compatible gateway router whose actual provider inventory is read from the operator runtime file under `~/.config/iao/llm-providers.json`. GitHub CI cannot inspect that private runtime file; provider/model declarations, credential presence, connectivity and successful live inference remain separate unverified facts.
