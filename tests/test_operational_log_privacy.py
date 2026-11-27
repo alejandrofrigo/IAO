@@ -44,8 +44,8 @@ def test_operational_log_redacts_content_paths_and_nested_errors(tmp_path):
 
 
 def test_operational_log_preserves_safe_enum_reason():
-    safe = sanitize_log_data({"reason": "CANDIDATE_PYTEST_EXIT_NONZERO"})
-    assert safe == {"reason": "CANDIDATE_PYTEST_EXIT_NONZERO"}
+    safe = sanitize_log_data({"reason": "TIMEOUT"})
+    assert safe == {"reason": "TIMEOUT"}
 
 
 def test_operational_log_does_not_follow_symlink(tmp_path):
