@@ -2,7 +2,7 @@
 
 ## Current enforced state
 
-The task worker is an independent execution loop hosted by the FastAPI API lifespan only when `IAO_TASK_WORKER_ENABLED=true`. It reuses the API service's existing Store, registry and operator identity authority; it does not create a second queue. The standalone worker entry point still refuses to start when `APP_ENV=production`. API readiness reports `disabled_by_default`, `blocked`, `start_failed`, `running`, `worker_exited`, or `stop_timeout`, with a bounded reason code when startup or shutdown fails. An explicitly requested worker is never silently reported as healthy. The lifespan supplies a task-worker heartbeat path; readiness distinguishes a live thread from a fresh worker-cycle heartbeat.
+The task worker is an independent execution loop hosted by the FastAPI API lifespan only when `IAO_TASK_WORKER_ENABLED=true`. It reuses the API service's existing Store, registry and operator identity authority; it does not create a second queue. The standalone worker accepts production only with `IAO_SESSION_SIGNING_KEY` and persistent audit key; it performs a live bubblewrap preflight before entering its loop. The API lifespan reuses the same persistent service identity and performs the same preflight before starting the worker. API readiness reports `disabled_by_default`, `blocked`, `start_failed`, `running`, `worker_exited`, or `stop_timeout`, with a bounded reason code when startup or shutdown fails. An explicitly requested worker is never silently reported as healthy. The lifespan supplies a task-worker heartbeat path; readiness distinguishes a live thread from a fresh worker-cycle heartbeat.
 
 Queued task execution is restricted to an explicit allowlist containing only
 `knowledge.search`, the deterministic local corpus lookup. The general tool
@@ -61,8 +61,10 @@ mechanism, not proof of exactly-once tool effects.
 - [ ] The built images must pass the bubblewrap smoke in CI, and the target
       hosting runtime must separately prove user namespaces/network isolation.
       A Docker CI pass does not establish managed-host compatibility.
-- [ ] Authorization is revalidated immediately before each externally
-      observable side effect, not only when a task is first claimed.
+- [x] Authorization is revalidated immediately before the registered local
+      read-only tool call; the worker has no queue-executable external side effects.
+- [ ] Any future external side effect requires a separate per-effect authorization
+      and idempotency contract.
 - [ ] Operator recovery, session expiry, device revocation, and root rotation
       are tested against queued and running tasks.
 - [ ] Production database durability, backup, restore, migration, and
@@ -79,6 +81,7 @@ GitHub Actions is a CI runner, not a persistent worker host. No privileged
 write, execute, administrative, or remote-node authority is granted by this
 document. Federated nodes must independently offer and authorize any work.
 
-Do not remove the production startup block until every required evidence item
-has an implementation, an automated test where applicable, and an operator
-review. Keep production execution disabled while any item is incomplete.
+Keep readiness degraded and remote/privileged execution disabled until every
+required evidence item has implementation, automated evidence where applicable,
+and operational review. The local read-only worker is gated by persistent
+root/device identity, live sandbox preflight and durable task budgets.
