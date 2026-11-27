@@ -15,6 +15,18 @@ _REDACTED_FIELDS = {
 }
 _PATH_FIELDS = {"file", "path"}
 _COUNT_FIELDS = {"files", "paths"}
+_SAFE_REASON_CODES = {
+    "TIMEOUT",
+    "NONZERO_EXIT",
+    "INVALID_REPORT",
+    "PADGE_EXIT_NONZERO",
+    "PADGE_CYCLE_REJECTED",
+    "NO_NEW_REPORT_OR_CYCLE_RESULT",
+    "PROMOTION_NOT_VERIFIED",
+    "NO_PYTHON_FILES_IN_CANDIDATE",
+    "PREFLIGHT_COMPONENT_MISSING",
+    "RATE_LIMITED",
+}
 
 
 def _digest(value: Any) -> str:
@@ -41,7 +53,7 @@ def sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
         elif normalized == "goal":
             safe["goal_digest"] = _digest(value)
         elif normalized == "reason":
-            if isinstance(value, str) and re.fullmatch(r"[A-Z0-9_:-]{1,64}", value):
+            if isinstance(value, str) and value in _SAFE_REASON_CODES:
                 safe["reason"] = value
             else:
                 safe["reason_digest"] = _digest(value)
