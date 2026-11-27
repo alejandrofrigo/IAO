@@ -69,7 +69,7 @@ def _is_sensitive_field(normalized: str) -> bool:
         "password", "cookie", "session", "credential", "authorization",
         "auth", "forwarded", "remote", "client", "content", "input",
         "output", "message", "prompt", "query", "traceback", "stderr",
-        "stdout", "command", "path", "file", "backup",
+        "stdout", "command", "backup",
     }
     return normalized in _REDACTED_FIELDS or bool(tokens & sensitive_tokens)
 
