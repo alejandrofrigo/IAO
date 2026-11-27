@@ -155,7 +155,7 @@ def read_lock_owner(path: Path) -> int | None:
             try:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                return owner
+                return owner if owner is not None and owner > 0 else 0
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
             return None
     except (OSError, ValueError):
