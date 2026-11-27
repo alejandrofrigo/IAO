@@ -59,7 +59,7 @@
       submitButton.disabled = !active || busy;
       refreshButton.disabled = !latestTaskId || busy;
       setAuthStatus(active
-        ? "Autorización activa: knowledge.search (solo lectura, local)."
+        ? "Autorización activa: knowledge.search (solo lectura, corpus IAO)."
         : "Sin autorización activa. Concede knowledge.search desde el panel de identidad.");
       return active;
     } catch (error) {
