@@ -1397,8 +1397,12 @@ class OperatorIdentityAuthority:
                     db.execute(
                         """UPDATE operator_capability_grants SET revoked_at=?
                         WHERE identity_id=? AND session_digest=? AND capability=?
-                        AND revoked_at IS NULL AND expires_at<=?""",
-                        (now, root["identity_id"], session_digest, capability, now),
+                        AND revoked_at IS NULL
+                        AND (expires_at<=? OR policy_version<>?)""",
+                        (
+                            now, root["identity_id"], session_digest,
+                            capability, now, policy_version,
+                        ),
                     )
                     existing = db.execute(
                         """SELECT 1 FROM operator_capability_grants
