@@ -133,6 +133,8 @@ def read_heartbeat(
             state = "STALE"
         elif phase == "cycle_running":
             state = "CYCLE_IN_PROGRESS"
+        elif phase == "cycle_completed" and last_result is False:
+            state = "DEGRADED"
         elif phase == "cycle_completed":
             state = "HEALTHY"
         else:
