@@ -122,7 +122,7 @@ def read_status(origin_value: str, agent_id: str, key_path: Path) -> dict:
         raise AgentClientError("INVALID_AGENT_CHALLENGE")
     timestamp = int(time.time())
     payload = json.dumps({"body_sha256": hashlib.sha256(b"").hexdigest(), "method": "GET", "nonce": nonce, "path": "/v1/agent/status", "protocol": PROTOCOL, "timestamp": timestamp}, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    signature = key.sign(b"IAO-AGENT-REQUEST-V1\\x00" + payload, ec.ECDSA(hashes.SHA256()))
+    signature = key.sign(b"IAO-AGENT-REQUEST-V1\x00" + payload, ec.ECDSA(hashes.SHA256()))
     import base64
     encoded = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
     request = urllib.request.Request(origin + "/v1/agent/status", method="GET", headers={"Accept": "application/json", "Cache-Control": "no-store", "X-IAO-Agent-ID": agent_id, "X-IAO-Agent-Nonce": nonce, "X-IAO-Agent-Timestamp": str(timestamp), "X-IAO-Agent-Signature": encoded})
