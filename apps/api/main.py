@@ -151,7 +151,7 @@ def _service_response(status: int, payload: dict):
         "X-Correlation-ID": correlation_id,
     }
     allowed = payload.get("allowed_methods")
-    if status == 405 and isinstance(allowed, list) and all(
+    if status == 405 and isinstance(allowed, list) and allowed and all(
         isinstance(item, str) and item.isalpha() for item in allowed
     ):
         headers["Allow"] = ", ".join(allowed)
