@@ -230,8 +230,16 @@ def stop_children():
             except ProcessLookupError:
                 pass
 
-    save_json(CHILD_FILE, {})
+    remaining = {
+        name: child for name, child in children.items()
+        if child.get("pid") and process_alive(child["pid"])
+    }
+    save_json(CHILD_FILE, remaining)
+    if remaining:
+        event("stop_incomplete", active_children=len(remaining))
+        return False
     event("all_children_stopped")
+    return True
 
 
 def launch(name, spec):
@@ -401,11 +409,14 @@ def main():
             print("SUPERVISOR_STOPPED")
             return 0
 
-        stop_children()
+        stopped = stop_children()
         try:
             PID_FILE.unlink()
         except FileNotFoundError:
             pass
+        if not stopped:
+            print("STOP_INCOMPLETE: quedan procesos sin verificación de parada")
+            return 1
         print("STALE_CHILDREN_CLEANED")
         return 0
 
