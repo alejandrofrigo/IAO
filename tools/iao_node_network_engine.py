@@ -125,10 +125,13 @@ def dbopen():
     return db
 
 def log_event(name, details=""):
+    # Peer identifiers, endpoints and task metadata must not be persisted raw.
+    raw = str(details)[:1000]
+    details_digest = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
     db = dbopen()
     db.execute(
         "INSERT INTO events(timestamp,event,details) VALUES(?,?,?)",
-        (now(), name, str(details)[:1000])
+        (now(), name, details_digest)
     )
     db.commit()
     db.close()
