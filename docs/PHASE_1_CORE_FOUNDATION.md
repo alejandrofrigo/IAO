@@ -144,6 +144,6 @@ Corte: HEAD de la rama `phase-1-core-foundation-20261127` posterior a los cambio
 
 ### Cambios y validación pendiente
 
-Los cambios de esta continuación afectan a `omega/operational_log.py`, `tests/test_operational_log_privacy.py`, `tools/iao_five_motor_supervisor.py`, `tests/test_supervision_health.py`, `omega/supervision.py`, `apps/api/main.py`, `omega/task_worker.py`, `tests/test_api_readiness_diagnostics.py`, `tests/test_service.py`, `tools/iao_node_network_engine.py`, `tools/iao_federation_worker.py` y `tests/test_node_network_privacy.py`.
+Los cambios de esta continuación afectan a `omega/operational_log.py`, `tests/test_operational_log_privacy.py`, `tools/iao_five_motor_supervisor.py`, `tests/test_supervision_health.py`, `omega/supervision.py`, `apps/api/main.py`, `omega/task_worker.py`, `tests/test_api_readiness_diagnostics.py`, `tests/test_service.py`, `tools/iao_node_network_engine.py`, `tools/iao_federation_worker.py`, `tests/test_node_network_privacy.py` y `tests/test_federation_worker_privacy.py`.
 
 En el último SHA consultado, los checks Python 3.12/3.13, instalación bloqueada, contrato API, Mobile Chromium, Docker y quality gate estaban **QUEUED**. No se declara ningún test nuevo aprobado. No fusionar ni desplegar hasta que los checks terminen y se revisen sus logs.
