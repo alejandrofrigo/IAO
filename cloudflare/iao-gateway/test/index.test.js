@@ -24,6 +24,42 @@ test("contract states the API proxy boundary and keeps agent polling disabled", 
   assert.equal(body.privileged_commands, "disabled");
 });
 
+test("CORS preflight requires an exact configured web origin and allowed API route", async () => {
+  const env = { IAO_WEB_ORIGINS: "https://chat.example.net" };
+  const accepted = await worker.fetch(new Request("https://gateway.test/v1/public/session", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://chat.example.net",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "authorization,content-type",
+    },
+  }), env);
+  assert.equal(accepted.status, 204);
+  assert.equal(accepted.headers.get("access-control-allow-origin"), "https://chat.example.net");
+  assert.match(accepted.headers.get("access-control-allow-headers"), /authorization/i);
+
+  const unknownOrigin = await worker.fetch(new Request("https://gateway.test/v1/public/session", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://attacker.example",
+      "access-control-request-method": "POST",
+    },
+  }), env);
+  assert.equal(unknownOrigin.status, 403);
+  assert.equal((await unknownOrigin.json()).error, "CORS_ORIGIN_NOT_ALLOWED");
+
+  const blockedHeader = await worker.fetch(new Request("https://gateway.test/v1/public/session", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://chat.example.net",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "x-untrusted-header",
+    },
+  }), env);
+  assert.equal(blockedHeader.status, 403);
+  assert.equal((await blockedHeader.json()).error, "CORS_PREFLIGHT_BLOCKED");
+});
+
 test("API routes fail closed when no fixed origin is configured", async () => {
   const response = await worker.fetch(new Request("https://example.test/v1/tasks", {
     method: "POST",
