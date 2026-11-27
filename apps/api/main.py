@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -148,6 +149,34 @@ def _service_response(status: int, payload: dict):
         headers["Allow"] = ", ".join(allowed)
     return JSONResponse(status_code=status, content=payload, headers=headers)
 
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Normalize framework-generated 404/405 responses without echoing details."""
+    code = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}.get(
+        exc.status_code, "HTTP_ERROR",
+    )
+    correlation_id = uuid.uuid4().hex
+    response = _service_response(
+        exc.status_code,
+        {"error": code, "correlation_id": correlation_id},
+    )
+    if exc.headers and exc.headers.get("Allow"):
+        response.headers["Allow"] = exc.headers["Allow"]
+    response.headers["X-Correlation-ID"] = correlation_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Return a stable, non-disclosing envelope for uncaught route failures."""
+    logging.getLogger("iao.http").error(
+        "UNHANDLED_HTTP_ERROR error_type=%s", type(exc).__name__,
+    )
+    correlation_id = uuid.uuid4().hex
+    return _service_response(
+        500, {"error": "INTERNAL_ERROR", "correlation_id": correlation_id},
+    )
 
 def _method_not_allowed(allowed_methods: tuple[str, ...]):
     correlation_id = uuid.uuid4().hex
