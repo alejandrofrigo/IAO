@@ -89,3 +89,41 @@ def test_future_schema_version_fails_closed(tmp_path):
 
     with pytest.raises(RuntimeError, match="DATABASE_SCHEMA_VERSION_UNSUPPORTED"):
         Store(path, audit_key=b"audit-key-" + b"x" * 40)
+
+
+def test_audit_hmac_key_rotation_fails_closed(tmp_path):
+    path = tmp_path / "audit.db"
+    first = Store(path, audit_key=b"first-audit-key-" + b"a" * 40)
+    first.audit("test", "TEST_EVENT", "subject")
+    first.close()
+
+    with pytest.raises(RuntimeError, match="AUDIT_HMAC_KEY_MISMATCH"):
+        Store(path, audit_key=b"second-audit-key-" + b"b" * 40)
+
+
+def test_audit_status_detects_persisted_event_tampering(tmp_path):
+    path = tmp_path / "tampered.db"
+    store = Store(path, audit_key=b"audit-key-" + b"x" * 40)
+    try:
+        store.audit("test", "TEST_EVENT", "subject", safe_detail="original")
+        store.db.execute(
+            "UPDATE audit_event_v2 SET details=? WHERE id=1",
+            ('{"actor":"test","safe_detail":"changed"}',),
+        )
+        status = store.audit_status()
+        assert status["authenticated"] is True
+        assert status["valid"] is False
+        assert status["first_invalid_index"] == 0
+    finally:
+        store.close()
+
+
+def test_unkeyed_audit_is_not_reported_as_authenticated():
+    store = Store(":memory:")
+    try:
+        store.audit("test", "TEST_EVENT", "subject")
+        status = store.audit_status()
+        assert status["authenticated"] is False
+        assert status["valid"] is True
+    finally:
+        store.close()
