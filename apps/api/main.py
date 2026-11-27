@@ -150,6 +150,24 @@ def _service_response(status: int, payload: dict):
     return JSONResponse(status_code=status, content=payload, headers=headers)
 
 
+def _method_not_allowed(allowed_methods: tuple[str, ...]):
+    correlation_id = uuid.uuid4().hex
+    return JSONResponse(
+        status_code=405,
+        content={
+            "error": "METHOD_NOT_ALLOWED",
+            "allowed_methods": list(allowed_methods),
+            "correlation_id": correlation_id,
+        },
+        headers={
+            "Allow": ", ".join(allowed_methods),
+            "X-Correlation-ID": correlation_id,
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 async def _device_json(request: Request):
     try:
         payload = await request.json()
@@ -352,8 +370,10 @@ def live() -> dict[str, str]:
     return {"status": "live"}
 
 
-@app.get("/health/ready")
-def ready():
+@app.api_route("/health/ready", methods=["GET", "POST", "PUT", "DELETE"])
+def ready(request: Request):
+    if request.method != "GET":
+        return _method_not_allowed(("GET",))
     try:
         service = _get_service()
         status, payload = service.handle("GET", "/health/ready", {}, b"")
@@ -397,23 +417,25 @@ def ready():
     }
     return JSONResponse(status_code=200, content=payload)
 
-@app.post("/v1/device/enroll")
+@app.api_route("/v1/device/enroll", methods=["GET", "POST", "PUT", "DELETE"])
 async def device_enroll(request: Request):
     return await _device_service_route(request, "/v1/device/enroll")
 
 
-@app.post("/v1/device/challenge")
+@app.api_route("/v1/device/challenge", methods=["GET", "POST", "PUT", "DELETE"])
 async def device_challenge(request: Request):
     return await _device_service_route(request, "/v1/device/challenge")
 
 
-@app.post("/v1/device/command")
+@app.api_route("/v1/device/command", methods=["GET", "POST", "PUT", "DELETE"])
 async def device_command(request: Request):
     return await _device_service_route(request, "/v1/device/command")
 
 
 async def _device_service_route(request: Request, path: str):
     """Keep device endpoints behind the same authenticated service boundary."""
+    if request.method != "POST":
+        return _method_not_allowed(("POST",))
     try:
         service = _get_service()
         body, body_error = await _read_bounded_service_body(request)
