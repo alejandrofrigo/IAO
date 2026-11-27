@@ -1567,7 +1567,7 @@ def test_capability_grant_rejects_ungrantable_scope_and_stale_session(tmp_path):
     )
     new_session = authority.complete_operator_login(
         login["challenge"], sign(root, login_payload), new_device_sig,
-        "capability-test-token-key", ttl_seconds=900,
+        "capability-test-token-key", ttl_seconds=899,
     )
     with pytest.raises(OperatorIdentityError, match="CAPABILITY_AUTHORITY_CHANGED"):
         authority.complete_capability_challenge(
