@@ -182,6 +182,44 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             self.end_headers()
             self.wfile.write(data)
 
+        def _send_service_json(self, status: int, payload: dict[str, object]) -> None:
+            """Normalize every OmegaService response to the FastAPI HTTP envelope."""
+            correlation_id = payload.get("correlation_id")
+            if (
+                not isinstance(correlation_id, str)
+                or len(correlation_id) != 32
+                or any(char not in "0123456789abcdef" for char in correlation_id.lower())
+            ):
+                correlation_id = uuid.uuid4().hex
+            content = {**payload, "correlation_id": correlation_id}
+            data = json.dumps(content, separators=(",", ":")).encode()
+            self.send_response(status)
+            self._cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Correlation-ID", correlation_id)
+            allowed = content.get("allowed_methods")
+            if status == 405 and isinstance(allowed, list) and allowed and all(
+                isinstance(item, str) and item.isalpha() for item in allowed
+            ):
+                self.send_header("Allow", ", ".join(allowed))
+            request_path = self.path.split("?", 1)[0]
+            route_group = (
+                "federation" if request_path.startswith("/fed/v1/")
+                else "api" if request_path.startswith("/v1/")
+                else "health" if request_path.startswith("/health/")
+                else "web" if request_path in ("/", "/index.html")
+                else "other"
+            )
+            sys.stderr.write(json.dumps({
+                "m": self.command, "route_group": route_group,
+                "s": status, "cid": correlation_id,
+            }) + "\n")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _send_error_json(self, status: int, code: str) -> None:
             """Emit a stable, non-disclosing JSON error for adapter-level failures."""
             correlation_id = uuid.uuid4().hex
@@ -473,33 +511,8 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self.close_connection = True
                 self._send_error_json(503, "IAO_SERVICE_UNAVAILABLE")
                 return
-            data = json.dumps(payload).encode()
-            self.send_response(status)
-            self._cors_headers()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Cache-Control", "no-store")
-            correlation_id = payload.get("correlation_id")
-            if isinstance(correlation_id, str):
-                self.send_header("X-Correlation-ID", correlation_id)
-            allowed_methods = payload.get("allowed_methods")
-            if status == 405 and isinstance(allowed_methods, list):
-                self.send_header("Allow", ", ".join(allowed_methods))
-            request_path = self.path.split("?", 1)[0]
-            route_group = (
-                "federation" if request_path.startswith("/fed/v1/")
-                else "api" if request_path.startswith("/v1/")
-                else "health" if request_path.startswith("/health/")
-                else "web" if request_path in ("/", "/index.html")
-                else "other"
-            )
-            sys.stderr.write(json.dumps({
-                "m": self.command, "route_group": route_group,
-                "s": status, "cid": correlation_id,
-            }) + "\n")
-            self.end_headers()
-            self.wfile.write(data)
+            self._send_service_json(status, payload)
+            return
 
         do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _do
 
