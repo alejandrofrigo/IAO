@@ -15,6 +15,13 @@ _REDACTED_FIELDS = {
 }
 _PATH_FIELDS = {"file", "path"}
 _COUNT_FIELDS = {"files", "paths"}
+_SAFE_STRING_FIELDS = {
+    "time", "timestamp", "event", "component", "phase", "status", "state",
+    "method", "route_group", "cid", "decision", "policy_version",
+    "authority", "identity_verification", "enrollment", "motor", "engine",
+}
+_SAFE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:+-]{1,128}\\Z")
+_SAFE_CAPABILITY_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,127}\\Z")
 _SAFE_REASON_CODES = {
     "TIMEOUT",
     "NONZERO_EXIT",
@@ -69,10 +76,26 @@ def sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(value, dict):
             safe[normalized] = sanitize_log_data(value)
         elif isinstance(value, (list, tuple)):
-            safe[normalized] = [
-                sanitize_log_data(item) if isinstance(item, dict) else item
-                for item in value
-            ]
+            if (
+                normalized == "capabilities"
+                and all(
+                    isinstance(item, str) and _SAFE_CAPABILITY_RE.fullmatch(item)
+                    for item in value
+                )
+            ):
+                safe[normalized] = list(value)
+            elif all(isinstance(item, dict) for item in value):
+                safe[normalized] = [sanitize_log_data(item) for item in value]
+            else:
+                safe[f"{normalized}_digest"] = _digest(value)
+        elif isinstance(value, str):
+            if (
+                normalized in _SAFE_STRING_FIELDS
+                and _SAFE_TOKEN_RE.fullmatch(value)
+            ):
+                safe[normalized] = value
+            else:
+                safe[f"{normalized}_digest"] = _digest(value)
         else:
             safe[normalized] = value
     return safe
