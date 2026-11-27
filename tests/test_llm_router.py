@@ -250,3 +250,36 @@ def test_status_handles_corrupt_health_document_without_exposing_config_secrets(
     assert result["providers"][0]["id"] == "alpha"
     assert result["providers"][0]["failures"] == 0
     assert result["providers"][0]["last_latency_ms"] is None
+
+
+
+def test_model_call_budget_caps_provider_attempts(monkeypatch):
+    candidates = [
+        {**provider("first", 0), "cost_per_1k_tokens": 0.1},
+        {**provider("second", 1), "cost_per_1k_tokens": 0.2},
+    ]
+    monkeypatch.setattr(router, "providers", lambda: candidates)
+    monkeypatch.setattr(router, "health", lambda: {})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    calls = []
+    monkeypatch.setattr(
+        router, "_request",
+        lambda candidate, messages, timeout: (
+            calls.append(candidate["id"]) or "ok", candidate["model"]
+        ),
+    )
+    router.chat_with_metadata(
+        [{"role": "user", "content": "test"}], max_model_calls=1
+    )
+    assert calls == ["first"]
+
+
+def test_invalid_model_call_budget_fails_before_provider_discovery(monkeypatch):
+    monkeypatch.setattr(
+        router, "providers",
+        lambda: (_ for _ in ()).throw(AssertionError("provider discovery must not run")),
+    )
+    with pytest.raises(ValueError, match="INVALID_MODEL_CALL_BUDGET"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}], max_model_calls=0
+        )
