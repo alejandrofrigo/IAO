@@ -85,14 +85,25 @@ def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tm
         )
         assert challenge_response.status_code == 400
         assert challenge_response.json()["error"] == "INVALID_CHALLENGE"
-        method_response = client.post("/fed/v1/identity")
-        method_payload = method_response.json()
-        assert method_response.status_code == 405
-        assert method_payload["error"] == "METHOD_NOT_ALLOWED"
-        assert method_response.headers["allow"] == "GET"
-        assert method_response.headers["x-correlation-id"] == method_payload["correlation_id"]
-        assert len(method_payload["correlation_id"]) == 32
-        assert method_response.headers["cache-control"] == "no-store"
+        for path, allowed in (
+            ("/fed/v1/contract", "GET"),
+            ("/fed/v1/publication", "GET"),
+            ("/fed/v1/identity", "GET"),
+            ("/fed/v1/handshake", "POST"),
+            ("/fed/v1/message", "POST"),
+        ):
+            wrong_method = "POST" if allowed == "GET" else "GET"
+            method_response = client.request(
+                wrong_method, path, content=b"{}" if wrong_method == "POST" else None,
+            )
+            method_payload = method_response.json()
+            assert method_response.status_code == 405
+            assert method_payload["error"] == "METHOD_NOT_ALLOWED"
+            assert method_response.headers["allow"] == allowed
+            assert method_response.headers["x-correlation-id"] == method_payload["correlation_id"]
+            assert len(method_payload["correlation_id"]) == 32
+            assert method_response.headers["cache-control"] == "no-store"
+            assert method_response.headers["x-content-type-options"] == "nosniff"
         device_patch = client.patch("/v1/device/enroll")
         assert device_patch.status_code == 405
         assert device_patch.json()["error"] == "METHOD_NOT_ALLOWED"
@@ -169,20 +180,30 @@ def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path, monkey
             payload = json.loads(response.read())
             assert response.code == 400
             assert payload["error"] == "INVALID_CHALLENGE"
-        method_request = urllib.request.Request(
-            f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/identity",
-            data=b"", method="POST",
-        )
-        try:
-            urllib.request.urlopen(method_request, timeout=3)
-            raise AssertionError("invalid federation method was accepted")
-        except urllib.error.HTTPError as response:
-            payload = json.loads(response.read())
-            assert response.code == 405
-            assert payload["error"] == "METHOD_NOT_ALLOWED"
-            assert response.headers["Allow"] == "GET"
-            assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
-            assert response.headers["Cache-Control"] == "no-store"
+        for path, allowed in (
+            ("/fed/v1/contract", "GET"),
+            ("/fed/v1/publication", "GET"),
+            ("/fed/v1/identity", "GET"),
+            ("/fed/v1/handshake", "POST"),
+            ("/fed/v1/message", "POST"),
+        ):
+            wrong_method = "POST" if allowed == "GET" else "GET"
+            method_request = urllib.request.Request(
+                f"http://127.0.0.1:{httpd.server_address[1]}{path}",
+                data=b"{}" if wrong_method == "POST" else None,
+                method=wrong_method,
+            )
+            try:
+                urllib.request.urlopen(method_request, timeout=3)
+                raise AssertionError("invalid federation method was accepted")
+            except urllib.error.HTTPError as response:
+                payload = json.loads(response.read())
+                assert response.code == 405
+                assert payload["error"] == "METHOD_NOT_ALLOWED"
+                assert response.headers["Allow"] == allowed
+                assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
+                assert response.headers["Cache-Control"] == "no-store"
+                assert response.headers["X-Content-Type-Options"] == "nosniff"
         patch_request = urllib.request.Request(
             f"http://127.0.0.1:{httpd.server_address[1]}/v1/device/enroll",
             data=b"", method="PATCH",
