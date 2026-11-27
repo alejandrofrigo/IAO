@@ -70,7 +70,7 @@ def fetch_public_cid(
         connection.request(
             "POST", target, body=b"",
             headers={
-                "Host": f"{host}:{port}",
+                "Host": f"[{host}]:{port}" if ":" in host else f"{host}:{port}",
                 "Accept": "application/octet-stream",
                 "Content-Length": "0",
                 "Connection": "close",
