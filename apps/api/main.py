@@ -27,12 +27,13 @@ class _PersistentRuntimeUnavailable(RuntimeError):
 
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # The task worker is a separate explicit opt-in. Missing persistent keys
-    # keep liveness available but block worker startup and readiness.
+    # The task worker is enabled only by explicit runtime configuration.
+    # Missing persistent keys keep liveness available but block readiness.
+    signing_key = session_signing_key()
     if not _task_worker_requested():
         _set_task_worker_state("disabled_by_default")
     elif (
-        len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) < 32
+        len(signing_key) < 32
         or len(os.environ.get("AUDIT_HMAC_KEY", "")) < 32
     ):
         _set_task_worker_state("blocked", "PERSISTENT_KEYS_UNAVAILABLE")
