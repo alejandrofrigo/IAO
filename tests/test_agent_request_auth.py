@@ -41,7 +41,7 @@ def _agent(tmp_path):
 def _signed_request(authority, key, agent_id, nonce, *, path="/v1/agent/status", body=b""):
     timestamp = int(time.time())
     payload = authority.canonical({"body_sha256": __import__("hashlib").sha256(body).hexdigest(), "method":"GET", "nonce":nonce, "path":path, "protocol":"IAO-AGENT-REQUEST-V1", "timestamp":timestamp})
-    signature = key.sign(b"IAO-AGENT-REQUEST-V1\\x00" + payload, ec.ECDSA(hashes.SHA256()))
+    signature = key.sign(b"IAO-AGENT-REQUEST-V1\x00" + payload, ec.ECDSA(hashes.SHA256()))
     return timestamp, signature
 
 
