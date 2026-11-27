@@ -99,7 +99,7 @@ test("public chat remains disabled and never falls back to relative fetch withou
   };
   let fetchCalls = 0;
   const document = { querySelector(selector) { return elements[selector.slice(1)]; } };
-  const script = chatSource.match(/<script>\\s*([\\s\\S]*?)<\\/script>/)[1];
+  const script = chatSource.split("<script>")[1].split("</script>")[0];
   vm.runInNewContext(script, {
     window, document, Event: class Event {},
     fetch() { fetchCalls += 1; throw new Error("unexpected fetch"); },
