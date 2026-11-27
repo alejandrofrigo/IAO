@@ -16,6 +16,7 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.state = Path(self.temp.name)
 
     def test_cycle_persists_only_safe_discovery_status(self):
+        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "DISCOVERY_COMPLETED",
             "connected_bootstrappers": 2,
@@ -50,6 +51,7 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(inventory["capabilities"], [])
 
     def test_success_without_bootstrap_is_rejected_and_not_assimilated(self):
+        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "DISCOVERY_COMPLETED",
             "connected_bootstrappers": 0,
@@ -69,6 +71,7 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertFalse((self.state / "p2p-assimilated-peers.json").exists())
 
     def test_bootstrap_unavailable_does_not_assimilate(self):
+        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "BOOTSTRAP_UNAVAILABLE",
             "connected_bootstrappers": 0,
@@ -85,6 +88,7 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertFalse((self.state / "p2p-assimilated-peers.json").exists())
 
     def test_optional_dependency_failure_is_not_reported_as_success(self):
+        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         def fail(**kwargs):
             raise ImportError("optional dependency unavailable")
         with patch.object(worker, "state_dir", return_value=self.state), patch.object(
@@ -97,6 +101,7 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
 
 
     def test_tor_discovery_runs_even_when_libp2p_bootstrap_is_unavailable(self):
+        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "BOOTSTRAP_UNAVAILABLE",
             "connected_bootstrappers": 0,
@@ -121,6 +126,7 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(report["tor_onion_discovery"], tor)
 
     def test_tor_discovery_runs_even_when_libp2p_raises(self):
+        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         tor = {
             "status": "ONION_DISCOVERY_COMPLETED",
             "feeds_checked": 1,
