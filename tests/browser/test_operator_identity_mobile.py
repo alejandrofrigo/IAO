@@ -240,11 +240,11 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 task_submit = task_panel.get_by_role(
                     "button", name="Enviar búsqueda a la cola local"
                 )
-                task_query.fill("verificar evidencia de auditoría local")
                 page.wait_for_function(
                     "() => !document.querySelector('#iao-task-submit').disabled",
                     timeout=10000,
                 )
+                task_query.fill("verificar evidencia de auditoría local")
                 task_submit.click()
                 page.wait_for_function(
                     """() => {
