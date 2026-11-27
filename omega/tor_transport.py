@@ -10,7 +10,7 @@ import re
 import socket
 from urllib.parse import urlsplit
 
-_ONION_V3 = re.compile(r"^[a-z2-7]{56}\\.onion$", re.IGNORECASE)
+_ONION_V3 = re.compile(r"^[a-z2-7]{56}\.onion$", re.IGNORECASE)
 _FED_PATH = "/fed/v1/message"
 
 
@@ -82,11 +82,11 @@ def open_tor_socket(
     sock = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
     try:
         sock.settimeout(timeout)
-        sock.sendall(b"\\x05\\x01\\x00")
-        if _recv_exact(sock, 2) != b"\\x05\\x00":
+        sock.sendall(b"\x05\x01\x00")
+        if _recv_exact(sock, 2) != b"\x05\x00":
             raise TorTransportError("SOCKS5_NO_AUTH_METHOD_REJECTED")
         request = (
-            b"\\x05\\x01\\x00\\x03"
+            b"\x05\x01\x00\x03"
             + bytes((len(encoded_host),))
             + encoded_host
             + port.to_bytes(2, "big")
