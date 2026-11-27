@@ -183,9 +183,14 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
         raise ValueError("INVALID_TOOL_INPUT") from exc
     if len(input_bytes) > MAX_INPUT_BYTES:
         raise ValueError("TOOL_INPUT_TOO_LARGE")
+    production = os.environ.get("APP_ENV", "").strip().lower() == "production"
     mode = os.environ.get("IAO_TOOL_SANDBOX_MODE")
-    if mode is None:
-        mode = "bubblewrap" if os.environ.get("APP_ENV", "").lower() == "production" else "process"
+    if production:
+        if mode not in (None, "bubblewrap", "required"):
+            raise ToolProcessError("OS_SANDBOX_REQUIRED")
+        mode = "bubblewrap"
+    elif mode is None:
+        mode = "process"
     if mode in {"bubblewrap", "required"}:
         return _run_tool_bubblewrap(run, verify, payload, timeout_seconds)
     if mode != "process":
