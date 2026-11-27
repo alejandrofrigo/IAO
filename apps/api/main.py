@@ -300,7 +300,8 @@ def live() -> dict[str, str]:
 @app.get("/health/ready")
 def ready():
     try:
-        status, payload = _get_service().handle("GET", "/health/ready", {}, b"")
+        service = _get_service()
+        status, payload = service.handle("GET", "/health/ready", {}, b"")
     except Exception:
         return JSONResponse(
             status_code=503,
@@ -312,29 +313,34 @@ def ready():
     if status != 200 or payload.get("status") == "not_ready":
         payload["status"] = "not_ready"
         return JSONResponse(status_code=503, content=payload)
-    # Infrastructure readiness is not equivalent to production readiness:
-    # device-bound command authority and independent federation are still
-    # explicit acceptance gates, even when the database and audit chain work.
+
+    # Local dependency checks are not proof of production readiness.
+    # Worker start flags are not heartbeats or functional health checks.
+    worker_checks = {
+        name: ("start_reported_unverified" if started else "not_started_or_unavailable")
+        for name, started in _federation_worker_status.items()
+    }
+    model_state = (
+        "configured_unverified" if service.model is not None else "not_configured"
+    )
     payload["status"] = "degraded"
+    payload["readiness_scope"] = "local_infrastructure_only"
+    payload["production_ready"] = False
+    payload["checks"] = {
+        **payload.get("checks", {}),
+        "federation_workers": worker_checks,
+        "model_adapter": model_state,
+    }
     payload["production_gates"] = {
         "device_identity_verification": "integrated_read_only",
         "operator_session_association": "api_available_read_only",
         "operator_root_bootstrap": "out_of_band_configurable_not_verified",
         "privileged_device_commands": "disabled",
         "identity_provider": "dev_hmac_not_oidc",
-        "independent_federation": (
-            "discovery_workers_started_unverified"
-            if any(_federation_worker_status.values())
-            else "not_started_or_unavailable"
-        ),
-        "model_provider": (
-            "configured_unverified"
-            if _get_service().model is not None
-            else "not_configured"
-        ),
+        "independent_federation": "not_verified",
+        "model_provider": model_state,
     }
     return JSONResponse(status_code=200, content=payload)
-
 
 @app.post("/v1/device/enroll")
 async def device_enroll(request: Request):
