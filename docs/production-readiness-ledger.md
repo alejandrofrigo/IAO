@@ -31,4 +31,15 @@ Only a green `deterministic-gates` job plus the full repository CI on the same c
 - PR #17 production-gates run #3: compile and browser syntax passed on Python 3.12 and 3.13; deterministic tests passed on both (86 passed each).
 - The run failed only at Ruff because `omega/server.py` assigned a lambda to `state_supplier` (E731).
 - Follow-up commit `367b96785cd283b1781866c02fea9570330e5872` replaces that lambda with an equivalent local function; behavior is unchanged.
-- The corrected commit has not yet completed CI. Do not mark the production gate green until the rerun succeeds on that exact commit.
+- The corrected commit passed production-gates run #5 on both Python versions; see the evidence record below.
+
+## Corrected commit validation (2026-11-27)
+
+Commit `367b96785cd283b1781866c02fea9570330e5872`:
+- IAO Production Gates run #5: **success**, Python 3.12 and 3.13; compile, browser syntax, deterministic API/identity/federation tests and Ruff all passed.
+- IAO quality gate run #1590: **success**.
+- IAO CI run #1590: **success**, full test suite on Python 3.12 and 3.13.
+- Container build qualification run #1258: **success**, API contract tests, image build and liveness verification passed; image was not published.
+- Mobile browser integration run #633: **success**, mobile Chromium identity flow passed.
+- Earlier production-gates run #3 failed only on Ruff E731; the failure was corrected in `367b967`. The 86 deterministic tests passed on each Python version in run #3.
+- These checks validate the commit above. Any subsequent source or workflow change must be validated again on its own resulting commit.
