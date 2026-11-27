@@ -57,6 +57,12 @@ def _atomic_report(path: Path, payload: dict) -> None:
         raise
 
 
+def tor_discovery_cycle() -> dict:
+    """Run configured onion feeds independently from the libp2p DHT result."""
+    from omega.onion_discovery import run_configured_onion_discovery
+    return run_configured_onion_discovery(state_dir=state_dir())
+
+
 def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
     if not 0 < timeout <= MAX_TIMEOUT:
         raise ValueError("DISCOVERY_TIMEOUT_OUT_OF_RANGE")
@@ -139,10 +145,7 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
     # Tor is an independent discovery transport: a libp2p bootstrap failure
     # must not disable configured onion-feed discovery.
     try:
-        from omega.onion_discovery import run_configured_onion_discovery
-        report["tor_onion_discovery"] = run_configured_onion_discovery(
-            state_dir=state_dir()
-        )
+        report["tor_onion_discovery"] = tor_discovery_cycle()
     except Exception as exc:
         report["tor_onion_discovery"] = {
             "status": "TOR_DISCOVERY_ERROR",
