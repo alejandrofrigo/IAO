@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from omega.audit import GENESIS_HASH, make_event, verify_chain
+from omega.control import InvalidTransition, transition
 
 SCHEMA_VERSION = 3
 
@@ -554,6 +555,20 @@ class Store:
         with self.lock:
             r = self.db.execute("SELECT * FROM task WHERE id=? AND owner=?", (task_id, owner)).fetchone()
         return dict(r) if r else None
+
+    def transition_task_state(self, task_id: str, expected_state: str, new_state: str) -> bool:
+        """Atomically enforce the deterministic state graph with compare-and-swap."""
+        try:
+            transition(expected_state, new_state)
+        except InvalidTransition:
+            raise ValueError("INVALID_TASK_STATE_TRANSITION") from None
+        with self.lock:
+            changed = self.db.execute(
+                "UPDATE task SET state=?, updated_at=? "
+                "WHERE id=? AND state=?",
+                (new_state, now_iso(), task_id, expected_state),
+            ).rowcount
+        return changed == 1
 
     def set_task_state(self, task_id: str, state: str, result: dict[str, Any] | None = None) -> None:
         with self.lock:
