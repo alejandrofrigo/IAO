@@ -1333,6 +1333,7 @@ class OperatorIdentityAuthority:
         self, subject: Any, session_token: Any, device_id: Any,
         capability: Any, policy_version: Any, *, purpose: str = "GRANT",
         grant_id: Any = None, ttl_seconds: int = 90,
+        grant_ttl_seconds: int = 900,
     ) -> dict[str, Any]:
         grantable = {"knowledge.search"}
         if purpose not in {"GRANT", "REVOKE"}:
@@ -1351,6 +1352,8 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_ID")
         if purpose == "GRANT" and grant_id is not None:
             raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_ID")
+        if isinstance(grant_ttl_seconds, bool) or not isinstance(grant_ttl_seconds, int) or not 60 <= grant_ttl_seconds <= 900:
+            raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_TTL")
         subject_digest = self._session_subject_digest(subject)
         session_digest = self._session_credential_digest(session_token)
         if not self.verify_authenticated_session(subject, session_token):
@@ -1400,6 +1403,7 @@ class OperatorIdentityAuthority:
                     "capability": capability,
                     "device_id": device_id,
                     "expires_at": expires_at,
+                    "grant_expires_at": int(now + grant_ttl_seconds) if purpose == "GRANT" else None,
                     "grant_id": grant_id,
                     "identity_tag": hashlib.sha256(root["identity_id"].encode("ascii")).hexdigest(),
                     "key_version": root["key_version"],
@@ -1434,6 +1438,7 @@ class OperatorIdentityAuthority:
             "challenge": handle,
             "signing_payload": base64.urlsafe_b64encode(payload).decode("ascii").rstrip("="),
             "expires_at": expires_at,
+            "grant_expires_at": payload_obj["grant_expires_at"],
             "key_version": root["key_version"],
             "capability": capability,
             "purpose": purpose,
@@ -1460,7 +1465,6 @@ class OperatorIdentityAuthority:
         subject_digest = self._session_subject_digest(subject)
         session_digest = self._session_credential_digest(session_token)
         now = time.time()
-        grant_expires = int(now + grant_ttl_seconds)
         new_grant_id = uuid.uuid4().hex
         with self.lock, self._database() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -1515,7 +1519,7 @@ class OperatorIdentityAuthority:
                     root_key.verify(root_signature, ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
                     device_key.verify(
                         device_signature,
-                        b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + payload,
+                        b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + payload,
                         ec.ECDSA(hashes.SHA256()),
                     )
                 except (InvalidSignature, ValueError, TypeError):
@@ -1528,6 +1532,12 @@ class OperatorIdentityAuthority:
                 if changed != 1:
                     raise OperatorIdentityError("CAPABILITY_CHALLENGE_REPLAYED", 409)
                 if row["purpose"] == "GRANT":
+                    grant_expires = obj.get("grant_expires_at")
+                    if (
+                        isinstance(grant_expires, bool) or not isinstance(grant_expires, int)
+                        or not now < grant_expires <= now + 900
+                    ):
+                        raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_EXPIRY")
                     db.execute(
                         """INSERT INTO operator_capability_grants
                         (grant_id,identity_id,subject_digest,session_digest,device_id,
@@ -1608,12 +1618,14 @@ class OperatorIdentityAuthority:
                 """SELECT g.capability FROM operator_capability_grants g
                 JOIN operator_identities i ON i.identity_id=g.identity_id
                 JOIN primary_device_bindings p ON p.identity_id=i.identity_id
+                JOIN operator_session_bindings s ON s.identity_id=i.identity_id
                 WHERE i.status='ACTIVE' AND g.subject_digest=? AND g.session_digest=?
+                AND s.subject_digest=? AND s.session_digest=?
                 AND g.device_id=? AND p.device_id=? AND g.key_version=i.key_version
                 AND p.key_version=i.key_version AND g.policy_version=?
                 AND g.revoked_at IS NULL AND g.expires_at>?""",
-                (subject_digest, session_digest, device_id, device_id,
-                 policy_version, time.time()),
+                (subject_digest, session_digest, subject_digest, session_digest,
+                 device_id, device_id, policy_version, time.time()),
             ).fetchall()
         return frozenset(row["capability"] for row in rows)
 
