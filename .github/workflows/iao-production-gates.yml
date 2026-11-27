@@ -49,7 +49,8 @@ jobs:
             tests/test_device_authority.py \
             tests/test_task_queue.py \
             tests/test_service.py \
-            tests/test_llm_router.py
+            tests/test_llm_router.py \\
+            tests/test_federation_onion_discovery.py
       - name: Lint production gate surface
         run: |
           python -m ruff check \
@@ -64,4 +65,5 @@ jobs:
             tests/test_device_authority.py \
             tests/test_task_queue.py \
             tests/test_service.py \
-            tests/test_llm_router.py
+            tests/test_llm_router.py \\
+            tests/test_federation_onion_discovery.py
