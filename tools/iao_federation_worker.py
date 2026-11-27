@@ -17,6 +17,25 @@ LOG = LOGDIR / "iao-federation-worker.log"
 INTERVAL = 300
 TIMEOUT = 150
 STOP = False
+HEARTBEAT_STATE = Path(
+    os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", str(ROOT / ".state")))
+)
+HEARTBEAT_PATH = HEARTBEAT_STATE / "distributed-intelligence-heartbeat.json"
+
+
+def heartbeat(phase, result=None):
+    from omega.supervision import write_heartbeat
+
+    return write_heartbeat(
+        HEARTBEAT_PATH,
+        component="DISTRIBUTED_INTELLIGENCE",
+        pid=os.getpid(),
+        phase=phase,
+        interval_seconds=INTERVAL,
+        stale_after_seconds=INTERVAL * 3,
+        last_cycle_result=result,
+    )
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -99,10 +118,12 @@ def main():
     signal.signal(signal.SIGINT, stop_handler)
 
     log(f"WORKER_STARTED pid={os.getpid()} interval={INTERVAL}s")
+    heartbeat("starting")
     cycle = 0
     try:
         while not STOP:
             cycle += 1
+            heartbeat("cycle_running")
             log(f"CYCLE={cycle} START")
 
             results = []
@@ -119,6 +140,7 @@ def main():
             ))
 
             save_report(cycle, results)
+            heartbeat("cycle_completed", all(item.get("status") == "PASS" for item in results))
             log(f"CYCLE={cycle} FINISHED")
             for _ in range(INTERVAL):
                 if STOP:
