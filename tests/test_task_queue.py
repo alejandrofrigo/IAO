@@ -270,3 +270,40 @@ class DurableTaskQueueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_queued_task_can_be_cancelled_atomically(self) -> None:
+        self._queue_one()
+        self.assertEqual(self.store.request_task_cancel("task-1", "owner-a"), "CANCELLED")
+        row = self.store.get_task("task-1", "owner-a")
+        self.assertEqual(row["state"], "CANCELLED")
+        self.assertIsNone(row["lease_owner"])
+        self.assertEqual(self.store.request_task_cancel("task-1", "owner-a"), "TERMINAL")
+
+    def test_running_task_cancellation_is_cooperative_and_owner_scoped(self) -> None:
+        self._queue_one()
+        claimed = self.store.claim_next_task("worker-a", lease_seconds=300)
+        self.assertIsNotNone(claimed)
+        self.assertEqual(self.store.request_task_cancel("task-1", "other-owner"), "NOT_FOUND")
+        self.assertEqual(self.store.request_task_cancel("task-1", "owner-a"), "REQUESTED")
+        self.assertTrue(self.store.task_cancel_requested(
+            "task-1", "worker-a", claimed["lease_generation"]
+        ))
+        self.assertFalse(self.store.update_claimed_task(
+            "task-1", "worker-a", "SUCCEEDED", {"result": "late"},
+            release=True, lease_generation=claimed["lease_generation"],
+        ))
+        self.assertTrue(self.store.update_claimed_task(
+            "task-1", "worker-a", "CANCELLED", {"decision": "CANCELLED"},
+            release=True, lease_generation=claimed["lease_generation"],
+        ))
+
+    def test_cancel_requested_on_expired_lease_cannot_be_observed_by_stale_worker(self) -> None:
+        self._queue_one()
+        claimed = self.store.claim_next_task("worker-a", lease_seconds=1,
+            now="2000-01-01T00:00:00+00:00")
+        self.assertIsNotNone(claimed)
+        self.assertEqual(self.store.request_task_cancel("task-1", "owner-a"), "REQUESTED")
+        self.assertFalse(self.store.task_cancel_requested(
+            "task-1", "worker-a", claimed["lease_generation"]
+        ))
