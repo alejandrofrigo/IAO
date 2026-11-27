@@ -158,6 +158,13 @@ class OmegaService:
                 )
             ):
                 raise ApiError(401, "OPERATOR_SESSION_REVOKED")
+            try:
+                active_scopes = self.operator_identity_authority.active_capabilities_for_session(
+                    p.subject, h[7:], policy_version=POLICY_VERSION,
+                )
+            except OperatorIdentityError:
+                raise ApiError(403, "CAPABILITY_AUTHORITY_UNAVAILABLE") from None
+            p = Principal(p.subject, frozenset(active_scopes))
         now = self.clock()
         with self._rl:
             q = self._hits[p.subject]
@@ -725,6 +732,97 @@ class OmegaService:
                 raise ApiError(401, "INVALID_AGENT_SIGNATURE") from None
 
         pr = self._auth(headers)
+        if p.startswith("/v1/operator/capability-grant/"):
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            if not pr.subject.startswith("operator:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+            token = self._verified_bearer_token(headers)
+            try:
+                if method == "POST" and p == "/v1/operator/capability-grant/challenge":
+                    data = self._json(body)
+                    result = self.operator_identity_authority.create_capability_challenge(
+                        pr.subject, token, data.get("device_id"),
+                        data.get("capability"), POLICY_VERSION,
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_CHALLENGE_ISSUED",
+                        "capability_grant", capability=result["capability"],
+                        purpose=result["purpose"],
+                    )
+                    return 200, result
+                if method == "POST" and p == "/v1/operator/capability-grant/complete":
+                    data = self._json(body)
+                    def signature_bytes(name: str) -> bytes:
+                        value = data.get(name)
+                        if not isinstance(value, str) or not 80 <= len(value) <= 120:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE")
+                        try:
+                            return base64.b64decode(
+                                value + "=" * (-len(value) % 4),
+                                altchars=b"-_", validate=True,
+                            )
+                        except binascii.Error:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE") from None
+                    result = self.operator_identity_authority.complete_capability_challenge(
+                        pr.subject, token, data.get("challenge"),
+                        signature_bytes("root_signature"),
+                        signature_bytes("device_signature"),
+                        policy_version=POLICY_VERSION,
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_GRANTED",
+                        "capability_grant", capability=result["capability"],
+                        expires_at=result.get("expires_at"),
+                    )
+                    return 200, result
+                if method == "POST" and p == "/v1/operator/capability-grant/revoke/challenge":
+                    data = self._json(body)
+                    result = self.operator_identity_authority.create_capability_challenge(
+                        pr.subject, token, data.get("device_id"),
+                        data.get("capability"), POLICY_VERSION,
+                        purpose="REVOKE", grant_id=data.get("grant_id"),
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_REVOCATION_CHALLENGE_ISSUED",
+                        "capability_grant", capability=result["capability"],
+                    )
+                    return 200, result
+                if method == "POST" and p == "/v1/operator/capability-grant/revoke/complete":
+                    data = self._json(body)
+                    def revoke_signature_bytes(name: str) -> bytes:
+                        value = data.get(name)
+                        if not isinstance(value, str) or not 80 <= len(value) <= 120:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE")
+                        try:
+                            return base64.b64decode(
+                                value + "=" * (-len(value) % 4),
+                                altchars=b"-_", validate=True,
+                            )
+                        except binascii.Error:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE") from None
+                    result = self.operator_identity_authority.complete_capability_challenge(
+                        pr.subject, token, data.get("challenge"),
+                        revoke_signature_bytes("root_signature"),
+                        revoke_signature_bytes("device_signature"),
+                        policy_version=POLICY_VERSION,
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_REVOKED",
+                        "capability_grant", capability=result["capability"],
+                    )
+                    return 200, result
+                if method == "GET" and p == "/v1/operator/capability-grant/status":
+                    grants = self.operator_identity_authority.list_capability_grants_for_session(
+                        pr.subject, token, policy_version=POLICY_VERSION,
+                    )
+                    active = sorted(self.operator_identity_authority.active_capabilities_for_session(
+                        pr.subject, token, policy_version=POLICY_VERSION,
+                    ))
+                    return 200, {"grants": grants, "active_capabilities": active}
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            raise ApiError(404, "NOT_FOUND")
         if p.startswith("/v1/agent/"):
             if self.agent_authority is None or self.operator_identity_authority is None:
                 raise ApiError(503, "AGENT_AUTHORITY_UNAVAILABLE")
