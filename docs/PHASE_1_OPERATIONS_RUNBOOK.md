@@ -85,7 +85,7 @@ Comprobaciones locales seguras (cada bloque queda aislado en un subshell y no ci
 ```
 
 - `--status` lee el último informe y heartbeat; no inicia ni detiene procesos.
-- `--once` ejecuta un ciclo acotado de descubrimiento libp2p y feeds onion configurados. Si Tor SOCKS no está disponible, el descubrimiento onion falla cerrado; no se resuelve `.onion` por DNS local.
+- `--once` ejecuta un ciclo acotado. Los feeds onion configurados usan Tor SOCKS. El DHT/libp2p directo está deshabilitado por defecto (`IAO_P2P_ALLOW_DIRECT` ausente); habilitarlo expondría la IP de red del operador a bootstrap peers. Solo el smoke test efímero de CI activa esa variable. Si Tor SOCKS no está disponible, el descubrimiento onion falla cerrado; no se resuelve `.onion` por DNS local.
 - El supervisor valida `NODE_NETWORK` con heartbeat atómico ligado al PID y `/proc/<pid>/stat`. Un PID vivo sin heartbeat fresco no se declara sano.
 - Los peers libp2p y onion se almacenan como candidatos no verificados en registros privados 0700/0600. La asimilación no implica identidad, conectividad, confianza, enrolamiento ni permisos.
 - `omega.p2p_presence.verify_presence` valida una afirmación Ed25519 ligada a nonce y lease; su resultado declara explícitamente `SIGNED_ASSERTION_ONLY` y no permite enrolamiento.
