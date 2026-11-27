@@ -32,8 +32,11 @@ def _start_task_worker(service) -> bool:
     with _task_worker_lock:
         if _task_worker_thread is not None and _task_worker_thread.is_alive():
             return True
-        lease_seconds = int(os.environ.get("IAO_TASK_WORKER_LEASE_SECONDS", "60"))
-        poll_seconds = float(os.environ.get("IAO_TASK_WORKER_POLL_SECONDS", "1"))
+        try:
+            lease_seconds = int(os.environ.get("IAO_TASK_WORKER_LEASE_SECONDS", "60"))
+            poll_seconds = float(os.environ.get("IAO_TASK_WORKER_POLL_SECONDS", "1"))
+        except (TypeError, ValueError):
+            raise RuntimeError("TASK_WORKER_SETTINGS_INVALID") from None
         if not 15 <= lease_seconds <= 300 or not 0.1 <= poll_seconds <= 30:
             raise RuntimeError("TASK_WORKER_SETTINGS_OUT_OF_RANGE")
         from omega.task_worker import TaskWorker
