@@ -66,6 +66,9 @@ def test_operational_log_hashes_unknown_strings_and_untrusted_string_lists():
         "event": "NODE_CANDIDATE_DISCOVERED",
         "repository": "owner/private-repository-marker",
         "origin": "https://private-host.example/private-path-marker",
+        "email": "person@example.invalid",
+        "ip_address": 3221226037,
+        "authorization": "private-authorization-marker",
         "annotations": ["private-list-marker", "another-private-value"],
         "capabilities": ["knowledge.search"],
         "status": "192.0.2.55",
@@ -75,12 +78,17 @@ def test_operational_log_hashes_unknown_strings_and_untrusted_string_lists():
     assert safe["event"] == "NODE_CANDIDATE_DISCOVERED"
     assert safe["capabilities"] == ["knowledge.search"]
     assert safe["repository_digest"].startswith("sha256:")
-    assert safe["origin_digest"].startswith("sha256:")
+    assert safe["origin"] == "[REDACTED]"
+    assert safe["email"] == "[REDACTED]"
+    assert safe["ip_address"] == "[REDACTED]"
+    assert safe["authorization"] == "[REDACTED]"
     assert safe["annotations_digest"].startswith("sha256:")
     assert safe["status_digest"].startswith("sha256:")
     assert safe["state_digest"].startswith("sha256:")
     assert "192.0.2.55" not in str(safe)
     assert "private-state-marker" not in str(safe)
+    assert "person@example.invalid" not in str(safe)
+    assert "private-authorization-marker" not in str(safe)
     assert "repository" not in safe
     assert "origin" not in safe
     assert "annotations" not in safe
