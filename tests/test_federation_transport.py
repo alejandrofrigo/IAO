@@ -284,6 +284,10 @@ def test_fetch_onion_json_uses_configured_socks_and_bounds_response(monkeypatch)
     assert transport.fetch_onion_json(f"http://{host}/feed") == {"peers": []}
     assert calls[0] == (host, 80, 15.0, "127.0.0.1", 9050)
     assert calls[1][0:2] == ("GET", "/feed")
+    assert calls[2] == ("closed",)
+    assert transport.fetch_onion_json(f"http://{host}:8443/feed") == {"peers": []}
+    assert calls[3] == (host, 8443, 15.0, "127.0.0.1", 9050)
+    assert calls[4][0:2] == ("GET", "/feed")
     assert calls[-1] == ("closed",)
 
 
