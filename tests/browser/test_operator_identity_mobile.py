@@ -127,6 +127,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                     "Conectado como visitante. Solo chat; sin mando ni tareas en cola.",
                     exact=False,
                 ).wait_for(timeout=15000)
+                assert page.locator("#iao-task-submit").is_disabled()
                 panel = page.locator("#iao-operator-identity-panel")
                 associate = panel.get_by_role("button", name="Asociar sesión autenticada")
                 bind = panel.get_by_role("button", name="Vincular dispositivo primario")
@@ -276,6 +277,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                     "Conectado como visitante. Solo chat; sin mando ni tareas en cola.",
                     exact=False,
                 ).wait_for(timeout=15000)
+                assert page.locator("#iao-task-submit").is_disabled()
                 after_reload = page.evaluate(
                     """async () => {
                       const rootDb = await new Promise((resolve, reject) => {
