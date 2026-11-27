@@ -200,3 +200,21 @@ def test_heartbeat_and_lock_readers_reject_symlink_paths(tmp_path):
     lock_link = tmp_path / "lock-link"
     lock_link.symlink_to(real_lock)
     assert read_lock_owner(lock_link) is None
+
+def test_coordinator_lock_creation_rejects_symlink_substitution(tmp_path, monkeypatch):
+    state = tmp_path / "private-state"
+    state.mkdir(mode=0o700)
+    target = tmp_path / "unrelated-file"
+    target.write_text("do-not-overwrite", encoding="utf-8")
+    lock = state / "coordinator.lock"
+    lock.symlink_to(target)
+    monkeypatch.setattr(coordinator, "STATE", state)
+    monkeypatch.setattr(coordinator, "LOCK", lock)
+
+    try:
+        coordinator.acquire_lock()
+    except RuntimeError as exc:
+        assert str(exc) == "COORDINATOR_LOCK_UNAVAILABLE"
+    else:
+        raise AssertionError("symlinked coordinator lock was accepted")
+    assert target.read_text(encoding="utf-8") == "do-not-overwrite"
