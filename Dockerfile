@@ -7,7 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOST=0.0.0.0 \
     PORT=8080 \
     IAO_STATE_DIR=/var/lib/iao \
-    IAO_CORPUS_DIR=/app/knowledge
+    IAO_CORPUS_DIR=/app/knowledge \
+    APP_ENV=production
 
 WORKDIR /app
 
