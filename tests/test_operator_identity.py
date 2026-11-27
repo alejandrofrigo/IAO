@@ -1,5 +1,6 @@
 """Tests for the isolated durable operator root-key registry."""
 import base64
+import hashlib
 import time
 
 import pytest
@@ -1448,4 +1449,155 @@ def test_recovery_rolls_back_identity_when_device_authority_fails_before_commit(
         identity["identity_id"], b"new-root-active",
         sign(new_root, b"new-root-active"), expected_key_version=2,
     )
+
+def _capability_session(tmp_path):
+    root_private, root_public = keypair()
+    device_private, device_public = keypair()
+    authority = OperatorIdentityAuthority(
+        tmp_path / "capability-identity.sqlite3",
+        "capability-bootstrap-" + "b" * 40,
+        bootstrap_expires_at=time.time() + 600,
+        subject_digest_key=hashlib.sha256(b"capability-session-digest-key").digest(),
+    )
+    identity = authority.bootstrap(
+        "capability-bootstrap-" + "b" * 40, root_public,
+    )
+    _, binding_payload = authority.device_binding_payload(
+        device_public, key_version=1,
+    )
+    authority.bind_primary_device(
+        identity["identity_id"], device_public, sign(root_private, binding_payload),
+        expected_key_version=1,
+    )
+    login = authority.create_operator_login_challenge()
+    login_payload = base64.urlsafe_b64decode(
+        login["signing_payload"] + "=" * (-len(login["signing_payload"]) % 4)
+    )
+    device_login_signature = device_private.sign(
+        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + login_payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    session = authority.complete_operator_login(
+        login["challenge"], sign(root_private, login_payload),
+        device_login_signature, "capability-test-token-key", ttl_seconds=900,
+    )
+    device_der = serialization.load_pem_public_key(device_public.encode("ascii")).public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    device_id = hashlib.sha256(device_der).hexdigest()
+    return (
+        authority, identity["identity_id"], "operator:" + identity["identity_id"],
+        session["access_token"], root_private, device_private, device_id,
+    )
+
+
+def _signed_capability_payload(challenge, root_private, device_private):
+    payload = base64.urlsafe_b64decode(
+        challenge["signing_payload"] + "=" * (-len(challenge["signing_payload"]) % 4)
+    )
+    root_signature = sign(root_private, payload)
+    device_signature = device_private.sign(
+        b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    return root_signature, device_signature
+
+
+def test_capability_grant_requires_both_signatures_and_can_be_revoked(tmp_path):
+    authority, identity_id, subject, token, root, device, device_id = _capability_session(tmp_path)
+    policy = "policy-v1:test"
+    challenge = authority.create_capability_challenge(
+        subject, token, device_id, "knowledge.search", policy,
+    )
+    root_sig, device_sig = _signed_capability_payload(challenge, root, device)
+    granted = authority.complete_capability_challenge(
+        subject, token, challenge["challenge"], root_sig, device_sig,
+        policy_version=policy,
+    )
+    assert granted["authority"] == "OPERATOR_CAPABILITY_GRANTED"
+    assert granted["capability"] == "knowledge.search"
+    assert authority.active_capabilities_for_session(
+        subject, token, policy_version=policy,
+    ) == frozenset({"knowledge.search"})
+    assert authority.active_capabilities_for_session_digest(
+        subject, authority.session_credential_digest(token), device_id,
+        policy_version=policy,
+    ) == frozenset({"knowledge.search"})
+
+    revoke = authority.create_capability_challenge(
+        subject, token, device_id, "knowledge.search", policy,
+        purpose="REVOKE", grant_id=granted["grant_id"],
+    )
+    revoke_root, revoke_device = _signed_capability_payload(revoke, root, device)
+    result = authority.complete_capability_challenge(
+        subject, token, revoke["challenge"], revoke_root, revoke_device,
+        policy_version=policy,
+    )
+    assert result["authority"] == "OPERATOR_CAPABILITY_REVOKED"
+    assert authority.active_capabilities_for_session(
+        subject, token, policy_version=policy,
+    ) == frozenset()
+    with pytest.raises(OperatorIdentityError, match="INVALID_CAPABILITY_CHALLENGE"):
+        authority.complete_capability_challenge(
+            subject, token, revoke["challenge"], revoke_root, revoke_device,
+            policy_version=policy,
+        )
+
+
+def test_capability_grant_rejects_ungrantable_scope_and_stale_session(tmp_path):
+    authority, identity_id, subject, token, root, device, device_id = _capability_session(tmp_path)
+    policy = "policy-v1:test"
+    with pytest.raises(OperatorIdentityError, match="CAPABILITY_NOT_GRANTABLE"):
+        authority.create_capability_challenge(
+            subject, token, device_id, "shell.execute", policy,
+        )
+    challenge = authority.create_capability_challenge(
+        subject, token, device_id, "knowledge.search", policy,
+    )
+    root_sig, device_sig = _signed_capability_payload(challenge, root, device)
+
+    login = authority.create_operator_login_challenge()
+    login_payload = base64.urlsafe_b64decode(
+        login["signing_payload"] + "=" * (-len(login["signing_payload"]) % 4)
+    )
+    new_device_sig = device.sign(
+        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + login_payload,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    new_session = authority.complete_operator_login(
+        login["challenge"], sign(root, login_payload), new_device_sig,
+        "capability-test-token-key", ttl_seconds=900,
+    )
+    with pytest.raises(OperatorIdentityError, match="CAPABILITY_AUTHORITY_CHANGED"):
+        authority.complete_capability_challenge(
+            subject, token, challenge["challenge"], root_sig, device_sig,
+            policy_version=policy,
+        )
+    assert authority.active_capabilities_for_session(
+        subject, new_session["access_token"], policy_version=policy,
+    ) == frozenset()
+
+
+def test_capability_grant_is_invalidated_by_policy_change_and_bad_signature(tmp_path):
+    authority, identity_id, subject, token, root, device, device_id = _capability_session(tmp_path)
+    policy = "policy-v1:test"
+    challenge = authority.create_capability_challenge(
+        subject, token, device_id, "knowledge.search", policy,
+    )
+    root_sig, device_sig = _signed_capability_payload(challenge, root, device)
+    with pytest.raises(OperatorIdentityError, match="CAPABILITY_AUTHORITY_CHANGED"):
+        authority.complete_capability_challenge(
+            subject, token, challenge["challenge"], root_sig, device_sig,
+            policy_version="policy-v1:changed",
+        )
+    challenge = authority.create_capability_challenge(
+        subject, token, device_id, "knowledge.search", policy,
+    )
+    _, device_sig = _signed_capability_payload(challenge, root, device)
+    with pytest.raises(OperatorIdentityError, match="INVALID_CAPABILITY_SIGNATURE"):
+        authority.complete_capability_challenge(
+            subject, token, challenge["challenge"], b"\\x00" * 70, device_sig,
+            policy_version=policy,
+        )
 
