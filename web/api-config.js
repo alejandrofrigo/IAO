@@ -58,6 +58,7 @@
 
   global.IAO_API_BASE = base;
   global.IAO_API_CONFIG_STATUS = base ? "configured" : "blocked";
+  global.IAO_API_CONFIG_ERROR = base ? "" : configError;
   global.iaoApiUrl = function iaoApiUrl(path) {
     if (!base) throw new Error(configError || "API_BASE_NOT_CONFIGURED");
     const rawPath = typeof path === "string" ? path.split("?", 1)[0] : "";
