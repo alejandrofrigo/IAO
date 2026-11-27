@@ -29,7 +29,14 @@ def test_stdlib_server_has_no_default_cross_origin_allowlist():
         captured = StringIO()
         with patch.dict(os.environ, {}, clear=True), redirect_stderr(captured):
             with urllib.request.urlopen(request, timeout=3) as response:
+                payload = __import__("json").loads(response.read())
+                correlation_id = payload["correlation_id"]
                 assert response.status == 200
+                assert len(correlation_id) == 32
+                assert all(char in "0123456789abcdef" for char in correlation_id)
+                assert response.headers["X-Correlation-ID"] == correlation_id
+                assert response.headers["Cache-Control"] == "no-store"
+                assert response.headers["X-Content-Type-Options"] == "nosniff"
                 assert response.headers.get("Access-Control-Allow-Origin") is None
         log = captured.getvalue()
         assert "private-query-marker" not in log
