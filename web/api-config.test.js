@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const source = fs.readFileSync(__dirname + "/api-config.js", "utf8");
+const chatSource = fs.readFileSync(__dirname + "/index.html", "utf8");
 
 function load(overrides = {}, meta = null) {
   const window = {
@@ -78,4 +79,35 @@ test("preserves safe API query strings without changing origin", () => {
     api.iaoApiUrl("/v1/tasks?limit=5"),
     "https://api.example.org/v1/tasks?limit=5",
   );
+});
+
+test("public chat remains disabled and never falls back to relative fetch without API origin", async () => {
+  const elements = Object.fromEntries(
+    ["status", "messages", "message", "connect", "send"].map(id => [
+      id,
+      {
+        id, disabled: false, value: "", textContent: "",
+        listeners: {},
+        addEventListener(name, callback) { this.listeners[name] = callback; },
+        replaceChildren() {}, append() {}, focus() {},
+      },
+    ]),
+  );
+  const window = {
+    IAO_API_CONFIG_STATUS: "blocked",
+    dispatchEvent() {},
+  };
+  let fetchCalls = 0;
+  const document = { querySelector(selector) { return elements[selector.slice(1)]; } };
+  const script = chatSource.match(/<script>\\s*([\\s\\S]*?)<\\/script>/)[1];
+  vm.runInNewContext(script, {
+    window, document, Event: class Event {},
+    fetch() { fetchCalls += 1; throw new Error("unexpected fetch"); },
+  });
+  assert.equal(elements.connect.disabled, true);
+  assert.equal(elements.send.disabled, true);
+  assert.match(elements.status.textContent, /API_BASE_NOT_CONFIGURED/);
+  await elements.connect.listeners.click();
+  assert.equal(fetchCalls, 0);
+  await assert.rejects(window.iaoActivateOperatorSession("placeholder"), /API_BASE_NOT_CONFIGURED/);
 });
