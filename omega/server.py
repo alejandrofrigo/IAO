@@ -421,14 +421,14 @@ def main() -> None:
                     sys.stderr.write(json.dumps({
                         "event": "runtime_worker_stop_timeout",
                         "worker": module_name,
-                    }) + "\\n")
+                    }) + "\n")
             except Exception as exc:
                 workers_stopped = False
                 sys.stderr.write(json.dumps({
                     "event": "runtime_worker_stop_failed",
                     "worker": module_name,
                     "error_type": type(exc).__name__,
-                }) + "\\n")
+                }) + "\n")
         if httpd is not None:
             httpd.server_close()
         if workers_stopped:
@@ -439,7 +439,7 @@ def main() -> None:
         else:
             sys.stderr.write(json.dumps({
                 "event": "runtime_store_close_skipped_workers_active",
-            }) + "\\n")
+            }) + "\n")
         try:
             if pid_path.read_text(encoding="ascii").strip() == str(os.getpid()):
                 pid_path.unlink()
