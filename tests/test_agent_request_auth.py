@@ -96,7 +96,7 @@ def test_revoked_agent_cannot_obtain_challenge(tmp_path):
     authority, key, agent_id = _agent(tmp_path)
     with authority._db() as db:
         db.execute("UPDATE delegated_agents SET revoked_at=? WHERE agent_id=?", (time.time(), agent_id))
-    with pytest.raises(AgentAuthorityError, match="AGENT_NOT_ACTIVE"):
+    with pytest.raises(AgentAuthorityError, match="PRIMARY_DEVICE_NOT_AUTHORIZED"):
         authority.issue_agent_challenge(agent_id)
 
 
