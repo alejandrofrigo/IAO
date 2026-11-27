@@ -95,3 +95,13 @@ def validate_persistent_keys(token_key: str, audit_key: str) -> None:
         raise ValueError("PERSISTENT_KEYS_MUST_BE_DISTINCT")
     if token_key.strip() != token_key or audit_key.strip() != audit_key:
         raise ValueError("PERSISTENT_KEYS_INVALID_FORMAT")
+
+
+
+def session_signing_key(env: dict[str, str] | None = None) -> str:
+    """Return the server token-signing key without a dev-key fallback in production."""
+    values = dict(os.environ) if env is None else env
+    app_env = values.get("APP_ENV", "development")
+    if app_env == "production":
+        return values.get("IAO_SESSION_SIGNING_KEY", "")
+    return values.get("IAO_SESSION_SIGNING_KEY") or values.get("OMEGA_DEV_TOKEN_KEY", "")
