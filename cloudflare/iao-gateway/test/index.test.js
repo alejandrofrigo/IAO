@@ -60,6 +60,32 @@ test("CORS preflight requires an exact configured web origin and allowed API rou
   assert.equal((await blockedHeader.json()).error, "CORS_PREFLIGHT_BLOCKED");
 });
 
+test("allowed browser API responses include the exact CORS origin", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ access_token: "opaque" }), {
+    status: 201,
+    headers: { "content-type": "application/json" },
+  });
+  try {
+    const response = await worker.fetch(new Request("https://gateway.test/v1/public/session", {
+      method: "POST",
+      headers: {
+        origin: "https://chat.example.net",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    }), {
+      IAO_API_ORIGIN: "https://api.example.net",
+      IAO_WEB_ORIGINS: "https://chat.example.net",
+    });
+    assert.equal(response.status, 201);
+    assert.equal(response.headers.get("access-control-allow-origin"), "https://chat.example.net");
+    assert.equal(response.headers.get("vary"), "Origin");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("API routes fail closed when no fixed origin is configured", async () => {
   const response = await worker.fetch(new Request("https://example.test/v1/tasks", {
     method: "POST",
