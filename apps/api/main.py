@@ -6,6 +6,7 @@ this module never silently creates a replacement audit identity.
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -26,8 +27,13 @@ async def _runtime_lifespan(_app):
             and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
         try:
             _get_service()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Keep liveness available, but never hide a failed configured startup.
+            # Log only the exception class; messages may contain paths or secrets.
+            logging.getLogger("iao.runtime").error(
+                "RUNTIME_START_FAILED error_type=%s",
+                type(exc).__name__,
+            )
     yield
 
 
