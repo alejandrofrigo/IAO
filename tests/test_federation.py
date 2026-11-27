@@ -276,16 +276,39 @@ class PartitionAndHostilePeerTests(FedBase):
     def test_forged_result_signed_by_attacker_rejected(self) -> None:
         evil = Ed25519PrivateKey.generate()
         s = self._hostile(lambda req: _sign(evil, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
-                                                    "in_reply_to": req["nonce"], "result": {"items": [{"fake": 1}]}, "verification": "PASS"}))
+                                                    "in_reply_to": req["nonce"], "capability": "knowledge.search", "result": {"items": [{"fake": 1}]}, "verification": "PASS"}))
         self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual((r["ok"], r["error"]), (False, "BAD_RESPONSE_SIGNATURE"))
+
+    def test_valid_peer_signature_does_not_replace_local_result_verification(self) -> None:
+        hostile = self._hostile(
+            lambda req: _sign(
+                self.b.key,
+                {
+                    "v": 1,
+                    "from": self.b.node_id,
+                    "to": self.a.node_id,
+                    "ts": self.clock(),
+                    "in_reply_to": req["nonce"],
+                    "capability": "knowledge.search",
+                    "result": {"tool": "knowledge.search", "items": [{"fake": True}]},
+                    "verification": "PASS",
+                },
+            )
+        )
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
+        self.assertEqual(
+            (result["ok"], result["error"]),
+            (False, "RESULT_VERIFICATION_FAILED"),
+        )
 
     def test_old_valid_response_replayed_by_man_in_the_middle_rejected(self) -> None:
         good = self.a.send(self.b.node_id, self.sb.url, "knowledge.search", Q)
         self.assertTrue(good["ok"])
         captured = _sign(self.b.key, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
-                                       "in_reply_to": "old-nonce", "result": {"items": []}, "verification": "PASS"})
+                                       "in_reply_to": "old-nonce", "capability": "knowledge.search", "result": {"items": []}, "verification": "PASS"})
         s = self._hostile(lambda req: captured)
         self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
