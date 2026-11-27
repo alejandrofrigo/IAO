@@ -19,7 +19,7 @@ def test_production_secrets_are_private_and_never_overwritten(tmp_path):
     assert "IAO_DEVICE_ENROLLMENT_CODE=" in content
     assert "IAO_OPERATOR_BOOTSTRAP_CODE=" in content
     assert "IAO_OPERATOR_BOOTSTRAP_EXPIRES_AT=1900" in content
-    assert "PUBLIC_BASE_URL=CHANGE_ME_HTTPS_ORIGIN" in content
+    assert "IAO_DOMAIN=CHANGE_ME_DOMAIN" in content
     with pytest.raises(FileExistsError, match="PRODUCTION_ENV_ALREADY_EXISTS"):
         write_production_secrets(target, now=1_001)
 
