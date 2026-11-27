@@ -14,7 +14,10 @@ See [ChatGPT × IAO: collaboration of construction](docs/CHATGPT_IAO_COLLABORATI
 
 La hoja de ruta técnica activa está en [Fase 1 — Núcleo operativo y arquitectura](docs/PHASE_1_CORE_FOUNDATION.md). Cada fase se cierra con 20 objetivos verificables y evidencia; el código presente no se considera capacidad operativa hasta superar sus pruebas.
 
+El [contrato de arquitectura del núcleo](docs/CORE_ARCHITECTURE_CONTRACT.md) fija las responsabilidades de los adaptadores, el servicio, el Store, la identidad, la política, las herramientas y la cola persistente.
+
 ## Status honesty
+
 Dev bearer tokens are NOT OIDC (production start is refused). SQLite is the dev backend; PostgreSQL,
 FastAPI app (apps/api), pydantic contracts, Docker, CI, a real model adapter and all external
 infrastructure (Annex S) are NOT executed in this sandbox (no network / credentials).
