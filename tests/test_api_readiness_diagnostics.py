@@ -2,10 +2,26 @@ import json
 from types import SimpleNamespace
 
 import apps.api.main as api_main
+from starlette.requests import Request
 
 
 def _response_payload(response):
     return json.loads(response.body)
+
+
+def _ready_request():
+    return Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/health/ready",
+        "headers": [],
+        "query_string": b"",
+        "server": ("test", 80),
+        "client": ("test", 123),
+        "scheme": "http",
+        "http_version": "1.1",
+        "root_path": "",
+    })
 
 
 def test_readiness_reports_local_scope_without_claiming_production(monkeypatch):
@@ -20,7 +36,7 @@ def test_readiness_reports_local_scope_without_claiming_production(monkeypatch):
         {"autojoin": True, "discovery": False, "external_network": True},
     )
 
-    response = api_main.ready()
+    response = api_main.ready(_ready_request())
     payload = _response_payload(response)
 
     assert response.status_code == 200
