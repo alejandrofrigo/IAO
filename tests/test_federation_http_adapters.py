@@ -33,6 +33,24 @@ def _forged_message(node):
     return json.dumps(_sign(attacker_key, envelope)).encode("utf-8")
 
 
+def _duplicate_message(node):
+    enrolled_peer = Node(node.store, node.registry)
+    node.enroll(
+        enrolled_peer.contract_for_self(["knowledge.search"]),
+        granted_capabilities=["knowledge.search"],
+    )
+    envelope = {
+        "v": 1,
+        "from": enrolled_peer.node_id,
+        "to": node.node_id,
+        "ts": time.time(),
+        "nonce": "federation-duplicate-member-0001",
+        "capability": "knowledge.search",
+        "body": {"query": "audit chain"},
+    }
+    signed = json.dumps(_sign(enrolled_peer.key, envelope), separators=(",", ":"))
+    return (signed[:-1] + ',"nonce":"federation-duplicate-member-0002"}').encode("utf-8")
+
 def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tmp_path):
     client = configured_client(monkeypatch, tmp_path)
     service = main._get_service()
@@ -47,6 +65,12 @@ def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tm
         )
         assert response.status_code == 403
         assert response.json()["error"] == "BAD_SIGNATURE"
+        duplicate_response = client.post(
+            "/fed/v1/message", content=_duplicate_message(node),
+            headers={"Content-Type": "application/json"},
+        )
+        assert duplicate_response.status_code == 400
+        assert duplicate_response.json()["error"] == "MALFORMED"
         assert any(
             event["event_type"] == "FED_REQUEST"
             and event["details"].get("reason") == "BAD_SIGNATURE"
@@ -90,6 +114,18 @@ def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path, monkey
             payload = json.loads(response.read())
             assert response.code == 403
             assert payload["error"] == "BAD_SIGNATURE"
+        duplicate_request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/message",
+            data=_duplicate_message(node), method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(duplicate_request, timeout=3)
+            raise AssertionError("duplicate federation members were accepted")
+        except urllib.error.HTTPError as response:
+            payload = json.loads(response.read())
+            assert response.code == 400
+            assert payload["error"] == "MALFORMED"
         assert any(
             event["event_type"] == "FED_REQUEST"
             and event["details"].get("reason") == "BAD_SIGNATURE"
