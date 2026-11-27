@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from omega.audit import canonical_json
 from omega.federation import node_id_of
+from omega.federation_transport import FederationTransportError, _parse_onion_url
 
 PROTOCOL = "iao-p2p-presence"
 VERSION = 1
@@ -89,9 +90,11 @@ def verify_presence(
     ):
         return fail("INVALID_LIBP2P_PEER_ID_CLAIM")
     if onion_endpoint is not None:
-        if (not isinstance(onion_endpoint, str) or len(onion_endpoint) > 512
-                or ".onion" not in onion_endpoint.lower()
-                or not onion_endpoint.startswith("http://")):
+        if not isinstance(onion_endpoint, str) or len(onion_endpoint) > 512:
+            return fail("INVALID_ONION_ENDPOINT_CLAIM")
+        try:
+            _parse_onion_url(onion_endpoint)
+        except (FederationTransportError, TypeError, ValueError):
             return fail("INVALID_ONION_ENDPOINT_CLAIM")
     if peer_id is None and onion_endpoint is None:
         return fail("PRESENCE_HAS_NO_EXTERNAL_ENDPOINT")
