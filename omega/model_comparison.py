@@ -21,11 +21,11 @@ def compare_model_candidates(
     max_candidates: int = 8,
 ) -> dict[str, Any]:
     if (
-        not isinstance(candidates, list)
-        or not 1 <= len(candidates) <= max_candidates
-        or isinstance(max_candidates, bool)
+        isinstance(max_candidates, bool)
         or not isinstance(max_candidates, int)
         or not 1 <= max_candidates <= 8
+        or not isinstance(candidates, list)
+        or not 1 <= len(candidates) <= max_candidates
     ):
         raise ModelComparisonError("INVALID_CANDIDATE_SET")
     seen: set[str] = set()
@@ -70,10 +70,6 @@ def compare_model_candidates(
         hashlib.sha256(item["response"].encode("utf-8")).hexdigest()
         for item in ranked
     }
-    claim_sets = [
-        set(required_claims or []) & set(item["response"].casefold().split())
-        for item in ranked
-    ]
     disagreements = []
     if len(response_hashes) > 1:
         disagreements.append("RESPONSES_DIFFER")
