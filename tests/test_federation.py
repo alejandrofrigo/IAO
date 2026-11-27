@@ -542,5 +542,29 @@ class StrictFederationEnvelopeTests(FedBase):
         self.assertEqual(self.b.answer_challenge(json.dumps(request).encode())[0], 400)
 
 
+class DeepJsonFederationTests(FedBase):
+    def test_deeply_nested_message_is_rejected_as_malformed(self) -> None:
+        nested = b"[" * 1100 + b"0" + b"]" * 1100
+        raw = (
+            b'{"v":1,"from":"' + self.a.node_id.encode()
+            + b'","to":"' + self.b.node_id.encode()
+            + b'","ts":1000000,"nonce":"deep-json-message-nonce-0001",'
+            + b'"capability":"knowledge.search","body":' + nested
+            + b',"sig":"' + b"0" * 88 + b'"}'
+        )
+        status, payload = self.b.handle(raw)
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_deeply_nested_challenge_is_rejected_as_invalid(self) -> None:
+        nested = b"[" * 1100 + b"0" + b"]" * 1100
+        raw = (
+            b'{"v":1,"from":"' + self.a.node_id.encode()
+            + b'","to":"' + self.b.node_id.encode()
+            + b'","nonce":"' + b"a" * 64
+            + b'","ts":1000000,"extra":' + nested + b'}'
+        )
+        self.assertEqual(self.b.answer_challenge(raw)[0], 400)
+
+
 if __name__ == "__main__":
     unittest.main()
