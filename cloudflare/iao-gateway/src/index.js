@@ -157,7 +157,7 @@ async function route(request, env) {
         ? "forwarded_to_IAO_API_authorization_required"
         : "disabled",
       agent_polling: "disabled",
-      agent_status: "signed_read_only_forwarding_only",
+      agent_status: enabled ? "signed_read_only_forwarding_only" : "disabled",
       privileged_commands: "disabled",
       durable_object_queue: "disabled; IAO API task store remains authoritative",
       authority: "existing IAO root, operator session and registered primary device",
