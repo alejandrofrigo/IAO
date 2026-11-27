@@ -68,5 +68,5 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 |---|---|
 | Base de trabajo | Rama `phase-1-core-foundation-20261127`; PR #20 abierta/draft, sin fusión. |
 | Estado Fase 1 | PR #20 abierta/draft; worker lifecycle opt-in y heartbeat integrados; CI del HEAD actualizado pendiente. |
-| Bloqueos heredados | `uv.lock` aún no incorporado; API origin HTTPS aún no configurado; frontend permanece fail-closed; no hay backend público gratuito desplegado; PRs Tor/P2P, Cloudflare y IPFS siguen en reconciliación; objetivos 13–16 y 20 conservan brechas. |
+| Bloqueos heredados | `uv.lock` aún no incorporado; API origin HTTPS aún no configurado; frontend permanece fail-closed; no hay backend público gratuito desplegado; runtime Tor/libp2p/IPFS adaptado a Fase 1 pero pendiente smoke CI y verificación de red real; Cloudflare gateway y recuperación IPFS DAG-JSON siguen en revisión independiente; objetivos 13–16 y 20 conservan brechas. |
 | Estado de Fase 2 | Objetivos 01–10 y 12 implementados en código; 11 y 13–18 parciales con brechas documentadas; 19–20 pendientes. Incluye fencing/renovación, router multi-LLM, contrato de proveedor, evaluación no autoritativa, comparación, manifiesto, grants duales, chat task intake y cancelación cooperativa. CI del HEAD actual pendiente. |
