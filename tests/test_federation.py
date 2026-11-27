@@ -205,7 +205,8 @@ class PolicyTests(FedBase):
 
     def test_capability_not_granted_or_not_readonly(self) -> None:
         for cap in ("danger.write", "shell.execute", "web.fetch", ""):
-            s, p = self.raw(self.env(capability=cap, nonce=("c" + cap).ljust(20, "_")))
+            nonce = ("c" + cap).replace(".", "_").ljust(20, "_")
+            s, p = self.raw(self.env(capability=cap, nonce=nonce))
             self.assertEqual((s, p["error"]), (403, "CAPABILITY_NOT_GRANTED"), cap)
 
     def test_peer_granted_write_capability_still_refused(self) -> None:
