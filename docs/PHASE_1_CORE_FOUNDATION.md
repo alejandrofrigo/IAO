@@ -28,7 +28,7 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 03 | Configuración tipada y validada | Validar entorno, puertos, host, URL pública y adaptadores; rechazar valores inválidos de forma determinista y sin filtrar secretos. | IMPLEMENTADO |
 | 04 | Gestión segura de secretos | Exigir secretos persistentes donde corresponda; no generar identidades silenciosamente en producción ni registrar valores sensibles. | IMPLEMENTADO |
 | 05 | Ciclo de vida de la API | Arranque y parada explícitos, idempotentes y observables; fallos críticos reflejados en readiness sin ocultar excepciones. | IMPLEMENTADO |
-| 06 | Servicio de aplicación único | Una única construcción del servicio y sus autoridades por proceso; inicialización segura y concurrencia controlada. | PENDIENTE |
+| 06 | Servicio de aplicación único | Una única construcción del servicio y sus autoridades por proceso; inicialización segura y concurrencia controlada. | IMPLEMENTADO |
 | 07 | Persistencia y esquema | Definir backend soportado, inicialización/migraciones repetibles, integridad y comportamiento ante corrupción o indisponibilidad. | PENDIENTE |
 | 08 | Auditoría íntegra | Verificar encadenamiento, persistencia de claves, detección de alteración y degradación fail-closed sin exponer datos personales. | PENDIENTE |
 | 09 | Readiness verificable | Separar liveness de readiness; publicar estados y códigos de causa acotados para dependencias y workers. | EN CURSO |
