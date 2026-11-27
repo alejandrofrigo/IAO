@@ -37,3 +37,46 @@ def test_stdlib_server_has_no_default_cross_origin_allowlist():
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=3)
+
+def test_stdlib_cors_preflight_matches_api_mutation_methods_and_rejects_patch():
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(_Service()))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/v1/memory"
+    try:
+        with patch.dict(os.environ, {"IAO_CORS_ORIGINS": "https://app.example"}, clear=True):
+            request = urllib.request.Request(
+                url,
+                method="OPTIONS",
+                headers={
+                    "Origin": "https://app.example",
+                    "Access-Control-Request-Method": "DELETE",
+                    "Access-Control-Request-Headers": "authorization, content-type",
+                },
+            )
+            thread.start()
+            with urllib.request.urlopen(request, timeout=3) as response:
+                assert response.status == 204
+                assert response.headers["Access-Control-Allow-Methods"] == (
+                    "GET, POST, PUT, DELETE, OPTIONS"
+                )
+
+            denied = urllib.request.Request(
+                url,
+                method="OPTIONS",
+                headers={
+                    "Origin": "https://app.example",
+                    "Access-Control-Request-Method": "PATCH",
+                },
+            )
+            try:
+                urllib.request.urlopen(denied, timeout=3)
+                raise AssertionError("PATCH preflight must be denied")
+            except urllib.error.HTTPError as response:
+                assert response.code == 403
+                assert response.headers.get("Access-Control-Allow-Origin") is None
+    finally:
+        if thread.is_alive():
+            httpd.shutdown()
+        httpd.server_close()
+        if thread.is_alive():
+            thread.join(timeout=3)
