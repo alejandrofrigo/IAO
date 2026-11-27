@@ -95,9 +95,16 @@ def test_coordinator_status_requires_lock_and_fresh_heartbeat(tmp_path, monkeypa
     assert "COORDINATOR_STATUS=STOPPED" in capsys.readouterr().out
 
     with lock_path.open("a+", encoding="utf-8") as stream:
-        stream.write(str(os.getpid()))
+        stream.write(str(os.getpid() + 1))
         stream.flush()
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert coordinator.status() == 1
+        assert "COORDINATOR_STATUS=DEGRADED_UNVERIFIED" in capsys.readouterr().out
+
+        stream.seek(0)
+        stream.truncate()
+        stream.write(str(os.getpid()))
+        stream.flush()
         assert coordinator.status() == 0
         assert "COORDINATOR_STATUS=HEALTHY" in capsys.readouterr().out
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
