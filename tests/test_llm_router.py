@@ -195,3 +195,48 @@ def test_route_fails_closed_when_no_provider_meets_cost_or_capability(monkeypatc
                 "max_cost_per_1k_tokens": 1.0,
             },
         )
+
+
+
+def test_route_orders_compatible_providers_by_configured_cost(monkeypatch):
+    expensive = {
+        **provider("expensive", 0),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 1.5,
+    }
+    cheap = {
+        **provider("cheap", 99),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 0.1,
+    }
+    monkeypatch.setattr(router, "providers", lambda: [expensive, cheap])
+    monkeypatch.setattr(router, "health", lambda: {})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    calls = []
+    monkeypatch.setattr(
+        router, "_request",
+        lambda candidate, messages, timeout: (
+            calls.append(candidate["id"]) or "ok", candidate["model"]
+        ),
+    )
+    router.chat_with_metadata([{"role": "user", "content": "test"}])
+    assert calls == ["cheap"]
+
+
+def test_malformed_health_state_does_not_break_provider_routing(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    monkeypatch.setattr(router, "health", lambda: {"alpha": "corrupt"})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    monkeypatch.setattr(router, "_request", lambda *args: ("ok", "alpha-model"))
+    result = router.chat_with_metadata([{"role": "user", "content": "test"}])
+    assert result["reply"] == "ok"
+
+
+def test_invalid_timeout_is_rejected_before_provider_calls(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    with pytest.raises(ValueError, match="INVALID_PROVIDER_TIMEOUT"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}], timeout=float("inf")
+        )
