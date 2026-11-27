@@ -400,10 +400,6 @@ class PartitionAndHostilePeerTests(FedBase):
         self.assertEqual(self.a.send(self.b.node_id, self.sb.url, "knowledge.search", Q)["error"], "UNKNOWN_PEER")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PersistentPeerStoreTests(FedBase):
     def test_peer_survives_node_restart(self) -> None:
         from omega.federation import Node
@@ -544,3 +540,7 @@ class StrictFederationEnvelopeTests(FedBase):
         request["ts"] = self.clock()
         request["v"] = 1.0
         self.assertEqual(self.b.answer_challenge(json.dumps(request).encode())[0], 400)
+
+
+if __name__ == "__main__":
+    unittest.main()
