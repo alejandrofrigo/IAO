@@ -21,6 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from omega.config import validate_persistent_keys
 from omega.service import MAX_BODY
 
+class _PersistentRuntimeUnavailable(RuntimeError):
+    """Expected fail-closed error for missing or invalid persistent credentials."""
+
+
 @asynccontextmanager
 async def _runtime_lifespan(_app):
     # Start persistent service and network workers during configured production boot.
@@ -281,7 +285,7 @@ def _get_service():
                 try:
                     validate_persistent_keys(token_key, audit_key)
                 except ValueError:
-                    raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED") from None
+                    raise _PersistentRuntimeUnavailable("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED") from None
                 from omega.server import build_service
 
                 state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
@@ -569,7 +573,7 @@ async def _device_service_route(request: Request, path: str):
         headers = {key.lower(): value for key, value in request.headers.items()}
         status, payload = service.handle("POST", path, headers, body)
         return _service_response(status, payload)
-    except RuntimeError:
+    except _PersistentRuntimeUnavailable:
         return _service_response(
             503, {"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex}
         )
@@ -605,7 +609,7 @@ async def api_v1(path: str, request: Request):
             body,
         )
         return _service_response(status, payload)
-    except RuntimeError:
+    except _PersistentRuntimeUnavailable:
         return _service_response(
             503,
             {"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
