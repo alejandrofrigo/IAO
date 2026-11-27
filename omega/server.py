@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from omega.env_loader import load_env_files
-from omega.config import load_settings
+from omega.config import load_settings, validate_persistent_keys
 from omega.service import MAX_BODY, OmegaService
 from omega.device_authority import DeviceAuthority
 from omega.operator_identity import OperatorIdentityAuthority
@@ -22,19 +22,28 @@ from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolRegistry, ToolSpec
 
 
-def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: object) -> OmegaService:
-    state_dir.mkdir(parents=True, exist_ok=True)
+def _load_persistent_audit_key() -> str:
     audit_key_env = os.environ.get("AUDIT_HMAC_KEY", "")
     if audit_key_env:
-        audit_key = audit_key_env.encode()
-    else:
-        key_path = Path.home() / ".config" / "iao" / "audit-hmac-key"
-        if not key_path.is_file():
-            raise RuntimeError("Persistent audit key is missing")
-        audit_key = key_path.read_text().strip().encode()
-        if len(audit_key) < 32:
-            raise RuntimeError("Persistent audit key is invalid")
-    store = Store(state_dir / "omega.db", audit_key=audit_key)
+        return audit_key_env
+    key_path = Path.home() / ".config" / "iao" / "audit-hmac-key"
+    if not key_path.is_file():
+        raise RuntimeError("PERSISTENT_AUDIT_KEY_MISSING")
+    try:
+        return key_path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        raise RuntimeError("PERSISTENT_AUDIT_KEY_UNREADABLE") from None
+
+
+def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: object) -> OmegaService:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    audit_key = _load_persistent_audit_key()
+    try:
+        validate_persistent_keys(token_key, audit_key)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
+    audit_key_bytes = audit_key.encode("utf-8")
+    store = Store(state_dir / "omega.db", audit_key=audit_key_bytes)
     corpus = KnowledgeCorpus(corpus_dir)
     reg = ToolRegistry()
     reg.register(ToolSpec("knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
@@ -359,8 +368,10 @@ def main() -> None:
     if s.app_env == "production":
         sys.exit("BLOCKED_EXTERNAL: dev token auth is not allowed in production; configure OIDC")
     key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
-    if len(key) < 16:
-        sys.exit("OMEGA_DEV_TOKEN_KEY (>=16 chars) required")
+    try:
+        validate_persistent_keys(key, _load_persistent_audit_key())
+    except (RuntimeError, ValueError):
+        sys.exit("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
     state = Path(os.environ.get("OMEGA_STATE_DIR", ".state"))
     svc = build_service(
         state, key, Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
