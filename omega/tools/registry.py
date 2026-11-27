@@ -11,6 +11,84 @@ from typing import Any
 # tool has an isolated execution and cancellation contract.
 QUEUED_TOOL_ALLOWLIST = frozenset({"knowledge.search"})
 
+_SCHEMA_TYPES = {"object", "array", "string", "integer", "number", "boolean"}
+_SCHEMA_KEYS = {
+    "type", "properties", "required", "additionalProperties", "items",
+    "enum", "minLength", "maxLength", "minimum", "maximum",
+}
+
+
+def _validate_schema(schema: Any, *, depth: int = 0) -> None:
+    """Validate a deliberately small JSON Schema subset; reject unknown keywords."""
+    if depth > 8 or not isinstance(schema, dict) or set(schema) - _SCHEMA_KEYS:
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    kind = schema.get("type")
+    if kind not in _SCHEMA_TYPES:
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    if "enum" in schema:
+        enum = schema["enum"]
+        if not isinstance(enum, list) or not 1 <= len(enum) <= 100:
+            raise ValueError("INVALID_TOOL_SCHEMA")
+        try:
+            encoded = json.dumps(enum, allow_nan=False, sort_keys=True)
+        except (TypeError, ValueError):
+            raise ValueError("INVALID_TOOL_SCHEMA") from None
+        if len(encoded.encode("utf-8")) > 4096:
+            raise ValueError("INVALID_TOOL_SCHEMA")
+    for field in ("minLength", "maxLength"):
+        if field in schema and (
+            isinstance(schema[field], bool)
+            or not isinstance(schema[field], int)
+            or not 0 <= schema[field] <= 1_000_000
+        ):
+            raise ValueError("INVALID_TOOL_SCHEMA")
+    if (
+        "minLength" in schema and "maxLength" in schema
+        and schema["minLength"] > schema["maxLength"]
+    ):
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    for field in ("minimum", "maximum"):
+        value = schema.get(field)
+        if field in schema and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise ValueError("INVALID_TOOL_SCHEMA")
+    if (
+        "minimum" in schema and "maximum" in schema
+        and schema["minimum"] > schema["maximum"]
+    ):
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    if kind == "object":
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        additional = schema.get("additionalProperties", True)
+        if (
+            not isinstance(properties, dict)
+            or len(properties) > 128
+            or any(not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key) for key in properties)
+            or not isinstance(required, list)
+            or len(required) != len(set(required))
+            or any(not isinstance(key, str) or key not in properties for key in required)
+            or not isinstance(additional, bool)
+        ):
+            raise ValueError("INVALID_TOOL_SCHEMA")
+        for child in properties.values():
+            _validate_schema(child, depth=depth + 1)
+    elif "properties" in schema or "required" in schema or "additionalProperties" in schema:
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    if kind == "array":
+        if "items" not in schema:
+            raise ValueError("INVALID_TOOL_SCHEMA")
+        _validate_schema(schema["items"], depth=depth + 1)
+    elif "items" in schema:
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    if kind not in {"string"} and ({"minLength", "maxLength"} & set(schema)):
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    if kind not in {"integer", "number"} and ({"minimum", "maximum"} & set(schema)):
+        raise ValueError("INVALID_TOOL_SCHEMA")
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -61,6 +139,8 @@ class ToolRegistry:
         ):
             raise ValueError("INVALID_TOOL_MANIFEST")
         try:
+            if spec.input_schema:
+                _validate_schema(spec.input_schema)
             schema_json = json.dumps(spec.input_schema, allow_nan=False, sort_keys=True)
         except (TypeError, ValueError):
             raise ValueError("INVALID_TOOL_SCHEMA") from None
