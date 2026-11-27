@@ -231,3 +231,23 @@ def test_supervisor_treats_permission_denied_process_probe_as_alive(monkeypatch)
 
     monkeypatch.setattr(supervisor.os, "kill", missing)
     assert supervisor.process_alive(12345) is False
+
+def test_supervisor_rejects_boolean_and_invalid_pids_before_probing(monkeypatch):
+    def must_not_probe(*_args):
+        raise AssertionError("invalid PID reached os.kill")
+
+    monkeypatch.setattr(supervisor.os, "kill", must_not_probe)
+    assert supervisor.process_alive(True) is False
+    assert supervisor.process_alive(1) is False
+    assert supervisor.process_alive("1") is False
+    assert supervisor.process_alive(1.5) is False
+
+
+def test_supervisor_only_signals_its_own_session_process_group(monkeypatch):
+    monkeypatch.setattr(supervisor, "process_alive", lambda _pid: True)
+    monkeypatch.setattr(supervisor.os, "getpgid", lambda _pid: 999)
+    assert supervisor.managed_process_group(999) is False
+    monkeypatch.setattr(supervisor.os, "getpgid", lambda _pid: 999)
+    assert supervisor.managed_process_group(999) is False
+    monkeypatch.setattr(supervisor.os, "getpgid", lambda _pid: 999)
+    assert supervisor.managed_process_group(999) is False
