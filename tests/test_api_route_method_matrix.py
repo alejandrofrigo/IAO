@@ -131,3 +131,46 @@ def test_stdlib_v1_known_route_method_matrix(tmp_path):
         httpd.server_close()
         thread.join(timeout=3)
         service.store.close()
+
+PROTECTED_ROUTES = [
+    ("GET", "/v1/operator/session/status", b""),
+    ("POST", "/v1/operator/session/challenge", b"{}"),
+    ("POST", "/v1/operator/session/bind", b"{}"),
+    ("POST", "/v1/operator/identity/revoke", b"{}"),
+    ("POST", "/v1/operator/device/bind", b"{}"),
+    ("POST", "/v1/device/enroll", b"{}"),
+    ("POST", "/v1/device/challenge", b"{}"),
+    ("POST", "/v1/device/command", b"{}"),
+    ("POST", "/v1/federation/internet", b"{}"),
+    ("GET", "/v1/me", b""),
+    ("POST", "/v1/conversations", b"{}"),
+    ("GET", "/v1/conversations/00000000-0000-0000-0000-000000000001/messages", b""),
+    ("POST", "/v1/chat", b"{}"),
+    ("POST", "/v1/tasks", b"{}"),
+    ("GET", "/v1/tasks/00000000-0000-0000-0000-000000000002", b""),
+    ("GET", "/v1/audit/events", b""),
+    ("GET", "/v1/memory", b""),
+    ("GET", "/v1/memory/export", b""),
+    ("PUT", "/v1/memory/00000000-0000-0000-0000-000000000003", b'{"value":"x"}'),
+    ("DELETE", "/v1/memory/00000000-0000-0000-0000-000000000003", b""),
+]
+
+
+def test_every_privileged_v1_route_requires_a_bearer(tmp_path, monkeypatch):
+    audit_key = "route-auth-audit-key-" + "y" * 40
+    token_key = "route-auth-token-key-" + "x" * 40
+    monkeypatch.setenv("AUDIT_HMAC_KEY", audit_key)
+    service = build_service(
+        tmp_path / "state",
+        token_key,
+        os.path.abspath("docs/corpus"),
+        identity_rollback_anchor_enabled=False,
+    )
+    try:
+        for method, path, body in PROTECTED_ROUTES:
+            status, payload = service.handle(method, path, {}, body)
+            assert status == 401, (method, path, status, payload)
+            assert payload["error"] == "AUTH_REQUIRED", (method, path, payload)
+            assert len(payload["correlation_id"]) == 32
+    finally:
+        service.store.close()
