@@ -59,6 +59,33 @@ El diagnóstico posterior (2026-11-26) mostró Tor sin SOCKS accesible en 127.0.
 8. Añadir pruebas de reinicio, pérdida de Tor, pérdida de peers y recuperación.
 9. Publicar evidencia reproducible. Solo declarar NORMAL si todas las comprobaciones críticas pasan.
 
+## Implementación incremental en la rama de construcción
+
+La rama incluye ahora un primer ciclo ejecutable de descubrimiento P2P:
+
+- `omega/libp2p_discovery.py` implementa un cliente Kademlia outbound-only, con bootstrappers públicos, identidad libp2p persistente y almacenamiento privado de inventario.
+- `tools/iao_libp2p_discovery.py` añade ejecución puntual, supervisor continuo, lock de instancia única e informe atómico. El ciclo registra errores de dependencias/red como errores; no los presenta como descubrimiento exitoso.
+- `tools/iao_five_motor_supervisor.py` incorpora el worker como configuración predeterminada de `NODE_NETWORK` cuando el operador aún no ha definido ese motor. Una configuración existente del operador se conserva sin sobrescritura.
+- Las pruebas verifican persistencia, estados de fallo, límites de intervalo, rechazo de symlinks y que la integración no autoriza peers ni ejecuta código.
+
+Activación en un nodo IAO con Python 3.12/3.13:
+
+```bash
+python -m pip install -e ".[p2p,tor]"
+python tools/iao_libp2p_discovery.py --status
+python tools/iao_libp2p_discovery.py --once
+```
+
+Para ejecución continua aislada del supervisor:
+
+```bash
+python tools/iao_libp2p_discovery.py --run
+```
+
+Para que el supervisor de cinco motores lo gestione, el motor `NODE_NETWORK` debe estar habilitado en `.state/iao-five-motors/adapters.json`. La migración automática solo añade una configuración ausente; respeta cualquier configuración ya definida.
+
+**Alcance actual:** descubrimiento de peers visibles en la tabla de enrutamiento Kademlia y registro local como `DISCOVERED_UNVERIFIED`. No es un escáner global, no garantiza descubrir todos los nodos, no abre un listener, no publica un servicio onion, no transfiere tareas ni concede permisos. La integración de intercambio de contenido/CID, presencia autenticada, transporte onion de mensajes y ejecución de workers se desarrolla en fases posteriores. La capa onion existente de `omega/federation_transport.py` es explícita y requiere PySocks y un SOCKS Tor local accesible.
+
 ## Criterios de aceptación
 
 - Tor bootstrap 100% y SOCKS accesible desde el proceso IAO.
