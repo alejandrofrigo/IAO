@@ -105,9 +105,24 @@ def read_children():
     return load_json(CHILD_FILE, {})
 
 
+def _valid_pid(pid):
+    if isinstance(pid, bool):
+        return None
+    if isinstance(pid, int):
+        value = pid
+    elif isinstance(pid, str) and pid.isascii() and pid.isdigit():
+        value = int(pid)
+    else:
+        return None
+    return value if value > 1 else None
+
+
 def process_alive(pid):
+    value = _valid_pid(pid)
+    if value is None:
+        return False
     try:
-        os.kill(int(pid), 0)
+        os.kill(value, 0)
         return True
     except ProcessLookupError:
         return False
@@ -115,6 +130,17 @@ def process_alive(pid):
         # The process exists, but the current user cannot signal it.
         return True
     except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def managed_process_group(pid):
+    """Only signal process groups created with start_new_session=True."""
+    value = _valid_pid(pid)
+    if value is None or not process_alive(value):
+        return False
+    try:
+        return os.getpgid(value) == value
+    except (OSError, ProcessLookupError, PermissionError, ValueError):
         return False
 
 
@@ -174,10 +200,12 @@ def stop_children():
 
     for name, child in children.items():
         pid = child.get("pid")
-        if not pid or not process_alive(pid):
+        if not managed_process_group(pid):
+            if pid and process_alive(pid):
+                event("stop_skipped_unverified_process_group", motor=name)
             continue
         try:
-            os.killpg(int(pid), signal.SIGTERM)
+            os.killpg(_valid_pid(pid), signal.SIGTERM)
             event("stop_requested", motor=name, pid=pid)
         except ProcessLookupError:
             pass
@@ -195,9 +223,9 @@ def stop_children():
 
     for name, child in children.items():
         pid = child.get("pid")
-        if pid and process_alive(pid):
+        if pid and managed_process_group(pid):
             try:
-                os.killpg(int(pid), signal.SIGKILL)
+                os.killpg(_valid_pid(pid), signal.SIGKILL)
                 event("forced_stop", motor=name, pid=pid)
             except ProcessLookupError:
                 pass
