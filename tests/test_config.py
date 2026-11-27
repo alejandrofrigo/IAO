@@ -1,6 +1,6 @@
 import unittest
 
-from omega.config import load_settings
+from omega.config import load_settings, validate_persistent_keys
 
 
 class ConfigTests(unittest.TestCase):
@@ -64,3 +64,24 @@ class ConfigTests(unittest.TestCase):
         })
         rendered = repr(settings)
         self.assertNotIn("internal.example", rendered)
+
+class PersistentKeyTests(unittest.TestCase):
+    def test_accepts_distinct_persistent_keys(self) -> None:
+        validate_persistent_keys("a" * 32, "b" * 32)
+
+    def test_rejects_short_auth_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "PERSISTENT_AUTH_KEY_INVALID"):
+            validate_persistent_keys("short", "b" * 32)
+
+    def test_rejects_short_audit_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "PERSISTENT_AUDIT_KEY_INVALID"):
+            validate_persistent_keys("a" * 32, "short")
+
+    def test_rejects_reused_keys(self) -> None:
+        key = "same-key-material-" * 2
+        with self.assertRaisesRegex(ValueError, "PERSISTENT_KEYS_MUST_BE_DISTINCT"):
+            validate_persistent_keys(key, key)
+
+    def test_rejects_whitespace_padded_keys(self) -> None:
+        with self.assertRaisesRegex(ValueError, "PERSISTENT_KEYS_INVALID_FORMAT"):
+            validate_persistent_keys(" " + "a" * 32, "b" * 32)
