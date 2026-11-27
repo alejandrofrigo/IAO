@@ -20,6 +20,7 @@ test("contract states the API proxy boundary and keeps agent polling disabled", 
   const body = await response.json();
   assert.equal(body.mode, "fixed_origin_api_proxy");
   assert.equal(body.agent_polling, "disabled");
+  assert.equal(body.agent_status, "signed_read_only_forwarding_only");
   assert.equal(body.privileged_commands, "disabled");
 });
 
@@ -72,7 +73,60 @@ test("fixed-origin proxy forwards signed API request without cookies or client i
   }
 });
 
-test("invalid origins, redirects, oversized bodies and agent routes fail closed", async () => {
+test("signed read-only agent challenge and status routes forward exact protocol headers", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url: String(url), init });
+    return new Response(JSON.stringify({ accepted: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const origin = "https://api.example.net";
+    const agentId = "a".repeat(32);
+    const challengeBody = JSON.stringify({ agent_id: agentId });
+    const challenge = await worker.fetch(new Request("https://gateway.test/v1/agent/challenge", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "never-forward" },
+      body: challengeBody,
+    }), { IAO_API_ORIGIN: origin });
+    assert.equal(challenge.status, 200);
+
+    const status = await worker.fetch(new Request("https://gateway.test/v1/agent/status", {
+      method: "GET",
+      headers: {
+        "x-iao-agent-id": agentId,
+        "x-iao-agent-nonce": "b".repeat(64),
+        "x-iao-agent-timestamp": "1795750000",
+        "x-iao-agent-signature": "c".repeat(88),
+        cookie: "never-forward",
+        "x-forwarded-for": "198.51.100.8",
+      },
+    }), { IAO_API_ORIGIN: origin });
+    assert.equal(status.status, 200);
+
+    assert.equal(captured.length, 2);
+    assert.equal(captured[0].url, origin + "/v1/agent/challenge");
+    assert.equal(captured[0].init.method, "POST");
+    assert.equal(new TextDecoder().decode(captured[0].init.body), challengeBody);
+    assert.equal(captured[0].init.headers.get("cookie"), null);
+
+    assert.equal(captured[1].url, origin + "/v1/agent/status");
+    assert.equal(captured[1].init.method, "GET");
+    assert.equal(captured[1].init.headers.get("x-iao-agent-id"), agentId);
+    assert.equal(captured[1].init.headers.get("x-iao-agent-nonce"), "b".repeat(64));
+    assert.equal(captured[1].init.headers.get("x-iao-agent-timestamp"), "1795750000");
+    assert.equal(captured[1].init.headers.get("x-iao-agent-signature"), "c".repeat(88));
+    assert.equal(captured[1].init.headers.get("cookie"), null);
+    assert.equal(captured[1].init.headers.get("x-forwarded-for"), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("invalid origins, redirects, oversized bodies and unsupported agent routes fail closed", async () => {
   for (const origin of [
     "http://api.example.net",
     "https://localhost",
@@ -90,7 +144,7 @@ test("invalid origins, redirects, oversized bodies and agent routes fail closed"
     IAO_API_ORIGIN: "https://api.example.net",
   });
   assert.equal(agent.status, 503);
-  assert.equal((await agent.json()).error, "AGENT_PROTOCOL_NOT_INTEGRATED");
+  assert.equal((await agent.json()).error, "AGENT_TASK_PROTOCOL_DISABLED");
 
   const unknown = await worker.fetch(new Request("https://gateway.test/admin"), disabledEnv);
   assert.equal(unknown.status, 404);
