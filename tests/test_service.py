@@ -1205,6 +1205,57 @@ class QueuedTaskApiTests(Base):
             "x-iao-device-proof": json.dumps(proof, separators=(",", ":")),
         }
 
+
+    def cancellation_headers(self, task_id: str) -> dict[str, str]:
+        path = f"/v1/tasks/{task_id}/cancel"
+        body = b""
+        challenge = self.svc.device_authority.challenge(
+            self.device_id, owner_subject="operator:queued-user"
+        )
+        timestamp = int(time.time())
+        digest = hashlib.sha256(body).hexdigest()
+        signed = "\\n".join(
+            ["POST", path, str(timestamp), challenge["nonce"], digest]
+        ).encode()
+        signature = self.device_private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
+        proof = {
+            "device_id": self.device_id,
+            "nonce": challenge["nonce"],
+            "timestamp": timestamp,
+            "request_digest": digest,
+            "signature": base64.urlsafe_b64encode(signature).decode().rstrip("="),
+        }
+        return {
+            "authorization": "Bearer " + self.operator_token,
+            "x-iao-device-proof": json.dumps(proof, separators=(",", ":")),
+        }
+
+
+    def test_queued_task_cancellation_requires_bound_device_proof(self) -> None:
+        payload = {
+            "goal": "search local knowledge",
+            "capability": "knowledge.search",
+            "input": {"query": "cancel me"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(status, 202)
+        task_id = accepted["task_id"]
+
+        denied = self.call("POST", f"/v1/tasks/{task_id}/cancel", self.tok("operator:queued-user"))
+        self.assertEqual((denied[0], denied[1]["error"]), (401, "DEVICE_PROOF_REQUIRED"))
+
+        cancelled = self.call(
+            "POST", f"/v1/tasks/{task_id}/cancel",
+            self.cancellation_headers(task_id),
+        )
+        self.assertEqual(cancelled[0], 200)
+        self.assertEqual(cancelled[1]["state"], "CANCELLED")
+        self.assertEqual(cancelled[1]["cancellation"], "CANCELLED")
+        self.assertIsNone(self.svc.store.claim_next_task("after-cancel-worker"))
+
     def test_queued_task_returns_202_and_worker_completes_it(self) -> None:
         payload = {
             "goal": "search the local knowledge corpus",
