@@ -246,6 +246,7 @@ def status():
         else:
             print("  COMMAND_CONFIGURED=NO")
 
+    print(f"\nTASK_WORKER: {task_worker_status()}")
     print("\nPADGE y autonomía continua comparten el coordinador.")
     print("Solo un heartbeat reciente del ciclo valida el coordinador; los demás PID quedan sin verificar.")
     print(f"EVENTS={EVENTS}")
