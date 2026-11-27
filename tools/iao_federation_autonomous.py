@@ -269,8 +269,13 @@ def run_discovery():
         if isinstance(onion_feed, str):
             candidates.extend(discover_onion_feed(onion_feed))
     dht = sources.get("dht", {})
-    if dht.get("enabled"):
+    direct_p2p_allowed = os.environ.get(
+        "IAO_P2P_ALLOW_DIRECT", ""
+    ).strip().lower() == "true"
+    if dht.get("enabled") and direct_p2p_allowed:
         candidates.extend(discover_dht(dht.get("ipfs_api", "http://127.0.0.1:5001")))
+    elif dht.get("enabled"):
+        audit("dht_discovery_skipped_privacy_policy", direct_connections=False)
     bridges = sources.get("bridges", {})
     nostr_cfg = bridges.get("nostr", {})
     if nostr_cfg.get("enabled"):
@@ -641,7 +646,19 @@ def run_cycle(dry_run=False, discover=True):
         discovery_summary["candidates_discovered"] = len(candidates)
         try:
             from omega.libp2p_discovery import discover_sync
-            p2p = discover_sync()
+            direct_p2p_allowed = os.environ.get(
+                "IAO_P2P_ALLOW_DIRECT", ""
+            ).strip().lower() == "true"
+            p2p = (
+                discover_sync()
+                if direct_p2p_allowed
+                else {
+                    "status": "DIRECT_P2P_DISABLED_PRIVACY_POLICY",
+                    "connected_bootstrappers": 0,
+                    "routing_peers_discovered": 0,
+                    "persisted_new_peers": 0,
+                }
+            )
             discovery_summary["libp2p"] = {
                 "status": p2p.get("status"),
                 "connected_bootstrappers": p2p.get("connected_bootstrappers", 0),
