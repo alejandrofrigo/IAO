@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from apps.api import main
 from omega.server import build_service, make_handler
+from starlette.middleware.cors import CORSMiddleware
 from tests.test_production_api import configured_client
 
 
@@ -63,6 +64,19 @@ def _assert_405(status, payload, headers, allowed):
     assert len(payload["correlation_id"]) == 32
     assert headers["Cache-Control"] == "no-store"
     assert headers["X-Content-Type-Options"] == "nosniff"
+
+
+
+
+
+def test_fastapi_cors_method_allowlist_matches_stdlib():
+    middleware = next(
+        item for item in main.app.user_middleware
+        if item.cls is CORSMiddleware
+    )
+    assert set(middleware.kwargs["allow_methods"]) == {
+        "GET", "POST", "PUT", "DELETE", "OPTIONS",
+    }
 
 
 def test_fastapi_v1_known_route_method_matrix(monkeypatch, tmp_path):
