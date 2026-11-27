@@ -21,9 +21,16 @@ def provider(ident: str, priority: int = 100) -> dict[str, object]:
 def test_failover_records_only_error_class_and_recovers_success(monkeypatch):
     first, second = provider("first", 1), provider("second", 2)
     monkeypatch.setattr(router, "providers", lambda: [first, second])
-    monkeypatch.setattr(router, "health", lambda: {})
+    state = {}
+    monkeypatch.setattr(router, "health", lambda: state)
     saved = []
-    monkeypatch.setattr(router, "_write_json", lambda path, data: saved.append(data.copy()))
+
+    def persist(path, data):
+        state.clear()
+        state.update(data)
+        saved.append(data.copy())
+
+    monkeypatch.setattr(router, "_write_json", persist)
     calls = []
 
     def request(candidate, messages, timeout):
