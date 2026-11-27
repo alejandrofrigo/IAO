@@ -5,10 +5,9 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from threading import Thread
+from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi.testclient import TestClient
-
 from apps.api import main
 from omega.federation import Node, _sign
 from omega.server import make_handler
@@ -59,13 +58,14 @@ def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tm
         main._federation_node = None
 
 
-def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path):
+def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path, monkeypatch):
     from omega.server import build_service
 
+    monkeypatch.setenv("AUDIT_HMAC_KEY", "federation-test-audit-key-" + "y" * 40)
     service = build_service(
         tmp_path / "state",
         "federation-test-token-key-" + "x" * 32,
-        tmp_path / "corpus",
+        Path(__file__).resolve().parents[1] / "docs" / "corpus",
         identity_rollback_anchor_enabled=False,
     )
     node = Node(service.store, service.registry)
