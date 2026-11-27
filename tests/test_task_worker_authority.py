@@ -20,6 +20,7 @@ class _ClaimedTaskStore:
         }
         self.final_state = None
         self.final_result = None
+        self.cancel_requested = False
         self.executions = []
         self.events = []
 
@@ -33,6 +34,9 @@ class _ClaimedTaskStore:
         self.final_state = state
         self.final_result = result
         return True
+
+    def task_cancel_requested(self, task_id, worker_id, lease_generation):
+        return self.cancel_requested
 
     def audit(self, *args, **kwargs):
         self.events.append((args, kwargs))
@@ -211,3 +215,24 @@ def test_worker_fails_closed_when_primary_device_or_session_was_revoked():
     assert denied[0][1]["decision"] == "FAIL_CLOSED"
     assert "session_digest" not in denied[0][1]
     assert "device_id" not in denied[0][1]
+
+
+
+def test_worker_honors_cancel_requested_during_read_only_tool_execution():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True
+    })())
+
+    def cancel_during_execution(run, verify, payload, _timeout):
+        output = run(payload)
+        store.cancel_requested = True
+        return output, verify(output)
+
+    worker.tool_executor = cancel_during_execution
+    assert worker.run_once() is True
+    assert calls == [{"query": "safe test"}]
+    assert store.final_state == "CANCELLED"
+    assert store.final_result == {
+        "decision": "CANCELLED",
+        "reason": "COOPERATIVE_CANCELLATION",
+    }
