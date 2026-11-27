@@ -129,3 +129,28 @@ El ciclo Kademlia incorpora ahora una etapa de asimilación local automática:
 - Las capacidades concedidas permanecen vacías; ejecución remota y autoridad de control permanecen desactivadas.
 
 Esta etapa significa que IAO incorpora automáticamente peers públicos al inventario P2P para seguimiento y fases posteriores. No afirma que cada Peer ID sea una identidad IAO autenticada, que todos los peers de Internet hayan sido enumerados, ni que los peers estén ofreciendo cómputo. La autenticación de identidad IAO, presencia firmada y la vinculación criptográfica entre Peer ID y node_id siguen siendo etapas separadas.
+
+
+## Integración Tor como transporte nativo de NODE_NETWORK
+
+La fase siguiente incorpora Tor como un segundo brazo de descubrimiento ejecutado por el mismo motor de red:
+
+- `omega/onion_discovery.py` consume una lista privada y explícita `onion_feeds` en `.state/iao-federation-sources.json`.
+- Cada feed se obtiene mediante `fetch_onion_json`, SOCKS5 en loopback y resolución remota del nombre onion. Se limita el tamaño de respuesta, timeout, número de feeds y entradas.
+- Solo se aceptan direcciones onion v3 HTTP en los puertos virtuales 80 y 8443. No se hacen peticiones HTTP directas al onion ni resolución DNS local.
+- Los servicios anunciados se incorporan automáticamente a `.state/iao-onion-candidates.json`, separados del inventario HTTPS y del inventario libp2p.
+- Un anuncio de directorio se marca `FEED_ADVERTISED_UNPROBED`; no se presenta como servicio alcanzable. La identidad sigue `UNVERIFIED`, la participación `CANDIDATE_ONLY`, y las capacidades/autoridad/ejecución permanecen desactivadas.
+- `tools/iao_libp2p_discovery.py` ejecuta el ciclo onion de forma independiente: un fallo de bootstrap libp2p no bloquea el descubrimiento Tor, y un fallo Tor no convierte el resultado libp2p en éxito.
+- El supervisor NODE_NETWORK gestiona ambos brazos mediante el mismo proceso persistente, cuando el nodo operador lo active.
+
+Ejemplo de configuración privada (añadir únicamente direcciones reales de feeds onion v3 conocidos y confiables como fuentes de datos, no como identidades confiables):
+
+```json
+{
+  "onion_feeds": [
+    "http://<56-caracteres-base32>.onion:8443/directory.json"
+  ]
+}
+```
+
+No existe un directorio onion global que permita enumerar automáticamente todos los servicios Tor. Sin feeds configurados o una fuente de descubrimiento pública identificable, IAO no puede inventar direcciones onion ni afirmar que ha descubierto la red Tor completa. El acceso Tor requiere además que el SOCKS local esté realmente activo; GitHub no puede encender el daemon Tor del teléfono.
