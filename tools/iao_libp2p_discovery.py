@@ -68,7 +68,17 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
         raise ValueError("DISCOVERY_TIMEOUT_OUT_OF_RANGE")
     started = utc()
     try:
-        result = libp2p_discovery.discover_sync(timeout=timeout)
+        direct_allowed = os.environ.get("IAO_P2P_ALLOW_DIRECT", "").strip().lower() == "true"
+        if direct_allowed:
+            result = libp2p_discovery.discover_sync(timeout=timeout)
+        else:
+            result = {
+                "status": "DIRECT_P2P_DISABLED_PRIVACY_POLICY",
+                "connected_bootstrappers": 0,
+                "routing_peers_discovered": 0,
+                "persisted_new_peers": 0,
+                "peers": [],
+            }
         if not isinstance(result, dict):
             raise RuntimeError("DISCOVERY_RESULT_INVALID")
 
@@ -82,6 +92,7 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
             "DISCOVERY_COMPLETED",
             "BOOTSTRAP_UNAVAILABLE",
             "NO_VALID_BOOTSTRAP_PEERS",
+            "DIRECT_P2P_DISABLED_PRIVACY_POLICY",
         }:
             raise RuntimeError("DISCOVERY_STATUS_INVALID")
         if any(
@@ -108,7 +119,11 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
             assimilation_state = "QUARANTINED_INVENTORY_ONLY"
         else:
             assimilation = {"new": 0, "observed": 0, "total": 0}
-            assimilation_state = "SKIPPED_NO_BOOTSTRAP"
+            assimilation_state = (
+                "SKIPPED_PRIVACY_POLICY"
+                if status == "DIRECT_P2P_DISABLED_PRIVACY_POLICY"
+                else "SKIPPED_NO_BOOTSTRAP"
+            )
 
         report = {
             "schema": 1,
@@ -247,7 +262,11 @@ def run_loop() -> int:
                 )
                 report = cycle()
                 last_completed = time.time()
-                last_result = report.get("status") == "DISCOVERY_COMPLETED"
+                last_result = (
+                    report.get("status") == "DISCOVERY_COMPLETED"
+                    or report.get("tor_onion_discovery", {}).get("status")
+                    == "TOR_DISCOVERY_COMPLETED"
+                )
                 write_worker_heartbeat(
                     "cycle_completed",
                     last_completed=last_completed,
