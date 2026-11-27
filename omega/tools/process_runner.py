@@ -1,7 +1,8 @@
-"""Killable process boundary for queued, explicitly approved read-only tools.
+"""Killable process boundary plus a production-required bubblewrap OS sandbox.
 
-This limits execution time and selected POSIX resources. It is not an OS
-sandbox: filesystem and network isolation must be supplied by deployment.
+Development defaults to a restricted process. APP_ENV=production defaults to
+bubblewrap: read-only root, masked state/home/runtime directories, no network,
+dropped capabilities and POSIX resource limits. Missing sandbox support fails closed.
 """
 from __future__ import annotations
 
@@ -116,6 +117,7 @@ def _run_tool_bubblewrap(
         "--proc", "/proc",
         "--tmpfs", "/tmp",
         "--tmpfs", "/home",
+        "--tmpfs", "/root",
         "--tmpfs", "/var/lib",
         "--tmpfs", "/run",
         "--cap-drop", "ALL",
