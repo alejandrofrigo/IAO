@@ -18,14 +18,23 @@ test("contract states the API proxy boundary and keeps agent polling disabled", 
   const response = await worker.fetch(new Request("https://example.test/v1/gateway/contract"), disabledEnv);
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.mode, "fixed_origin_api_proxy");
+  assert.equal(body.mode, "disabled");
   assert.equal(body.agent_polling, "disabled");
   assert.equal(body.agent_status, "signed_read_only_forwarding_only");
   assert.equal(body.privileged_commands, "disabled");
 });
 
+test("gateway mode remains disabled even when an API origin is present", async () => {
+  const response = await worker.fetch(new Request("https://gateway.test/v1/chat", {
+    method: "POST",
+    body: "{}",
+  }), { IAO_API_ORIGIN: "https://api.example.net" });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, "GATEWAY_DISABLED");
+});
+
 test("CORS preflight requires an exact configured web origin and allowed API route", async () => {
-  const env = { IAO_WEB_ORIGINS: "https://chat.example.net" };
+  const env = { IAO_GATEWAY_MODE: "enabled", IAO_WEB_ORIGINS: "https://chat.example.net" };
   const accepted = await worker.fetch(new Request("https://gateway.test/v1/public/session", {
     method: "OPTIONS",
     headers: {
@@ -75,6 +84,7 @@ test("allowed browser API responses include the exact CORS origin", async () => 
       },
       body: "{}",
     }), {
+      IAO_GATEWAY_MODE: "enabled",
       IAO_API_ORIGIN: "https://api.example.net",
       IAO_WEB_ORIGINS: "https://chat.example.net",
     });
@@ -91,7 +101,7 @@ test("API routes fail closed when no fixed origin is configured", async () => {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ goal: "diagnostic" }),
-  }), disabledEnv);
+  }), { IAO_GATEWAY_MODE: "enabled" });
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error, "IAO_API_ORIGIN_NOT_CONFIGURED");
 });
@@ -120,7 +130,8 @@ test("fixed-origin proxy forwards signed API request without cookies or client i
         "x-forwarded-for": "198.51.100.4",
       },
       body,
-    }), { IAO_API_ORIGIN: "https://api.example.net" });
+    }), { IAO_GATEWAY_MODE: "enabled",
+      IAO_API_ORIGIN: "https://api.example.net" });
     assert.equal(response.status, 202);
     assert.deepEqual(await response.json(), { accepted: true });
     assert.equal(captured.url, "https://api.example.net/v1/tasks?source=chat");
@@ -155,7 +166,8 @@ test("signed read-only agent challenge and status routes forward exact protocol 
       method: "POST",
       headers: { "content-type": "application/json", cookie: "never-forward" },
       body: challengeBody,
-    }), { IAO_API_ORIGIN: origin });
+    }), { IAO_GATEWAY_MODE: "enabled",
+      IAO_API_ORIGIN: origin });
     assert.equal(challenge.status, 200);
 
     const status = await worker.fetch(new Request("https://gateway.test/v1/agent/status", {
@@ -168,7 +180,8 @@ test("signed read-only agent challenge and status routes forward exact protocol 
         cookie: "never-forward",
         "x-forwarded-for": "198.51.100.8",
       },
-    }), { IAO_API_ORIGIN: origin });
+    }), { IAO_GATEWAY_MODE: "enabled",
+      IAO_API_ORIGIN: origin });
     assert.equal(status.status, 200);
 
     assert.equal(captured.length, 2);
@@ -199,13 +212,15 @@ test("invalid origins, redirects, oversized bodies and unsupported agent routes 
     "https://user:pass@api.example.net",
   ]) {
     const response = await worker.fetch(new Request("https://gateway.test/v1/chat", { method: "POST", body: "{}" }), {
+      IAO_GATEWAY_MODE: "enabled",
       IAO_API_ORIGIN: origin,
     });
     assert.equal(response.status, 503, origin);
   }
 
   const agent = await worker.fetch(new Request("https://gateway.test/v1/agent/poll"), {
-    IAO_API_ORIGIN: "https://api.example.net",
+    IAO_GATEWAY_MODE: "enabled",
+      IAO_API_ORIGIN: "https://api.example.net",
   });
   assert.equal(agent.status, 503);
   assert.equal((await agent.json()).error, "AGENT_TASK_PROTOCOL_DISABLED");
@@ -216,7 +231,8 @@ test("invalid origins, redirects, oversized bodies and unsupported agent routes 
   const oversized = await worker.fetch(new Request("https://gateway.test/v1/chat", {
     method: "POST",
     body: "x".repeat(65537),
-  }), { IAO_API_ORIGIN: "https://api.example.net" });
+  }), { IAO_GATEWAY_MODE: "enabled",
+      IAO_API_ORIGIN: "https://api.example.net" });
   assert.equal(oversized.status, 413);
 });
 
@@ -239,14 +255,16 @@ test("unlisted sensitive API routes are not forwarded", async () => {
       const response = await worker.fetch(new Request("https://gateway.test" + path, {
         method,
         ...(method === "POST" ? { body: "{}" } : {}),
-      }), { IAO_API_ORIGIN: "https://api.example.net" });
+      }), { IAO_GATEWAY_MODE: "enabled",
+      IAO_API_ORIGIN: "https://api.example.net" });
       assert.equal(response.status, 404, path);
     }
     const delegation = await worker.fetch(
       new Request("https://gateway.test/v1/agent/delegation", {
         method: "POST", body: "{}",
       }),
-      { IAO_API_ORIGIN: "https://api.example.net" },
+      { IAO_GATEWAY_MODE: "enabled",
+      IAO_API_ORIGIN: "https://api.example.net" },
     );
     assert.equal(delegation.status, 503);
     assert.equal((await delegation.json()).error, "AGENT_TASK_PROTOCOL_DISABLED");
@@ -264,6 +282,7 @@ test("upstream redirects are never followed", async () => {
   });
   try {
     const response = await worker.fetch(new Request("https://gateway.test/v1/chat", { method: "POST", body: "{}" }), {
+      IAO_GATEWAY_MODE: "enabled",
       IAO_API_ORIGIN: "https://api.example.net",
     });
     assert.equal(response.status, 502);
