@@ -87,3 +87,24 @@ def test_service_response_always_supplies_valid_correlation_header():
     assert response.headers["x-correlation-id"] == correlation_id
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_signed_non_decimal_content_length_is_rejected():
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/device/challenge",
+        "headers": [(b"content-length", b"+1")],
+        "query_string": b"",
+        "server": ("test", 80),
+        "client": ("test", 123),
+        "scheme": "http",
+        "http_version": "1.1",
+        "root_path": "",
+    })
+    _body, error = asyncio.run(main._read_bounded_service_body(request))
+    assert error.status_code == 400
+    assert error.body
+    assert error.headers["x-correlation-id"]
+    assert error.headers["cache-control"] == "no-store"
+    assert error.headers["x-content-type-options"] == "nosniff"
