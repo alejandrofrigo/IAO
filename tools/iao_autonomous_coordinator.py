@@ -156,6 +156,58 @@ def status():
 
 
 
+
+def run_expansion_once():
+    """Run external discovery independently of PADGE promotion outcomes."""
+    command = [
+        sys.executable,
+        str(ROOT / "tools" / "iao_federation_autonomy.py"),
+        "--once",
+    ]
+    try:
+        process = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        log("EXPANSION_CYCLE_FAILED", reason="TIMEOUT", timeout_seconds=120)
+        return False
+    except Exception as exc:
+        log("EXPANSION_CYCLE_FAILED", reason=type(exc).__name__)
+        return False
+
+    if process.returncode != 0:
+        log(
+            "EXPANSION_CYCLE_FAILED",
+            reason="NONZERO_EXIT",
+            returncode=process.returncode,
+        )
+        return False
+
+    try:
+        report = json.loads(process.stdout)
+    except (TypeError, ValueError):
+        log("EXPANSION_CYCLE_FAILED", reason="INVALID_REPORT")
+        return False
+
+    discovery = report.get("libp2p_discovery", {})
+    log(
+        "EXPANSION_CYCLE_COMPLETED",
+        libp2p_status=discovery.get("status", "UNKNOWN"),
+        bootstrappers_connected=discovery.get("connected_bootstrappers", 0),
+        peers_discovered=discovery.get("routing_peers_discovered", 0),
+        new_peers_persisted=discovery.get("persisted_new_peers", 0),
+        authorized_feeds=report.get("active_authorized_feeds", 0),
+        new_federation_candidates=report.get("new_candidates", 0),
+        peer_enrollment_performed=False,
+    )
+    return True
+
+
 def run_once():
     events_file = EVENTS
     previous = latest_report()
@@ -166,6 +218,7 @@ def run_once():
     except OSError:
         event_offset = 0
 
+    run_expansion_once()
     log("PADGE_CYCLE_STARTED")
 
     process = subprocess.run(
@@ -274,12 +327,13 @@ def main():
         log("COORDINATOR_LOOP_STARTED", interval=args.interval)
 
         while True:
-            if not run_once():
-                log("COORDINATOR_LOOP_STOPPED",
-                    reason="UNVERIFIED_OR_REJECTED_CYCLE")
-                return 1
-
-            log("NEXT_CYCLE", seconds=args.interval)
+            padge_promoted = run_once()
+            log(
+                "NEXT_CYCLE",
+                seconds=args.interval,
+                padge_promotion_verified=padge_promoted,
+                expansion_runs_independent=True,
+            )
             time.sleep(args.interval)
 
 

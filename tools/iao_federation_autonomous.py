@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
 from omega.federation import Node, verify_identity_challenge
-from omega.federation_transport import fetch_public_json
+from omega.federation_transport import fetch_public_json, fetch_onion_json
 import omega.federation_protocols.native  # noqa: F401
 import omega.federation_protocols.nostr   # noqa: F401
 from omega.federation_protocols import probe_any, get as get_adapter
@@ -117,6 +117,111 @@ def discover_feed(url, timeout=10):
     audit("discovery_feed_ok", peers=len(out))
     return out
 
+
+
+def _validate_onion_peer_url(value):
+    """Accept only v3 onion HTTP service URLs; never resolve them locally."""
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower()
+        return (
+            parsed.scheme == "http"
+            and host.endswith(".onion")
+            and len(host) == 62
+            and all(ch in "abcdefghijklmnopqrstuvwxyz234567" for ch in host[:-6])
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in (None, 80)
+            and parsed.path not in ("", "/")
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def discover_onion_feed(url, timeout=15):
+    """Read a bounded Tor v3 JSON directory; returned peers remain unverified."""
+    try:
+        data = fetch_onion_json(url, timeout=timeout, max_bytes=500_000)
+    except Exception as exc:
+        audit("onion_discovery_feed_failed", error_type=type(exc).__name__)
+        return []
+    if isinstance(data, list):
+        peers = data
+    elif isinstance(data, dict):
+        peers = data.get("peers", [])
+    else:
+        return []
+    if not isinstance(peers, list):
+        return []
+    out = []
+    seen = set()
+    for peer in peers[:500]:
+        if not isinstance(peer, dict):
+            continue
+        endpoint = peer.get("url")
+        if not _validate_onion_peer_url(endpoint) or endpoint in seen:
+            continue
+        peer_id = peer.get("id")
+        if peer_id is not None and (
+            not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 128
+        ):
+            continue
+        seen.add(endpoint)
+        out.append({
+            "url": endpoint,
+            "id": peer_id,
+            "capabilities": [],
+            "source": "onion_feed",
+            "status": "DISCOVERED_UNVERIFIED",
+            "granted_capabilities": [],
+        })
+    audit("onion_discovery_feed_ok", peers=len(out))
+    return out
+
+
+def merge_onion_candidates(candidates):
+    """Persist onion endpoints separately; never treat them as trusted IAO peers."""
+    path = STATE / "iao-onion-candidates.json"
+    data = load(path, {"schema": 1, "candidates": {}})
+    entries = data.get("candidates", {})
+    if not isinstance(entries, dict):
+        entries = {}
+    now = utc()
+    added = 0
+    for candidate in candidates:
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("source") != "onion_feed"
+            or not _validate_onion_peer_url(candidate.get("url"))
+        ):
+            continue
+        endpoint = candidate["url"]
+        candidate_id = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
+        old = entries.get(candidate_id, {})
+        entries[candidate_id] = {
+            "candidate_id": candidate_id,
+            "url": endpoint,
+            "remote_id": candidate.get("id"),
+            "source": "onion_feed",
+            "status": "DISCOVERED_UNVERIFIED",
+            "identity_verified": False,
+            "enrolled": False,
+            "granted_capabilities": [],
+            "first_seen": old.get("first_seen", now),
+            "last_seen": now,
+        }
+        if not old:
+            added += 1
+    ordered = sorted(
+        entries.values(), key=lambda item: item.get("last_seen", ""), reverse=True
+    )[:1000]
+    data["schema"] = 1
+    data["candidates"] = {item["candidate_id"]: item for item in ordered}
+    save(path, data)
+    return added
 
 def _validate_local_ipfs_api(value):
     """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
@@ -237,6 +342,9 @@ def run_discovery():
     for f in sources.get("feeds", []):
         if isinstance(f, str) and f.startswith("https://"):
             candidates.extend(discover_feed(f))
+    for onion_feed in sources.get("onion_feeds", []):
+        if isinstance(onion_feed, str):
+            candidates.extend(discover_onion_feed(onion_feed))
     dht = sources.get("dht", {})
     if dht.get("enabled"):
         candidates.extend(discover_dht(dht.get("ipfs_api", "http://127.0.0.1:5001")))
@@ -507,6 +615,94 @@ def enroll_if_consented(node, protocol, candidate, verified, item, policy):
     audit("peer_enrolled", peer_id=peer_id, capabilities=sorted(requested), mode="AUTONOMOUS")
     return {"status": "ENROLLED", "peer_id": peer_id, "capabilities": sorted(requested)}
 
+
+def _public_candidate_origin(value):
+    """Normalize an advertised IAO origin or message endpoint without widening URL scope."""
+    from urllib.parse import urlsplit
+
+    if not isinstance(value, str) or not 1 <= len(value) <= 2048:
+        return None
+    try:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.path not in ("", "/", "/fed/v1/message")
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        from omega.federation_autonomous import _origin
+        return _origin("https://" + parsed.netloc)
+    except (TypeError, ValueError):
+        return None
+
+
+def run_trusted_public_enrollment(node, items):
+    """Bridge public feed candidates into the pinned-HTTPS signed autojoin path."""
+    from omega.federation_autonomous import run_discovered_cycle
+
+    registry_path = STATE / "iao-public-federation-candidates.json"
+    registry = load(registry_path, {"schema": 1, "candidates": {}})
+    if (
+        not isinstance(registry, dict)
+        or registry.get("schema") != 1
+        or not isinstance(registry.get("candidates"), dict)
+    ):
+        raise RuntimeError("PUBLIC_FEDERATION_REGISTRY_INVALID")
+
+    candidates = registry["candidates"]
+    eligible = 0
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or item.get("source") not in {"signed_directory", "public_feed"}
+            or not isinstance(item.get("url"), str)
+            or not item["url"].startswith("https://")
+        ):
+            continue
+        peer_id = item.get("id")
+        if (
+            not isinstance(peer_id, str)
+            or len(peer_id) != 16
+            or any(ch not in "0123456789abcdef" for ch in peer_id)
+        ):
+            continue
+        origin = _public_candidate_origin(item["url"])
+        if origin is None:
+            continue
+        candidate_id = hashlib.sha256(origin.encode("utf-8")).hexdigest()
+        existing = candidates.get(candidate_id)
+        if isinstance(existing, dict) and existing.get("node_id") != peer_id:
+            existing["status"] = "IDENTITY_CONFLICT"
+            existing["identity_verified"] = False
+            continue
+        if not isinstance(existing, dict):
+            candidates[candidate_id] = {
+                "candidate_id": candidate_id,
+                "origin": origin,
+                "node_id": peer_id,
+                "status": "DISCOVERED_UNVERIFIED",
+                "identity_verified": False,
+                "enrolled": False,
+                "granted_capabilities": [],
+                "source": item.get("source"),
+            }
+        eligible += 1
+
+    if not eligible:
+        return {
+            "status": "NO_ELIGIBLE_PUBLIC_IAO_CANDIDATES",
+            "checked": 0,
+            "enrolled": 0,
+            "failed": 0,
+            "inbound_capabilities_granted": 0,
+        }
+    save(registry_path, registry)
+    return run_discovered_cycle(
+        node, STATE / "federation", registry_path
+    )
+
 def run_cycle(dry_run=False, discover=True):
     policy = load(POLICY, {})
     if not policy.get("enabled"): return {"status": "FEDERATION_DISABLED"}
@@ -516,6 +712,7 @@ def run_cycle(dry_run=False, discover=True):
         candidates = run_discovery()
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
         discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
+        discovery_summary["onion_candidates_added"] = merge_onion_candidates(candidates)
         discovery_summary["candidates_discovered"] = len(candidates)
         try:
             from omega.libp2p_discovery import discover_sync
@@ -535,9 +732,36 @@ def run_cycle(dry_run=False, discover=True):
     items = [n for n in load(NODES, {"nodes": []}).get("nodes", []) if isinstance(n, dict)]
     node = make_node(policy) if not dry_run else None
     results = []
+    if node is not None:
+        try:
+            public_summary = run_trusted_public_enrollment(node, items)
+        except Exception as exc:
+            public_summary = {
+                "status": "TRUSTED_PUBLIC_ENROLLMENT_FAILED",
+                "checked": 0,
+                "enrolled": 0,
+                "failed": 1,
+                "inbound_capabilities_granted": 0,
+                "error_type": type(exc).__name__,
+            }
+            audit("trusted_public_enrollment_failed", error_type=type(exc).__name__)
+        discovery_summary["trusted_public_federation"] = public_summary
+        results.append({
+            "protocol": "iao-federation-public-https",
+            "status": public_summary.get("status"),
+            "checked": public_summary.get("checked", 0),
+            "enrolled_count": public_summary.get("enrolled", 0),
+            "failed_count": public_summary.get("failed", 0),
+            "inbound_capabilities_granted": 0,
+        })
     for item in items:
         addr = item.get("url")
         if not isinstance(addr, str): continue
+        # Los endpoints públicos HTTPS ya pasan por el transporte fijado,
+        # challenge firmado y consentimiento explícito de run_discovered_cycle.
+        # Nunca volver al probe urllib heredado para esos peers.
+        if node is not None and addr.startswith("https://"):
+            continue
         # Rama Nostr: no hace probe HTTPS; usa el bridge directamente
         if item.get("source") == "nostr_bridge" and item.get("nostr_event"):
             from omega.federation_protocols.nostr_bridge import NostrBridge
@@ -584,10 +808,12 @@ def run_cycle(dry_run=False, discover=True):
     report = {"utc": utc(), "policy_mode": policy.get("padge_mode"),
         "discovery": discovery_summary, "total_items": len(items), "results": results,
         "summary": {
-            "enrolled": sum(1 for r in results if r.get("status") == "ENROLLED"),
+            "enrolled": sum(1 for r in results if r.get("status") == "ENROLLED")
+                + discovery_summary.get("trusted_public_federation", {}).get("enrolled", 0),
             "skipped_not_authorized": sum(1 for r in results if r.get("status","").startswith("SKIPPED_NOT_AUTHORIZED")),
             "skipped_handshake": sum(1 for r in results if r.get("status","").startswith("SKIPPED_HANDSHAKE")),
-            "failed": sum(1 for r in results if r.get("status") == "ENROLL_FAILED")}}
+            "failed": sum(1 for r in results if r.get("status") == "ENROLL_FAILED")
+                + discovery_summary.get("trusted_public_federation", {}).get("failed", 0)}}
     if not dry_run:
         save(REPORT, report); audit("autonomous_cycle_completed", **report["summary"])
     return report

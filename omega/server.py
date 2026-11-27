@@ -92,10 +92,11 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
             trust_dir / "identity.key",
         )
         device_authority = kw["device_authority"]
-        state_supplier = lambda: capture_identity_state(
-            operator_identity_authority.database,
-            device_authority.database,  # type: ignore[union-attr]
-        )
+        def state_supplier():
+            return capture_identity_state(
+                operator_identity_authority.database,
+                device_authority.database,  # type: ignore[union-attr]
+            )
         current_state = state_supplier()
         anchor_file = trust_dir / "identity.anchor"
         key_file = trust_dir / "identity.key"
