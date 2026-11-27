@@ -66,6 +66,9 @@ function preflight(request, env, origin) {
   if (!origin) return json(400, { error: "CORS_ORIGIN_REQUIRED" });
   const url = new URL(request.url);
   const method = (request.headers.get("access-control-request-method") || "").toUpperCase();
+  if (url.pathname !== "/v1/gateway/contract" && env?.IAO_GATEWAY_MODE !== "enabled") {
+    return json(503, { error: "GATEWAY_DISABLED" });
+  }
   const routeAllowed = (
     (url.pathname === "/v1/gateway/contract" && method === "GET") ||
     allowedRoute(method, url.pathname)
@@ -111,6 +114,15 @@ async function route(request, env) {
   }
 
   if (request.method === "GET" && url.pathname === "/health/ready") {
+    if (env?.IAO_GATEWAY_MODE !== "enabled") {
+      return json(503, {
+        status: "degraded",
+        service: "iao-gateway",
+        reason: "GATEWAY_DISABLED",
+        privileged_commands: "disabled",
+        agent_polling: "disabled",
+      });
+    }
     const upstream = await proxyApi(request, env);
     if (!upstream.ok) {
       return json(503, {
@@ -137,16 +149,25 @@ async function route(request, env) {
   }
 
   if (request.method === "GET" && url.pathname === "/v1/gateway/contract") {
+    const enabled = env?.IAO_GATEWAY_MODE === "enabled";
     return json(200, {
       protocol: "IAO-CLOUDFLARE-GATEWAY-V1",
-      mode: "fixed_origin_api_proxy",
-      task_submission: "forwarded_to_IAO_API_authorization_required",
+      mode: enabled ? "fixed_origin_api_proxy" : "disabled",
+      task_submission: enabled
+        ? "forwarded_to_IAO_API_authorization_required"
+        : "disabled",
       agent_polling: "disabled",
       agent_status: "signed_read_only_forwarding_only",
       privileged_commands: "disabled",
       durable_object_queue: "disabled; IAO API task store remains authoritative",
       authority: "existing IAO root, operator session and registered primary device",
     });
+  }
+
+  if (url.pathname.startsWith("/v1/") &&
+      url.pathname !== "/v1/gateway/contract" &&
+      env?.IAO_GATEWAY_MODE !== "enabled") {
+    return json(503, { error: "GATEWAY_DISABLED" });
   }
 
   if (url.pathname.startsWith("/v1/agent/")) {
