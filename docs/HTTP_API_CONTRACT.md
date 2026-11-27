@@ -69,4 +69,4 @@ Este documento fija el sobre HTTP común, límites de cuerpo, cabeceras, errores
 | Federación no inicializada | 503 | `FEDERATION_UNAVAILABLE` |
 | Respuesta de error | — | Incluye `correlation_id` y `X-Correlation-ID`, `no-store` y `nosniff` |
 
-Los dos adaptadores deben mantener el mismo contrato para estas rutas. Los errores de infraestructura nunca deben devolver mensajes de excepción, rutas locales ni material de claves.
+Los dos adaptadores deben mantener el mismo contrato para estas rutas. Los errores de infraestructura nunca deben devolver mensajes de excepción, rutas locales ni material de claves. El método HTTP `PATCH` también llega al enrutador de ambos adaptadores y recibe 405 con `Allow` en lugar de un 501 de transporte.
