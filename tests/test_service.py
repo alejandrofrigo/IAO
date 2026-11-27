@@ -1325,9 +1325,16 @@ class QueuedTaskApiTests(Base):
             self.state / "api-device-authority.sqlite3",
             enrollment_code=code,
         )
+
+        class ActiveOperatorSession:
+            def verify_authenticated_session(self, subject, token):
+                return subject == "operator:device-test" and bool(token)
+
+        self.svc.operator_identity_authority = ActiveOperatorSession()
+        operator_headers = self.tok("operator:device-test", ["knowledge.search"])
         with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "0"}):
             denied = self.call(
-                "POST", "/v1/device/enroll", {},
+                "POST", "/v1/device/enroll", operator_headers,
                 {"code": code, "public_key_pem": "invalid"},
             )
         self.assertEqual((denied[0], denied[1]["error"]), (403, "DEVICE_ENROLLMENT_DISABLED"))
