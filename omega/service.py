@@ -1111,6 +1111,24 @@ class OmegaService:
             except ModelError as e:
                 self.store.audit(pr.subject, "CHAT_MODEL_ERROR", cid, code=e.code, input_digest=digest)
                 raise ApiError(e.http_status, e.code) from None
+            from omega.response_evaluator import (
+                ResponseEvaluationError, evaluate_response,
+            )
+            try:
+                response_evaluation = evaluate_response(
+                    reply,
+                    evidence_refs=[
+                        item["sha256"] for item in knowledge_hits
+                        if isinstance(item.get("sha256"), str)
+                    ],
+                )
+            except ResponseEvaluationError:
+                self.store.audit(
+                    pr.subject, "CHAT_MODEL_OUTPUT_REJECTED", cid,
+                    decision="DENY", reason="RESPONSE_CONTRACT_INVALID",
+                    input_digest=digest,
+                )
+                raise ApiError(502, "INVALID_MODEL_RESULT") from None
             self.store.add_message(cid, "USER", msg)
             self.store.add_message(cid, "ASSISTANT", reply)
             self.store.audit(
@@ -1135,6 +1153,9 @@ class OmegaService:
                     model_identity.get("identity_status")
                     if isinstance(model_identity, dict) else "unreported"
                 ),
+                response_evaluation_status=response_evaluation["status"],
+                response_truth_verified=False,
+                response_authoritative=False,
             )
             return 200, {
                 "status": "OK",
@@ -1142,6 +1163,7 @@ class OmegaService:
                 "reply": reply,
                 "authority": "NON_AUTHORITATIVE_MODEL_OUTPUT",
                 "model_identity": model_identity,
+                "evaluation": response_evaluation,
                 "knowledge": {
                     "status": knowledge_status,
                     "sources": knowledge_sources,
