@@ -41,6 +41,9 @@
 | `/v1/tasks/{uuid}` | GET | 405 |
 | `/v1/audit/events` | GET | 405 |
 | `/v1/memory` y subrutas | GET, POST, PUT, DELETE según operación | 405 para métodos fuera de ese conjunto |
+| `/fed/v1/identity`, `contract`, `publication` | GET | 405 con `Allow: GET` |
+| `/fed/v1/handshake`, `message` | POST | 405 con `Allow: POST` |
+| `/fed/v1/{unknown}` | cualquier método admitido | 404 `NOT_FOUND`, sin fallback a autenticación `/v1/*` |
 
 Las rutas de federación `/fed/v1/*` tienen un protocolo y límites propios en cada adaptador; no se consideran intercambiables con las rutas `/v1/*`. Sus respuestas usan `correlation_id` y `X-Correlation-ID`, `Cache-Control: no-store` y `X-Content-Type-Options: nosniff`; los 405 incluyen `Allow` y las rutas federadas desconocidas devuelven 404 sin exigir bearer.
 
