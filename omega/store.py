@@ -74,6 +74,19 @@ class Store:
         if self.path != ":memory:":
             os.chmod(self.path, 0o600)
         self.db.row_factory = sqlite3.Row
+        # Inspect an existing migration ledger before any pragma or DDL that can
+        # modify the database. A newer schema must remain byte-for-byte untouched.
+        migration_table = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='schema_migrations'"
+        ).fetchone()
+        if migration_table is not None:
+            existing_version = self.db.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+            ).fetchone()[0]
+            if existing_version > SCHEMA_VERSION:
+                self.db.close()
+                raise RuntimeError("DATABASE_SCHEMA_VERSION_UNSUPPORTED")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
