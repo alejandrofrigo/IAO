@@ -338,10 +338,14 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self.wfile.write(data)
                 return
             raw_length = self.headers.get("Content-Length")
-            try:
-                n = int(raw_length) if raw_length is not None else 0
-            except ValueError:
+            if self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
                 n = -1
+            else:
+                try:
+                    n = int(raw_length) if raw_length is not None else 0
+                except ValueError:
+                    n = -1
             if n < 0 or n > MAX_BODY:
                 self.close_connection = True
                 body = b""
