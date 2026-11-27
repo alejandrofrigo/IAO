@@ -182,6 +182,8 @@ def test_root_rotation_invalidates_existing_delegation(tmp_path):
     assert status["agents"][0]["active"] is False
     with pytest.raises(AgentAuthorityError, match="OPERATOR_ROOT_KEY_VERSION_MISMATCH"):
         authority.issue_challenge("a" * 32, 3)
+
+
 def test_root_rotation_between_challenge_and_grant_commit_is_rejected(tmp_path):
     authority, operator, agent = _setup(tmp_path)
     challenge = authority.issue_challenge("a" * 32, 3)
