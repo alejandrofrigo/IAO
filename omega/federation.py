@@ -535,7 +535,7 @@ class Node:
                 raise FedDenied(413, "PAYLOAD_TOO_LARGE")
             try:
                 env = json.loads(raw, object_pairs_hook=_unique_json_object)
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError, RecursionError):
                 raise FedDenied(400, "MALFORMED") from None
             required = {"v", "from", "to", "ts", "nonce", "capability", "body", "sig"}
             if not isinstance(env, dict) or set(env) != required:
