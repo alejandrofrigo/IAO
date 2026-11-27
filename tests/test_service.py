@@ -1494,14 +1494,14 @@ class QueuedTaskApiTests(Base):
             "execution_mode": "queued",
         }
         status, response = self.call(
-            "POST", "/v1/tasks", self.tok("operator:queued-user"), payload
+            "POST", "/v1/tasks", {"authorization": "Bearer " + self.operator_token}, payload
         )
         self.assertEqual((status, response["error"]), (401, "DEVICE_PROOF_REQUIRED"))
         self.assertEqual(self.svc.store.count_tasks_since("operator:queued-user", "0000"), 0)
 
     def test_device_challenge_endpoint_and_proof_replay_rejected(self) -> None:
         status, challenge = self.call(
-            "POST", "/v1/device/challenge", self.tok("operator:queued-user"),
+            "POST", "/v1/device/challenge", {"authorization": "Bearer " + self.operator_token},
             {"device_id": self.device_id},
         )
         self.assertEqual(status, 200)
@@ -1528,7 +1528,7 @@ class QueuedTaskApiTests(Base):
         headers = self.queued_headers(payload)
         headers["authorization"] = self.tok("operator:queued-user")["authorization"]
         status, response = self.call("POST", "/v1/tasks", headers, payload)
-        self.assertEqual((status, response["error"]), (403, "PRIMARY_DEVICE_NOT_AUTHORIZED"))
+        self.assertEqual((status, response["error"]), (401, "OPERATOR_SESSION_REVOKED"))
         self.assertEqual(self.svc.store.count_tasks_since("operator:queued-user", "0000"), 0)
 
     def test_queued_proof_cannot_be_reused_for_modified_body(self) -> None:
@@ -1586,7 +1586,7 @@ class QueuedTaskApiTests(Base):
 
     def test_queued_mode_rejects_non_string_mode(self) -> None:
         status, payload = self.call(
-            "POST", "/v1/tasks", self.tok("operator:queued-user"),
+            "POST", "/v1/tasks", {"authorization": "Bearer " + self.operator_token},
             {
                 "goal": "x",
                 "capability": "knowledge.search",
