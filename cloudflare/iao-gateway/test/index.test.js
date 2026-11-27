@@ -88,6 +88,7 @@ test("fixed-origin proxy forwards signed API request without cookies or client i
         "content-type": "application/json",
         authorization: "Bearer opaque-session",
         "x-iao-device-proof": "signed-proof",
+        "x-iao-agent-id": "must-not-forward-on-task-route",
         "idempotency-key": "task-001",
         cookie: "must-not-forward",
         "x-forwarded-for": "198.51.100.4",
@@ -101,6 +102,7 @@ test("fixed-origin proxy forwards signed API request without cookies or client i
     assert.equal(captured.init.headers.get("authorization"), "Bearer opaque-session");
     assert.equal(captured.init.headers.get("x-iao-device-proof"), "signed-proof");
     assert.equal(captured.init.headers.get("idempotency-key"), "task-001");
+    assert.equal(captured.init.headers.get("x-iao-agent-id"), null);
     assert.equal(captured.init.headers.get("cookie"), null);
     assert.equal(captured.init.headers.get("x-forwarded-for"), null);
     assert.equal(new TextDecoder().decode(captured.init.body), body);
