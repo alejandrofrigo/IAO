@@ -340,3 +340,44 @@ def test_publication_runtime_failure_has_matching_safe_error(monkeypatch, tmp_pa
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=3)
+
+
+def test_both_adapters_replace_invalid_federation_correlation_id(monkeypatch, tmp_path):
+    class CorrelationNode:
+        served = {"knowledge.search"}
+
+        def contract_for_self(self, _capabilities):
+            return {"ok": True, "correlation_id": "g" * 32}
+
+    client = configured_client(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "_get_federation_node", lambda: CorrelationNode())
+    fastapi_response = client.get("/fed/v1/contract")
+    assert fastapi_response.status_code == 200
+    fastapi_id = fastapi_response.json()["correlation_id"]
+    assert len(fastapi_id) == 32
+    assert all(char in "0123456789abcdef" for char in fastapi_id)
+    assert fastapi_response.headers["x-correlation-id"] == fastapi_id
+
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        make_handler(object(), CorrelationNode()),
+    )
+    thread = Thread(httpd.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/contract",
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read())
+            stdlib_id = payload["correlation_id"]
+            assert response.status == 200
+            assert len(stdlib_id) == 32
+            assert all(char in "0123456789abcdef" for char in stdlib_id)
+            assert response.headers["X-Correlation-ID"] == stdlib_id
+            assert stdlib_id != "g" * 32
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=3)
