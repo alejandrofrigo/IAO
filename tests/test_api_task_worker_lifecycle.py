@@ -82,6 +82,8 @@ def test_opt_in_worker_uses_existing_store_and_stops_cleanly(monkeypatch):
         ("IAO_TASK_WORKER_LEASE_SECONDS", "999"),
         ("IAO_TASK_WORKER_POLL_SECONDS", "0"),
         ("IAO_TASK_WORKER_POLL_SECONDS", "100"),
+        ("IAO_TASK_WORKER_LEASE_SECONDS", "not-an-integer"),
+        ("IAO_TASK_WORKER_POLL_SECONDS", "not-a-number"),
     ],
 )
 def test_worker_rejects_unsafe_runtime_settings(monkeypatch, name, value):
@@ -89,7 +91,7 @@ def test_worker_rejects_unsafe_runtime_settings(monkeypatch, name, value):
     monkeypatch.setenv("IAO_TASK_WORKER_ENABLED", "true")
     monkeypatch.setenv(name, value)
 
-    with pytest.raises(RuntimeError, match="TASK_WORKER_SETTINGS_OUT_OF_RANGE"):
+    with pytest.raises(RuntimeError, match="TASK_WORKER_SETTINGS_(OUT_OF_RANGE|INVALID)"):
         api_main._start_task_worker(_Service())
 
     assert api_main._task_worker_thread is None
