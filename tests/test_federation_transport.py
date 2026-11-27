@@ -230,6 +230,9 @@ def test_onion_transport_accepts_only_v3_onion_http():
     assert transport._parse_onion_url(f"http://{host}/directory.json") == (
         host, 80, "/directory.json"
     )
+    assert transport._parse_onion_url(f"http://{host}:8443/directory.json") == (
+        host, 8443, "/directory.json"
+    )
     for url in (
         "https://"+host+"/directory.json",
         "http://short.onion/feed",
@@ -267,8 +270,8 @@ def test_fetch_onion_json_uses_configured_socks_and_bounds_response(monkeypatch)
             return b'{"peers": []}'
 
     class Connection:
-        def __init__(self, hostname, *, timeout, proxy_host, proxy_port):
-            calls.append((hostname, timeout, proxy_host, proxy_port))
+        def __init__(self, hostname, port, *, timeout, proxy_host, proxy_port):
+            calls.append((hostname, port, timeout, proxy_host, proxy_port))
         def request(self, method, target, headers=None):
             calls.append((method, target, headers["Host"]))
         def getresponse(self):
@@ -279,7 +282,7 @@ def test_fetch_onion_json_uses_configured_socks_and_bounds_response(monkeypatch)
     monkeypatch.setattr(transport, "_TorOnionHTTPConnection", Connection)
     host = "b" * 56 + ".onion"
     assert transport.fetch_onion_json(f"http://{host}/feed") == {"peers": []}
-    assert calls[0] == (host, 15.0, "127.0.0.1", 9050)
+    assert calls[0] == (host, 80, 15.0, "127.0.0.1", 9050)
     assert calls[1][0:2] == ("GET", "/feed")
     assert calls[-1] == ("closed",)
 
