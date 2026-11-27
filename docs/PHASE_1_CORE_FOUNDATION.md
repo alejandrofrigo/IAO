@@ -51,13 +51,13 @@ Corte documental del HEAD inspeccionado: `9582a9570704277a11ab5dadbb15732322f055
 | Estado | Cantidad | Objetivos |
 |---|---:|---|
 | IMPLEMENTADO (pendiente de evidencia de aceptación) | 12 | 02–12 y 18 |
-| EN CURSO | 7 | 01, 13, 14, 15, 16, 19 y 20 |
+| EN CURSO | 6 | 01, 13, 14, 15, 16 y 20 |
 | PENDIENTE | 1 | 17 |
 | VERIFICADO | 1 | 19 (CI y regresión sobre el SHA indicado) |
 
-**Resultado global actualizado:** 1/20 objetivos verificados (objetivo 19, alcance de CI); 12/20 tienen implementación documentada, 6/20 siguen en curso y 1/20 está pendiente. La Fase 1 permanece abierta. Por tanto, la Fase 1 permanece **EN CURSO**. No se inicia formalmente la Fase 2 hasta que cada objetivo tenga evidencia aceptada en el HEAD final, CI completo y las dependencias entre PRs resueltas explícitamente.
+**Resultado global actualizado:** 1/20 objetivos verificados (objetivo 19, alcance de CI); 12/20 tienen implementación documentada, 6/20 siguen en curso y 1/20 está pendiente. La Fase 1 permanece abierta. Por tanto, la Fase 1 permanece **EN CURSO**. La Fase 2 puede prepararse en una rama apilada y sin despliegue; su integración operativa y cualquier habilitación de mando quedan bloqueadas hasta que cada objetivo de Fase 1 tenga evidencia aceptada en el HEAD final, CI completo y las dependencias entre PRs resueltas explícitamente.
 
-Los objetivos 02–12 y 18 no se elevan a VERIFICADO por su sola implementación. Los objetivos 01 y 13–16 requieren completar sus brechas de inventario, autorización, privacidad, supervisión y contratos de error. El 17 requiere un `uv.lock` revisado e incorporado y una instalación bloqueada reproducible. El 19 requiere que todas las puertas pasen sobre el mismo SHA final. El 20 requiere reconciliar la evidencia, ejecutar el runbook y aprobar el cierre sin afirmar despliegue o capacidades externas no probadas.
+Los objetivos 02–12 y 18 no se elevan a VERIFICADO por su sola implementación. Los objetivos 01 y 13–16 requieren completar sus brechas de inventario, autorización, privacidad, supervisión y contratos de error. El 17 requiere un `uv.lock` revisado e incorporado y una instalación bloqueada reproducible. El 19 ya tiene CI verde sobre el SHA documentado; cualquier cambio posterior debe volver a superar las puertas en su propio SHA. El 20 requiere reconciliar la evidencia, ejecutar el runbook y aprobar el cierre sin afirmar despliegue o capacidades externas no probadas.
 
 ## Inventario inicial conocido — no equivale a verificación actual
 
