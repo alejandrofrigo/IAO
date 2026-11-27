@@ -72,6 +72,13 @@ def test_production_mode_fails_closed_without_os_sandbox(monkeypatch):
         run_tool_isolated(_echo_tool, _verify_echo, {"value": "isolated"}, 5)
 
 
+def test_production_mode_cannot_be_downgraded_to_process_only(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("IAO_TOOL_SANDBOX_MODE", "process")
+    with pytest.raises(process_runner.ToolProcessError, match="OS_SANDBOX_REQUIRED"):
+        run_tool_isolated(_echo_tool, _verify_echo, {"value": "isolated"}, 5)
+
+
 def test_bubblewrap_mode_uses_read_only_root_and_unshared_network(monkeypatch):
     monkeypatch.setenv("IAO_TOOL_SANDBOX_MODE", "bubblewrap")
     monkeypatch.delenv("APP_ENV", raising=False)
