@@ -263,3 +263,28 @@ def test_supervisor_binds_child_identity_to_process_start_ticks(monkeypatch):
     monkeypatch.setattr(supervisor, "process_start_ticks", lambda _pid: str(int(ticks) + 1))
     assert supervisor.process_identity_matches(child) is False
     assert supervisor.process_identity_matches({"pid": os.getpid()}) is False
+
+
+def test_supervisor_surfaces_failed_cycle_as_degraded(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(supervisor, "ROOT", tmp_path)
+    lock_path = tmp_path / ".state" / "iao-autonomy" / "coordinator.lock"
+    heartbeat_path = tmp_path / ".state" / "iao-autonomy" / "coordinator-heartbeat.json"
+    monkeypatch.setattr(supervisor, "COORDINATOR_LOCK", lock_path)
+    monkeypatch.setattr(supervisor, "read_children", lambda: {"PADGE": {"pid": os.getpid()}})
+    monkeypatch.setattr(
+        supervisor, "adapters",
+        lambda: {"PADGE": {"enabled": True, "command": ["python", "coordinator.py"]}},
+    )
+    write_heartbeat(
+        heartbeat_path, component="PADGE_AUTONOMY", pid=os.getpid(),
+        phase="cycle_completed", interval_seconds=60, stale_after_seconds=1800,
+        last_cycle_result=False,
+    )
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as stream:
+        stream.write(str(os.getpid()))
+        stream.flush()
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        supervisor.status()
+        assert "PADGE: DEGRADED" in capsys.readouterr().out
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
