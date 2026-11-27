@@ -201,7 +201,7 @@ def start_federation_autojoin(fed_node, state_dir: Path) -> bool:
     global _THREAD
     with _LOCK:
         if _THREAD is not None and _THREAD.is_alive():
-            return False
+            return True
         _STOP_EVENT.clear()
 
         def worker():
