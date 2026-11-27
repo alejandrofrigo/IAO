@@ -112,3 +112,18 @@ class PersistentKeyTests(unittest.TestCase):
             }),
             "d" * 40,
         )
+
+
+    def test_production_requires_https_public_base_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "HTTPS in production"):
+            load_settings({
+                "APP_ENV": "production",
+                "PUBLIC_BASE_URL": "http://iao.example",
+            })
+        self.assertEqual(
+            load_settings({
+                "APP_ENV": "production",
+                "PUBLIC_BASE_URL": "https://iao.example",
+            }).public_base_url,
+            "https://iao.example",
+        )
