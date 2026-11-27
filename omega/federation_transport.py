@@ -328,7 +328,7 @@ def _parse_onion_url(url: str) -> tuple[str, int, str]:
 
 def _tor_proxy() -> tuple[str, int]:
     host = os.environ.get("IAO_TOR_SOCKS_HOST", "127.0.0.1")
-    raw_port = os.environ.get("IAO_TOR_SOCKS_PORT", "19050")
+    raw_port = os.environ.get("IAO_TOR_SOCKS_PORT", "9050")
     try:
         address = ipaddress.ip_address(host)
         port = int(raw_port)
