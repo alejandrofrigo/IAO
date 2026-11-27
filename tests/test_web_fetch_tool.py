@@ -40,7 +40,7 @@ class WebFetchToolTests(Base):
         status, payload = self.fetch("/invalid-utf8")
         result = payload["result"]
         self.assertEqual((status, payload["verification"]), (200, "PASS"))
-        self.assertIn("\\ufffd", result["body"])
+        self.assertIn("\ufffd", result["body"])
         self.assertEqual(spec.verify(result), "PASS")
         tampered = dict(result)
         tampered["sha256"] = "sha256:" + "0" * 64
