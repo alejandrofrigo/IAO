@@ -242,6 +242,8 @@ class OmegaService:
                 allowed_methods = ("GET",)
             elif re.fullmatch(r"/v1/tasks/[0-9a-f-]{36}", p):
                 allowed_methods = ("GET",)
+            elif re.fullmatch(r"/v1/tasks/[0-9a-f-]{36}/cancel", p):
+                allowed_methods = ("POST",)
             elif p == "/v1/memory":
                 allowed_methods = ("GET", "POST", "DELETE")
             elif p == "/v1/memory/export":
@@ -1024,6 +1026,9 @@ class OmegaService:
             return self._memory(method, p, pr, body)
         if method == "POST" and p == "/v1/tasks":
             return self._create_task(pr, headers, body)
+        cancel_match = re.fullmatch(r"/v1/tasks/([0-9a-f-]{36})/cancel", p)
+        if method == "POST" and cancel_match:
+            return self._cancel_task(pr, headers, body, cancel_match.group(1))
         m = re.fullmatch(r"/v1/tasks/([0-9a-f-]{36})", p)
         if method == "GET" and m:
             t = self.store.get_task(m.group(1), pr.subject)
@@ -1091,6 +1096,60 @@ class OmegaService:
     def _view(self, t: dict[str, Any]) -> dict[str, Any]:
         r = json.loads(t["result_json"]) if t.get("result_json") else {}
         return {"task_id": t["id"], "state": t["state"], "capability": (json.loads(t["intent_json"]).get("allowed_capabilities") or [None])[0], **r}
+
+
+    def _cancel_task(
+        self, pr: Principal, headers: dict[str, str], body: bytes, task_id: str
+    ) -> tuple[int, dict[str, Any]]:
+        if self.device_authority is None:
+            raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
+        raw_proof = headers.get("x-iao-device-proof", "")
+        if not isinstance(raw_proof, str) or not 1 <= len(raw_proof) <= 4096:
+            raise ApiError(401, "DEVICE_PROOF_REQUIRED")
+        try:
+            proof = json.loads(raw_proof)
+        except (ValueError, TypeError):
+            raise ApiError(400, "INVALID_DEVICE_PROOF") from None
+        if not isinstance(proof, dict):
+            raise ApiError(400, "INVALID_DEVICE_PROOF")
+        path = f"/v1/tasks/{task_id}/cancel"
+        try:
+            self.device_authority.verify_request(
+                proof, method="POST", path=path,
+                request_digest=hashlib.sha256(body).hexdigest(),
+                owner_subject=pr.subject,
+            )
+        except DeviceAuthorityError as exc:
+            self.store.audit(
+                pr.subject, "TASK_CANCEL_DEVICE_PROOF_DENIED", task_id,
+                decision="DENY", reason=exc.code,
+            )
+            raise ApiError(exc.status, exc.code) from None
+        if self.operator_identity_authority is None:
+            raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+        try:
+            self.operator_identity_authority.verify_primary_device_for_session(
+                pr.subject, self._verified_bearer_token(headers), proof.get("device_id"),
+            )
+        except OperatorIdentityError as exc:
+            self.store.audit(
+                pr.subject, "TASK_CANCEL_DEVICE_BINDING_DENIED", task_id,
+                decision="DENY", reason=exc.code,
+            )
+            raise ApiError(exc.status, exc.code) from None
+        outcome = self.store.request_task_cancel(task_id, pr.subject)
+        if outcome == "NOT_FOUND":
+            raise ApiError(404, "NOT_FOUND")
+        if outcome == "TERMINAL":
+            raise ApiError(409, "TASK_ALREADY_TERMINAL")
+        self.store.audit(
+            pr.subject, "TASK_CANCEL_REQUESTED", task_id,
+            outcome=outcome, decision="ALLOW",
+        )
+        status = 202 if outcome == "REQUESTED" else 200
+        task = self.store.get_task(task_id, pr.subject)
+        assert task is not None
+        return status, {**self._view(task), "cancellation": outcome}
 
     def _create_task(self, pr: Principal, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
         d = self._json(body)
