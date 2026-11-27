@@ -2,6 +2,7 @@
 All reads of user data take the owner as a mandatory parameter (tenant isolation)."""
 import json
 import hashlib
+import hmac
 import os
 import sqlite3
 import threading
@@ -197,8 +198,17 @@ class Store:
                     )
                 """)
                 control = self.db.execute(
-                    "SELECT id FROM audit_control WHERE id=1"
+                    "SELECT id,key_fingerprint FROM audit_control WHERE id=1"
                 ).fetchone()
+
+                if control is not None:
+                    expected_fingerprint = hashlib.sha256(
+                        self.audit_key or b""
+                    ).hexdigest()
+                    if not hmac.compare_digest(
+                        str(control["key_fingerprint"]), expected_fingerprint
+                    ):
+                        raise RuntimeError("AUDIT_HMAC_KEY_MISMATCH")
 
                 if control is None:
                     snapshot = self._legacy_audit_snapshot()
@@ -332,6 +342,7 @@ class Store:
 
         return {
             "valid": bool(chain_valid and legacy_valid),
+            "authenticated": self.audit_key is not None,
             "event_count": len(events),
             "first_invalid_index": bad_index,
             "first_invalid_event_id": bad_event_id,
