@@ -125,6 +125,14 @@ def test_coordinator_lock_is_private_and_records_its_owner(tmp_path, monkeypatch
         assert coordinator.LOCK.read_text(encoding="utf-8") == str(os.getpid())
 
 
+def test_supervisor_json_state_is_atomic_and_private(tmp_path):
+    path = tmp_path / "private-state" / "children.json"
+    supervisor.save_json(path, {"PADGE": {"pid": os.getpid()}})
+    assert supervisor.load_json(path, {}) == {"PADGE": {"pid": os.getpid()}}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+
+
 def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(supervisor, "ROOT", tmp_path)
     monkeypatch.setattr(
