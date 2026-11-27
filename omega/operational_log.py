@@ -20,6 +20,18 @@ _SAFE_STRING_FIELDS = {
     "method", "route_group", "cid", "decision", "policy_version",
     "authority", "identity_verification", "enrollment", "motor", "engine", "error_type",
 }
+_SAFE_STATUS_CODES = {
+    "ACTIVE", "COMMITTED", "CYCLE_IN_PROGRESS", "DEGRADED",
+    "DEGRADED_UNVERIFIED", "DISABLED", "DISCOVERED", "ERROR",
+    "FAILED", "FAIL", "HEALTHY", "INACTIVE", "INVALID_REPORT",
+    "MANIFEST_UNVERIFIED", "MISSING", "NOT_CONFIGURED",
+    "NOT_PERFORMED", "NOT_READY", "NOT_STARTED", "NO_REPORT",
+    "NORMAL", "PASS", "PENDING", "PROCESS_ALIVE_UNVERIFIED",
+    "PROMOTED", "PROMOTION_SUCCESS", "QUEUED", "READY",
+    "REJECTED", "RESTRICTED", "RUNNING", "STALE", "STARTING",
+    "STOPPED", "SUCCEEDED", "TIMEOUT", "UNKNOWN", "UNVERIFIED",
+    "UNVERIFIED_DISCOVERY_LEAD", "VALID", "VERIFIED",
+}
 _SAFE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:+-]{1,128}\Z")
 _SAFE_CAPABILITY_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,127}\Z")
 _SAFE_REASON_CODES = {
@@ -89,7 +101,12 @@ def sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
             else:
                 safe[f"{normalized}_digest"] = _digest(value)
         elif isinstance(value, str):
-            if (
+            if normalized in {"status", "state"}:
+                if value in _SAFE_STATUS_CODES:
+                    safe[normalized] = value
+                else:
+                    safe[f"{normalized}_digest"] = _digest(value)
+            elif (
                 normalized in _SAFE_STRING_FIELDS
                 and _SAFE_TOKEN_RE.fullmatch(value)
             ):
