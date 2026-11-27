@@ -192,6 +192,8 @@ def status():
     active = lock_held and lock_owner == heartbeat.get("pid")
     if not lock_held:
         state = "STOPPED"
+    elif not active:
+        state = "DEGRADED_UNVERIFIED"
     elif heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
         state = heartbeat["status"]
     else:
