@@ -1011,6 +1011,22 @@ class OmegaService:
                 output_digest=hashlib.sha256(reply.encode()).hexdigest(),
                 knowledge_status=knowledge_status,
                 knowledge_sources=knowledge_sources,
+                model_provider_id=(
+                    model_identity.get("provider_id")
+                    if isinstance(model_identity, dict) else None
+                ),
+                model_configured_id=(
+                    model_identity.get("configured_model")
+                    if isinstance(model_identity, dict) else None
+                ),
+                model_upstream_id=(
+                    model_identity.get("upstream_model")
+                    if isinstance(model_identity, dict) else None
+                ),
+                model_identity_status=(
+                    model_identity.get("identity_status")
+                    if isinstance(model_identity, dict) else "unreported"
+                ),
             )
             return 200, {
                 "status": "OK",
