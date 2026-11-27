@@ -1,7 +1,7 @@
 # Fase 2 — Inteligencia operativa y ejecución gobernada
 
 **Estado:** EN CURSO — planificación técnica y primera implementación.
-**Base:** d5b011cff1b620b00a468a5bad84b720fbc8fec4 (rama de Fase 1, PR #20 aún no fusionado).
+**Base:** rama `phase-1-core-foundation-20261127` (PR #20 aún abierta y sin fusionar; SHA base se mantiene sincronizado en la cadena de ramas).
 **Regla de integración:** esta rama queda apilada sobre el HEAD de Fase 1. No fusionar ni desplegar automáticamente; antes debe resolverse la aceptación de Fase 1 y su integración de ramas/PRs.
 
 ## Propósito
@@ -20,7 +20,7 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 | 02 | Planificador determinista | `omega/task_planner.py` valida DAGs acotados, rechaza ciclos/referencias desconocidas y produce orden topológico estable sin ejecutar herramientas ni conceder permisos; `tests/test_task_planner.py` cubre orden, invariancia, ciclos y entradas hostiles. | IMPLEMENTADO — CI pendiente |
 | 03 | Motor de estados de ejecución | `omega.control` define el grafo determinista; `Store.transition_task_state` aplica compare-and-swap atómico y `OmegaService` lo usa para cada transición, devolviendo conflicto si el estado cambió concurrentemente. Pruebas positivas, de transición ilegal y conflicto CAS en `tests/test_task_queue.py`. | IMPLEMENTADO — CI pendiente |
 | 04 | Cola persistente con leases | `Store.claim_next_task` usa `BEGIN IMMEDIATE`, incrementa `lease_generation` monotónica y devuelve el token junto al lease; `TaskWorker` lo propaga en transiciones/finalización y amplía el lease antes de la herramienta hasta cubrir su timeout acotado; `update_claimed_task` y `renew_task_lease` exigen worker, generación exacta y lease vigente. Migraciones aditivas v3/v4, test de worker obsoleto tras recuperación/reencolado explícito, renovación, concurrencia y recuperación fail-closed. | IMPLEMENTADO — CI pendiente |
-| 05 | Despacho por capacidades | `TaskWorker` resuelve capability en `ToolRegistry`, revalida policy/scopes, exige READ_ONLY y `QUEUED_TOOL_ALLOWLIST`, valida el input y vuelve a comprobar la autoridad del dispositivo antes de invocar; pruebas negativas impiden ejecutar herramientas no allowlisted o con autoridad revocada. | IMPLEMENTADO — CI pendiente |
+| 05 | Despacho por capacidades | `TaskWorker` resuelve capability en `ToolRegistry`, exige READ_ONLY/allowlist, valida input, vuelve a comprobar dispositivo primario y grant dual firmado, y revalida la capacidad vigente inmediatamente antes de invocar; revocación/expiración impide ejecutar tareas ya encoladas. | IMPLEMENTADO — CI pendiente |
 | 06 | Router multi-LLM | `omega.llm_router` filtra por capabilities/modalities declaradas, aplica techo de coste configurado por 1K tokens, ordena determinísticamente por fallos, coste, latencia EWMA y prioridad, respeta cooldown, limita timeout por proveedor y hace failover sin persistir secretos ni cuerpos de error. Costes son metadatos configurados, no facturación verificada. `tests/test_llm_router.py` cubre filtros, límites, orden y estados corruptos. | IMPLEMENTADO — CI pendiente |
 | 07 | Contrato común de proveedor | `omega/provider_contract.py` valida configuración HTTPS, referencia de secreto, capacidades, modalidades, coste, prioridad y timeout; limita mensajes, tamaño de petición/respuesta y valida estructura de respuesta OpenAI-compatible. `tests/test_provider_contract.py` cubre positivos y entradas hostiles. | IMPLEMENTADO — CI pendiente |
 | 08 | Evaluación de respuestas | `omega.response_evaluator` valida texto/tamaño, claims requeridos, presencia de referencias citadas y digest; declara explícitamente `truth_verified=false` y `authoritative=false`. No confunde coincidencia de citas con veracidad. Pruebas positivas y adversariales. | IMPLEMENTADO — CI pendiente |
@@ -33,7 +33,7 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 | 15 | Evidencia y procedencia | `tool_execution` registra versión, estado, digest de entrada/salida y código de error; auditoría registra decisiones, versión de policy y digests; evaluador preserva referencias y hash de respuesta sin afirmar veracidad. **Parcial:** falta correlación uniforme de proveedor/modelo/coste en cada ejecución. | PARCIAL — CI pendiente |
 | 16 | Observabilidad de tareas | Estados persistentes, eventos auditados, heartbeat del worker y estado de proveedores con fallos/latencia; errores públicos acotados. **Parcial:** falta métricas agregadas de duración/cola y correlación completa entre chat, intent, worker y proveedor. | PARCIAL — CI pendiente |
 | 17 | Cancelación y pausa segura | Migración aditiva v4 `cancel_requested_at`; endpoint POST de cancelación con prueba criptográfica del dispositivo primario y verificación de sesión; cancelación atómica de QUEUED y solicitud cooperativa en RUNNING/VERIFYING; worker revisa checkpoints antes/después de herramienta y no puede completar si hay cancel pendiente. No promete matar instantáneamente el proceso hijo: la cancelación activa espera al retorno/timeout acotado de la herramienta. **Parcial:** falta pausa y cancelación inmediata del proceso hijo con resultado incierto explícito. | PARCIAL — CI pendiente |
-| 18 | Integración con centro de mando | Protocolo de directivas desde Chat público IAO, autenticación del dispositivo autorizado, firma, nonce, deduplicación y recibos verificables. | PENDIENTE |
+| 18 | Integración con centro de mando | Chat público incluye `task-intake.js` para búsqueda local READ_ONLY, con idempotencia, estado y cancelación; `operator-identity.js` crea/revoca grants de 15 minutos con doble firma root+dispositivo; API revalida grant al encolar y worker antes de ejecutar; navegador visitante no obtiene mando. FastAPI lifespan puede iniciar TaskWorker con opt-in explícito, mismo Store/registry/authority, heartbeat y apagado limitado. **Parcial:** falta convertir directivas naturales generales del chat en tareas gobernadas, historial persistente en UI y sincronización del resultado en el hilo. | PARCIAL — CI pendiente |
 | 19 | Pruebas adversariales | Pruebas de prompt injection, herramienta maliciosa, salida no confiable, SSRF, agotamiento de recursos y escalada de capacidades. | PENDIENTE |
 | 20 | Aceptación de Fase 2 | CI, pruebas de integración, runbook, inventario de brechas y evidencia reproducible en un SHA único. | PENDIENTE |
 
@@ -44,7 +44,7 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 3. **Plano de ejecución:** workers aislados que reclaman leases y solo ejecutan herramientas registradas.
 4. **Plano de modelos:** router y adaptadores intercambiables; los modelos proponen, no conceden permisos.
 5. **Plano de evidencia:** recibos, hashes, resultados y métricas minimizadas.
-6. **Interfaz de mando:** el Chat público IAO de este teléfono será el punto de mando una vez que la vinculación criptográfica y el flujo de directivas estén implementados y probados. La URL o el navegador por sí solos nunca autentican el dispositivo.
+6. **Interfaz de mando:** el Chat público IAO incorpora un flujo inicial de consultas de solo lectura, con sesión, dispositivo primario y grant dual firmado; la URL o el navegador por sí solos nunca autentican el dispositivo. Las directivas generales siguen bloqueadas hasta completar el flujo y las pruebas adversariales.
 
 ## Secuencia de implementación
 
@@ -66,7 +66,7 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 
 | Evidencia | Resultado |
 |---|---|
-| Base de trabajo | HEAD de Fase 1 d5b011cff1b620b00a468a5bad84b720fbc8fec4 |
-| Estado Fase 1 | PR #20 abierto/draft; cuatro workflows del HEAD base completados con éxito. |
-| Bloqueos heredados | Lockfile generado como artefacto CI pero aún no incorporado; objetivos 13–16 y 20 con brechas documentadas; dependencias entre PRs aún requieren reconciliación. |
-| Estado de Fase 2 | Objetivos 01–10 implementados en código; incluye fencing monotónico, routing multi-LLM, contrato de proveedor, evaluación no autoritativa, comparación multi-modelo y manifiesto de herramientas. La verificación CI del HEAD actual sigue pendiente; objetivos 11–20 permanecen pendientes. |
+| Base de trabajo | Rama `phase-1-core-foundation-20261127`; PR #20 abierta/draft, sin fusión. |
+| Estado Fase 1 | PR #20 abierta/draft; worker lifecycle opt-in y heartbeat integrados; CI del HEAD actualizado pendiente. |
+| Bloqueos heredados | `uv.lock` aún no incorporado; API origin HTTPS aún no configurado; frontend permanece fail-closed; no hay backend público gratuito desplegado; PRs Tor/P2P, Cloudflare y IPFS siguen en reconciliación; objetivos 13–16 y 20 conservan brechas. |
+| Estado de Fase 2 | Objetivos 01–10 y 12 implementados en código; 11 y 13–18 parciales con brechas documentadas; 19–20 pendientes. Incluye fencing/renovación, router multi-LLM, contrato de proveedor, evaluación no autoritativa, comparación, manifiesto, grants duales, chat task intake y cancelación cooperativa. CI del HEAD actual pendiente. |
