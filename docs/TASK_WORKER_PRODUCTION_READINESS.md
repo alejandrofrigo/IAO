@@ -36,12 +36,15 @@ those tasks `FAILED` with `PROCESS_INTERRUPTED`; live leases are preserved.
 Interrupted work is never silently replayed. This is a fail-closed recovery
 mechanism, not proof of exactly-once tool effects.
 
-## Required evidence before removing the production block
+## Required evidence before declaring production readiness NORMAL
 
 - [ ] Full Python test matrix passes on supported Python versions.
-- [x] API lifespan exposes fail-closed worker startup diagnostics for missing persistent keys and invalid worker settings; regression tests cover both states.
-- [ ] Browser integration passes on supported Chromium; physical Android
-      browser validation is still required and is not implied by CI.
+- [x] API lifespan exposes fail-closed worker startup diagnostics for missing persistent keys, invalid worker settings and sandbox preflight failures; regression tests cover the startup states.
+- [x] Operator login requires independent root and primary-device signatures, issues a short-lived session token, and binds its exact credential digest to the durable root identity.
+- [x] Worker revalidates session digest, primary-device binding, active capability grants, policy, lease and READ_ONLY allowlist before tool invocation.
+- [x] Durable task budgets enforce tool calls, input bytes and output bytes atomically under the active lease and audit both charges and denials.
+- [ ] Latest browser integration CI passes on supported Chromium; physical
+      Android browser validation is still required and is not implied by CI.
 - [x] Unit test covers an expired `VERIFYING` lease: startup recovery marks it
       failed and it cannot be claimed again. Full process-kill fault injection
       across external tool side effects remains outstanding.
