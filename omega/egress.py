@@ -1,6 +1,7 @@
 """Mediated egress (F3): the ONLY place IAO fetches remote content for tools.
 Deny-by-default allowlist, SSRF defence (all resolved addresses must be globally routable),
 DNS pinning, redirect re-validation, size/time/content-type limits, no credentials in URLs."""
+import base64
 import hashlib
 import http.client
 import ipaddress
@@ -155,6 +156,7 @@ def fetch(url: str, pol: EgressPolicy) -> dict[str, Any]:
                 raise EgressDenied("TIMEOUT")
             return {"url": cur, "status": r.status, "content_type": ctype, "ip": ip,
                     "sha256": "sha256:" + hashlib.sha256(body).hexdigest(),
+                    "body_base64": base64.b64encode(body).decode("ascii"),
                     "body": body.decode("utf-8", "replace"), "untrusted": True}
         except EgressDenied:
             raise
