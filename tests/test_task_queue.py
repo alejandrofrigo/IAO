@@ -105,7 +105,8 @@ class DurableTaskQueueTests(unittest.TestCase):
         self.assertIsNotNone(claimed)
         self.assertTrue(
             self.store.update_claimed_task(
-                "task-1", "worker-a", "VERIFYING"
+                "task-1", "worker-a", "VERIFYING",
+                lease_generation=claimed["lease_generation"],
             )
         )
 
@@ -131,7 +132,7 @@ class DurableTaskQueueTests(unittest.TestCase):
         self.assertFalse(
             self.store.update_claimed_task(
                 "task-1", "worker-b", "SUCCEEDED", {"result": "forged"},
-                release=True,
+                release=True, lease_generation=claimed["lease_generation"],
             )
         )
         self.assertTrue(
@@ -142,7 +143,7 @@ class DurableTaskQueueTests(unittest.TestCase):
         self.assertTrue(
             self.store.update_claimed_task(
                 "task-1", "worker-a", "SUCCEEDED", {"result": "verified"},
-                release=True,
+                release=True, lease_generation=claimed["lease_generation"],
             )
         )
         final = self.store.get_task("task-1", "owner-a")
@@ -160,7 +161,7 @@ class DurableTaskQueueTests(unittest.TestCase):
         self.assertFalse(
             self.store.update_claimed_task(
                 "task-1", "worker-a", "SUCCEEDED", {"result": "late"},
-                release=True,
+                release=True, lease_generation=1,
             )
         )
 
