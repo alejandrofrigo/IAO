@@ -431,7 +431,7 @@
       throw new Error("PRIMARY_DEVICE_NOT_ENROLLED");
     }
     const encoded = publicKeyPem.replace(
-      /-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\\s/g, ""
+      /-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\s/g, ""
     );
     const der = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", der));
@@ -697,8 +697,8 @@
         "Autorizar únicamente knowledge.search, herramienta local de solo lectura, durante 15 minutos. Se requieren ambas firmas. ¿Continuar?"
       )) return;
       run(grantCapabilityButton, grantReadOnlyKnowledgeSearch, result =>
-        "CAPACIDAD CONCEDIDA\\n" + result.capability +
-        "\\nExpira: " + new Date(result.expires_at * 1000).toISOString()
+        "CAPACIDAD CONCEDIDA\n" + result.capability +
+        "\nExpira: " + new Date(result.expires_at * 1000).toISOString()
       );
     });
     revokeCapabilityButton.addEventListener("click", () => run(
@@ -714,7 +714,7 @@
         }
         return revokeCapabilityGrant(grant.grant_id);
       },
-      result => "CAPACIDAD REVOCADA\\n" + result.capability
+      result => "CAPACIDAD REVOCADA\n" + result.capability
     ));
     section.append(title, description, code, bootstrapRecoveryCode, generateBootstrapRecoveryButton, bootstrapButton, recoveryCode, newRecoveryCode, generateNewRecoveryButton, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, grantCapabilityButton, revokeCapabilityButton, revokeButton, output);
     document.body.appendChild(section);
