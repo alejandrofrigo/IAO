@@ -83,3 +83,15 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         model_adapter=model_adapter,
         public_base_url=public_base_url,
     )
+
+
+def validate_persistent_keys(token_key: str, audit_key: str) -> None:
+    """Fail closed when persistent API and audit keys are weak or reused."""
+    if not isinstance(token_key, str) or len(token_key) < 32:
+        raise ValueError("PERSISTENT_AUTH_KEY_INVALID")
+    if not isinstance(audit_key, str) or len(audit_key) < 32:
+        raise ValueError("PERSISTENT_AUDIT_KEY_INVALID")
+    if token_key == audit_key:
+        raise ValueError("PERSISTENT_KEYS_MUST_BE_DISTINCT")
+    if token_key.strip() != token_key or audit_key.strip() != audit_key:
+        raise ValueError("PERSISTENT_KEYS_INVALID_FORMAT")
