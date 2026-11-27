@@ -164,7 +164,7 @@ def canonical_command_bytes(envelope: dict[str, Any], *, now: int | None = None)
     """Return stable signing bytes; signature itself is deliberately excluded."""
     validate_command_envelope(envelope, now=now)
     unsigned = {key: value for key, value in envelope.items() if key != "signature"}
-    return b"IAO-COMMAND-V1\\x00" + _json_bytes(unsigned, limit=MAX_ENVELOPE_BYTES)
+    return b"IAO-COMMAND-V1\x00" + _json_bytes(unsigned, limit=MAX_ENVELOPE_BYTES)
 
 
 def command_digest(envelope: dict[str, Any], *, now: int | None = None) -> str:
