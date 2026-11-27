@@ -85,10 +85,23 @@ def test_future_schema_version_fails_closed(tmp_path):
     )
     db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES(99, 'future')")
     db.commit()
+    before = db.execute(
+        "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
+    ).fetchall()
     db.close()
 
     with pytest.raises(RuntimeError, match="DATABASE_SCHEMA_VERSION_UNSUPPORTED"):
         Store(path, audit_key=b"audit-key-" + b"x" * 40)
+
+    check = sqlite3.connect(path)
+    try:
+        after = check.execute(
+            "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
+        ).fetchall()
+        assert after == before
+        assert [row[1] for row in after if row[0] == "table"] == ["schema_migrations"]
+    finally:
+        check.close()
 
 
 def test_audit_hmac_key_rotation_fails_closed(tmp_path):
