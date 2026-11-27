@@ -24,7 +24,12 @@ class ProviderContractError(ValueError):
 
 
 def validate_provider_config(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or set(value) - {
+        "id", "url", "model", "key_env", "enabled", "capabilities",
+        "modalities", "cost_per_1k_tokens", "timeout_seconds", "priority",
+    }:
+        raise ProviderContractError("PROVIDER_CONFIG_INVALID")
+    if "enabled" in value and not isinstance(value["enabled"], bool):
         raise ProviderContractError("PROVIDER_CONFIG_INVALID")
     ident = value.get("id")
     url = value.get("url")
@@ -44,6 +49,7 @@ def validate_provider_config(value: Any) -> dict[str, Any]:
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment
+        or parsed.query
         or (port is not None and not 1 <= port <= 65535)
         or any(ord(ch) < 32 for ch in url)
     ):
@@ -80,7 +86,9 @@ def validate_provider_config(value: Any) -> dict[str, Any]:
     priority = value.get("priority", 100)
     if isinstance(priority, bool) or not isinstance(priority, int) or not -1000 <= priority <= 1000:
         raise ProviderContractError("PROVIDER_PRIORITY_INVALID")
-    return dict(value)
+    normalized = dict(value)
+    normalized["model"] = model.strip()
+    return normalized
 
 
 def validate_chat_messages(messages: Any) -> list[dict[str, str]]:
@@ -92,13 +100,23 @@ def validate_chat_messages(messages: Any) -> list[dict[str, str]]:
         if not isinstance(message, dict) or set(message) != {"role", "content"}:
             raise ProviderContractError("PROVIDER_REQUEST_INVALID")
         role, content = message["role"], message["content"]
-        if role not in {"system", "user", "assistant"} or not isinstance(content, str):
+        if (
+            not isinstance(role, str)
+            or role not in {"system", "user", "assistant"}
+            or not isinstance(content, str)
+        ):
             raise ProviderContractError("PROVIDER_REQUEST_INVALID")
-        encoded = content.encode("utf-8")
+        try:
+            encoded = content.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ProviderContractError("PROVIDER_REQUEST_INVALID") from exc
         if len(encoded) > MAX_MESSAGE_BYTES:
             raise ProviderContractError("PROVIDER_MESSAGE_TOO_LARGE")
-        total += len(encoded)
         normalized.append({"role": role, "content": content})
+    try:
+        total = len(json.dumps(normalized).encode("utf-8"))
+    except (TypeError, UnicodeEncodeError) as exc:
+        raise ProviderContractError("PROVIDER_REQUEST_INVALID") from exc
     if total > MAX_REQUEST_BYTES:
         raise ProviderContractError("PROVIDER_REQUEST_TOO_LARGE")
     return normalized
