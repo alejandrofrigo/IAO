@@ -640,7 +640,7 @@ def _public_candidate_origin(value):
 
 def run_trusted_public_enrollment(node, items):
     """Bridge public feed candidates into the pinned-HTTPS signed autojoin path."""
-    from omega.federation_autonomous import _origin, run_discovered_cycle
+    from omega.federation_autonomous import run_discovered_cycle
 
     registry_path = STATE / "iao-public-federation-candidates.json"
     registry = load(registry_path, {"schema": 1, "candidates": {}})
