@@ -4,8 +4,14 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     env_file: ../.env
+    environment:
+      APP_ENV: production
+      IAO_STATE_DIR: /var/lib/iao
+      IAO_CORPUS_DIR: /app/knowledge
     ports:
       - "8080:8080"
+    volumes:
+      - iao_state:/var/lib/iao
     read_only: true
     tmpfs:
       - /tmp
@@ -14,18 +20,6 @@ services:
     cap_drop:
       - ALL
     restart: unless-stopped
-  db:
-    image: postgres:17.2
-    environment:
-      POSTGRES_DB: omega
-      POSTGRES_USER: omega
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in environment}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U omega -d omega"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+
 volumes:
-  postgres_data: {}
+  iao_state: {}
