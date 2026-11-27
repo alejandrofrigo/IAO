@@ -156,6 +156,42 @@ test("invalid origins, redirects, oversized bodies and unsupported agent routes 
   assert.equal(oversized.status, 413);
 });
 
+test("unlisted sensitive API routes are not forwarded", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    return new Response("unexpected", { status: 200 });
+  };
+  try {
+    const blocked = [
+      ["POST", "/v1/federation/internet"],
+      ["GET", "/v1/audit/events"],
+      ["POST", "/v1/memory"],
+      ["POST", "/v1/operator/unlisted-control"],
+      ["POST", "/v1/device/unlisted-control"],
+    ];
+    for (const [method, path] of blocked) {
+      const response = await worker.fetch(new Request("https://gateway.test" + path, {
+        method,
+        ...(method === "POST" ? { body: "{}" } : {}),
+      }), { IAO_API_ORIGIN: "https://api.example.net" });
+      assert.equal(response.status, 404, path);
+    }
+    const delegation = await worker.fetch(
+      new Request("https://gateway.test/v1/agent/delegation", {
+        method: "POST", body: "{}",
+      }),
+      { IAO_API_ORIGIN: "https://api.example.net" },
+    );
+    assert.equal(delegation.status, 503);
+    assert.equal((await delegation.json()).error, "AGENT_TASK_PROTOCOL_DISABLED");
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("upstream redirects are never followed", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(null, {
