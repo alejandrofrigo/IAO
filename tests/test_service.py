@@ -1104,7 +1104,7 @@ class QueuedTaskApiTests(Base):
             ec.ECDSA(hashes.SHA256()),
         )
         grant_device_signature = self.device_private_key.sign(
-            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + grant_payload,
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + grant_payload,
             ec.ECDSA(hashes.SHA256()),
         )
         identity.complete_capability_challenge(
@@ -1166,7 +1166,7 @@ class QueuedTaskApiTests(Base):
             ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
         )
         device_sig = self.device_private_key.sign(
-            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + payload,
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + payload,
             ec.ECDSA(hashes.SHA256()),
         )
         revoke_status, revoked = self.call(
@@ -1200,7 +1200,7 @@ class QueuedTaskApiTests(Base):
             ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
         )
         device_sig = self.device_private_key.sign(
-            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + payload,
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + payload,
             ec.ECDSA(hashes.SHA256()),
         )
         grant_status, granted = self.call(
