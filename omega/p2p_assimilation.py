@@ -20,6 +20,35 @@ def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def classify_multiaddr(address: str) -> dict[str, Any]:
+    """Classify advertised address hints without claiming the route was tested."""
+    parts = [part.lower() for part in address.split("/") if part]
+    onion = "onion3" in parts or "onion" in parts
+    relay = "p2p-circuit" in parts
+    if "quic-v1" in parts or "quic" in parts:
+        underlay = "QUIC_UDP" if "udp" in parts else "QUIC"
+    elif "tcp" in parts:
+        underlay = "TCP"
+    elif "udp" in parts:
+        underlay = "UDP_UNSPECIFIED"
+    else:
+        underlay = "UNKNOWN"
+    if onion:
+        route_class = "TOR_ONION_ADVERTISED"
+    elif relay:
+        route_class = "LIBP2P_RELAY_ADVERTISED"
+    else:
+        route_class = underlay
+    return {
+        "multiaddr": address,
+        "route_class": route_class,
+        "underlay": underlay,
+        "onion_advertised": onion,
+        "relay_advertised": relay,
+        "connectivity_verified": False,
+    }
+
+
 def _clean_peer(item: Any) -> tuple[str, list[str]] | None:
     if not isinstance(item, dict):
         return None
@@ -106,6 +135,14 @@ def assimilate_discovered_peers(
             records[peer_id] = {
                 "peer_id": peer_id,
                 "multiaddrs": merged_addrs[:MAX_MULTIADDRS],
+                "address_classes": [
+                    classify_multiaddr(address)
+                    for address in merged_addrs[:MAX_MULTIADDRS]
+                ],
+                "transport_classes": sorted({
+                    classify_multiaddr(address)["route_class"]
+                    for address in merged_addrs[:MAX_MULTIADDRS]
+                }),
                 "source": "libp2p_kad_dht",
                 "assimilation_state": "AUTO_ASSIMILATED_UNVERIFIED",
                 "identity_state": "UNVERIFIED",
