@@ -47,7 +47,8 @@ jobs:
             tests/test_federation_status_truth.py \
             tests/test_device_authority.py \
             tests/test_task_queue.py \
-            tests/test_service.py
+            tests/test_service.py \
+            tests/test_llm_router.py
       - name: Lint production gate surface
         run: |
           python -m ruff check \
@@ -61,4 +62,5 @@ jobs:
             tests/test_federation_status_truth.py \
             tests/test_device_authority.py \
             tests/test_task_queue.py \
-            tests/test_service.py
+            tests/test_service.py \
+            tests/test_llm_router.py
