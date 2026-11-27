@@ -86,6 +86,7 @@ class ToolRegistry:
                 "effect_class": spec.effect_class,
                 "timeout_seconds": float(spec.timeout_seconds),
                 "input_schema": json.loads(json.dumps(spec.input_schema, sort_keys=True)),
+                "schema_status": "DECLARED" if bool(spec.input_schema) else "UNDECLARED",
                 "provenance": spec.provenance,
                 "executable": False,
             }
