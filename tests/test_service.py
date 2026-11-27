@@ -1588,3 +1588,12 @@ class LimitsAndIntegrityTests(Base):
         self.mk()
         self.assertEqual(self.call("GET", f"/v1/tasks/{tid}", self.tok("alice"))[1]["state"], "SUCCEEDED")
         self.assertTrue(self.svc.store.verify_audit()[0])
+
+class AgentRouteTests(Base):
+    def test_signed_agent_status_rejects_query_string(self) -> None:
+        self.svc.identity_rollback_anchor = None
+        self.svc.agent_authority = object()
+        status, payload = self.call("GET", "/v1/agent/status?unexpected=1", {})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "AGENT_REQUEST_PATH_INVALID")
+

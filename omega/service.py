@@ -694,6 +694,36 @@ class OmegaService:
             )
             return 200, result
 
+        if self.agent_authority is not None and method == "POST" and p == "/v1/agent/challenge":
+            data = self._json(body)
+            try:
+                result = self.agent_authority.issue_agent_challenge(data.get("agent_id"))
+                self.store.audit("delegated_agent", "AGENT_REQUEST_CHALLENGE_ISSUED", "agent", authority="READ_ONLY")
+                return 200, result
+            except AgentAuthorityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+
+        if self.agent_authority is not None and method == "GET" and p == "/v1/agent/status":
+            if u.query or u.fragment:
+                raise ApiError(400, "AGENT_REQUEST_PATH_INVALID")
+            agent_id = headers.get("x-iao-agent-id", "")
+            nonce = headers.get("x-iao-agent-nonce", "")
+            timestamp_raw = headers.get("x-iao-agent-timestamp", "")
+            signature_raw = headers.get("x-iao-agent-signature", "")
+            if not re.fullmatch(r"[0-9a-f]{32}", agent_id) or not re.fullmatch(r"[0-9a-f]{64}", nonce) or not re.fullmatch(r"[0-9]{1,12}", timestamp_raw) or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", signature_raw):
+                raise ApiError(401, "INVALID_AGENT_AUTH_HEADERS")
+            try:
+                signature = base64.b64decode(signature_raw + "=" * (-len(signature_raw) % 4), altchars=b"-_", validate=True)
+                self.agent_authority.verify_agent_request(agent_id=agent_id, nonce=nonce, timestamp=int(timestamp_raw), signature=signature, method=method, path=p, body=body)
+                result = self.agent_authority.status_for_agent(agent_id)
+                self.store.audit("delegated_agent", "AGENT_STATUS_READ", "agent", authority="READ_ONLY", decision="ALLOW")
+                return 200, result
+            except AgentAuthorityError as exc:
+                self.store.audit("delegated_agent", "AGENT_REQUEST_DENIED", "agent", decision="DENY", reason=exc.code)
+                raise ApiError(exc.status, exc.code) from None
+            except binascii.Error:
+                raise ApiError(401, "INVALID_AGENT_SIGNATURE") from None
+
         pr = self._auth(headers)
         if p.startswith("/v1/agent/"):
             if self.agent_authority is None or self.operator_identity_authority is None:
