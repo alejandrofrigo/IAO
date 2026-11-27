@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 
 import pytest
@@ -95,3 +96,38 @@ def test_worker_rejects_unsafe_runtime_settings(monkeypatch, name, value):
         api_main._start_task_worker(_Service())
 
     assert api_main._task_worker_thread is None
+
+
+
+def test_requested_worker_reports_missing_persistent_keys(monkeypatch):
+    api_main._stop_task_worker()
+    monkeypatch.setenv("IAO_TASK_WORKER_ENABLED", "true")
+    monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
+    monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
+
+    async def run_lifespan():
+        async with api_main._runtime_lifespan(api_main.app):
+            assert api_main._task_worker_readiness() == {
+                "status": "blocked",
+                "reason": "PERSISTENT_KEYS_UNAVAILABLE",
+            }
+
+    asyncio.run(run_lifespan())
+
+
+def test_requested_worker_reports_invalid_settings_in_readiness(monkeypatch):
+    api_main._stop_task_worker()
+    monkeypatch.setenv("IAO_TASK_WORKER_ENABLED", "true")
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "t" * 40)
+    monkeypatch.setenv("AUDIT_HMAC_KEY", "a" * 40)
+    monkeypatch.setenv("IAO_TASK_WORKER_LEASE_SECONDS", "999")
+    monkeypatch.setattr(api_main, "_get_service", lambda: _Service())
+
+    async def run_lifespan():
+        async with api_main._runtime_lifespan(api_main.app):
+            assert api_main._task_worker_readiness() == {
+                "status": "start_failed",
+                "reason": "TASK_WORKER_SETTINGS_OUT_OF_RANGE",
+            }
+
+    asyncio.run(run_lifespan())
