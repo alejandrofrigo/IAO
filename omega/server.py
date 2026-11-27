@@ -426,17 +426,30 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             raw_length = self.headers.get("Content-Length")
             if self.headers.get("Transfer-Encoding"):
                 self.close_connection = True
-                n = -1
+                self._send_error_json(400, "INVALID_TRANSFER_ENCODING")
+                return
+            if raw_length is None:
+                n = 0
             else:
                 try:
-                    n = int(raw_length) if raw_length is not None else 0
+                    n = int(raw_length)
                 except ValueError:
-                    n = -1
-            if n < 0 or n > MAX_BODY:
+                    self.close_connection = True
+                    self._send_error_json(400, "INVALID_CONTENT_LENGTH")
+                    return
+            if n < 0:
                 self.close_connection = True
-                body = b""
-            else:
-                body = self.rfile.read(n) if n else b""
+                self._send_error_json(400, "INVALID_CONTENT_LENGTH")
+                return
+            if n > MAX_BODY:
+                self.close_connection = True
+                self._send_error_json(413, "PAYLOAD_TOO_LARGE")
+                return
+            body = self.rfile.read(n) if n else b""
+            if len(body) != n:
+                self.close_connection = True
+                self._send_error_json(400, "INCOMPLETE_BODY")
+                return
             hdrs = {k.lower(): v for k, v in self.headers.items()}
             hdrs["x-omega-client-ip"] = self.client_address[0]
             status, payload = svc.handle(self.command, self.path, hdrs, body)
