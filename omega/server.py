@@ -229,21 +229,36 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 if os.environ.get("IAO_FEDERATION_PUBLIC_PEERING", "").lower() != "true" or not origin:
                     self._send_fed_json(404, {"error": "PUBLIC_PEERING_NOT_OFFERED"})
                     return
+                from urllib.parse import urlsplit
                 try:
-                    from urllib.parse import urlsplit
                     parsed = urlsplit(origin)
-                    if (parsed.scheme != "https" or not parsed.hostname
-                            or parsed.username or parsed.password
-                            or parsed.port not in (None, 443)
-                            or parsed.path or parsed.query or parsed.fragment):
-                        raise ValueError("INVALID_PUBLIC_ORIGIN")
+                    valid_origin = (
+                        parsed.scheme == "https"
+                        and bool(parsed.hostname)
+                        and not parsed.username
+                        and not parsed.password
+                        and parsed.port in (None, 443)
+                        and not parsed.path
+                        and not parsed.query
+                        and not parsed.fragment
+                    )
+                except ValueError:
+                    valid_origin = False
+                if not valid_origin:
+                    self._send_fed_json(503, {"error": "PUBLIC_PEERING_CONFIG_INVALID"})
+                    return
+                try:
                     publication = fed_node.identity_publication(
                         origin + "/fed/v1/message",
                         capabilities=sorted(fed_node.served),
                         consent=True,
                     )
-                except Exception:
-                    self._send_fed_json(503, {"error": "PUBLIC_PEERING_CONFIG_INVALID"})
+                except Exception as exc:
+                    sys.stderr.write(json.dumps({
+                        "event": "FEDERATION_HTTP_ERROR",
+                        "error_type": type(exc).__name__,
+                    }) + "\\n")
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
                 self._send_fed_json(200, publication)
                 return
