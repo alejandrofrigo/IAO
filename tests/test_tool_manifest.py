@@ -43,6 +43,10 @@ class ToolManifestTests(unittest.TestCase):
             {"effect_class": "UNRESTRICTED"},
             {"name": "Invalid Capability"},
             {"input_schema": {"bad": object()}},
+            {"input_schema": {"type": "object", "required": ["missing"], "properties": {}}},
+            {"input_schema": {"type": "string", "properties": {}}},
+            {"input_schema": {"type": "object", "properties": {"query": {"type": "string", "minLength": 9, "maxLength": 2}}}},
+            {"input_schema": {"type": "object", "properties": {"nested": {"type": "object", "unknownKeyword": True}}}},
         ):
             with self.subTest(patch=patch):
                 registry = ToolRegistry()
@@ -52,3 +56,15 @@ class ToolManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def test_schema_validator_rejects_unsupported_and_unbounded_array_shapes():
+    for schema in (
+        {"type": "array"},
+        {"type": "array", "items": {"type": "integer", "minimum": float("inf")}},
+        {"type": "object", "additionalProperties": "arbitrary"},
+    ):
+        with unittest.TestCase().assertRaises(ValueError):
+            registry = ToolRegistry()
+            registry.register(make_spec(input_schema=schema))
