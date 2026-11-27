@@ -38,4 +38,14 @@ def make_web_fetch(pol: EgressPolicy) -> ToolSpec:
         except (KeyError, AttributeError, TypeError, ValueError, binascii.Error):
             return "FAIL"
 
-    return ToolSpec("web.fetch", "1.0.0", "web.fetch", "READ_ONLY", pol.total_timeout + 2, validate, run, verify)
+    return ToolSpec(
+        "web.fetch", "1.0.0", "web.fetch", "READ_ONLY",
+        pol.total_timeout + 2, validate, run, verify,
+        input_schema={
+            "type": "object",
+            "properties": {"url": {"type": "string", "format": "uri"}},
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        provenance="built-in:egress-policy",
+    )
