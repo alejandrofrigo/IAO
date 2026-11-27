@@ -20,7 +20,7 @@ test("contract states the API proxy boundary and keeps agent polling disabled", 
   const body = await response.json();
   assert.equal(body.mode, "disabled");
   assert.equal(body.agent_polling, "disabled");
-  assert.equal(body.agent_status, "signed_read_only_forwarding_only");
+  assert.equal(body.agent_status, "disabled");
   assert.equal(body.privileged_commands, "disabled");
 });
 
