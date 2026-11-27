@@ -1277,6 +1277,7 @@ class OmegaService:
         return status, {**self._view(task), "cancellation": outcome}
 
     def _create_task(self, pr: Principal, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
+        effective_scopes = set(pr.scopes)
         d = self._json(body)
         idem = headers.get("idempotency-key")
         if idem is not None and not 1 <= len(idem) <= 128:
@@ -1352,6 +1353,21 @@ class OmegaService:
                     decision="DENY", reason=exc.code,
                 )
                 raise ApiError(exc.status, exc.code) from None
+            try:
+                # A signed device proof is necessary but not sufficient:
+                # the root+device grant is the authoritative capability set.
+                effective_scopes = set(
+                    self.operator_identity_authority.active_capabilities_for_session(
+                        pr.subject, self._verified_bearer_token(headers),
+                        policy_version=POLICY_VERSION,
+                    )
+                )
+            except OperatorIdentityError as exc:
+                self.store.audit(
+                    pr.subject, "OPERATOR_CAPABILITY_AUTHORITY_DENIED",
+                    "task_submission", decision="DENY", reason=exc.code,
+                )
+                raise ApiError(exc.status, exc.code) from None
             self.store.audit(
                 pr.subject, "DEVICE_REQUEST_VERIFIED", "task_submission",
                 decision="ALLOW", request_digest=hashlib.sha256(body).hexdigest(),
@@ -1368,7 +1384,7 @@ class OmegaService:
             "contract_version": "1.0",
             "goal": goal if isinstance(goal, str) else None,
             "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [],
-            "authorized_scopes": sorted(set(pr.scopes)),
+            "authorized_scopes": sorted(effective_scopes),
             "input": tin if isinstance(tin, dict) else {},
             "request_digest": request_digest,
             "operator_session_digest": (
@@ -1414,7 +1430,7 @@ class OmegaService:
         assert isinstance(cap, str) and isinstance(tin, dict)
         dec = authorize(
             cap, authenticated=True,
-            approved_capabilities=set(pr.scopes) & self.registry.names(),
+            approved_capabilities=effective_scopes & self.registry.names(),
         )
         self.store.audit(pr.subject, "DECISION", tid, decision="ALLOW" if dec.allowed else "DENY", reason=dec.reason,
                          capability=cap, policy_version=POLICY_VERSION)
