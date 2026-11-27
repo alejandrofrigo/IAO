@@ -506,6 +506,36 @@ class Store:
                 self.db.execute("ROLLBACK")
                 raise
 
+
+    def renew_task_lease(
+        self, task_id: str, worker_id: str, lease_generation: int,
+        lease_seconds: int,
+    ) -> bool:
+        """Extend only a live, current lease; cancellation and stale workers cannot renew."""
+        if (
+            isinstance(lease_generation, bool)
+            or not isinstance(lease_generation, int)
+            or lease_generation < 1
+            or isinstance(lease_seconds, bool)
+            or not isinstance(lease_seconds, int)
+            or not 1 <= lease_seconds <= 3600
+        ):
+            return False
+        now = datetime.now(timezone.utc)
+        now_iso_value = now.isoformat()
+        until = datetime.fromtimestamp(
+            now.timestamp() + lease_seconds, timezone.utc
+        ).isoformat()
+        with self.lock:
+            changed = self.db.execute(
+                "UPDATE task SET lease_until=?, updated_at=? "
+                "WHERE id=? AND state IN ('RUNNING','VERIFYING') "
+                "AND lease_owner=? AND lease_generation=? AND lease_until>? "
+                "AND cancel_requested_at IS NULL",
+                (until, now_iso_value, task_id, worker_id, lease_generation, now_iso_value),
+            ).rowcount
+        return changed == 1
+
     def update_claimed_task(
         self,
         task_id: str,
