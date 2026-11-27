@@ -171,7 +171,8 @@ def status() -> int:
     directory = state_dir()
     report_path = directory / "discovery-report.json"
     print("IAO_LIBP2P_DISCOVERY")
-    print("MODE=OUTBOUND_KADEMLIA_PLUS_TOR_ONION_DISCOVERY")\n    print("TOR_ONION_DISCOVERY=CONFIGURED_FEEDS_VIA_LOOPBACK_SOCKS5")
+    print("MODE=OUTBOUND_KADEMLIA_PLUS_TOR_ONION_DISCOVERY")
+    print("TOR_ONION_DISCOVERY=CONFIGURED_FEEDS_VIA_LOOPBACK_SOCKS5")
     print("INTERVAL_SECONDS=" + str(read_interval()))
     print("REPORT_PRESENT=" + str(report_path.is_file()).lower())
     print("AUTO_ASSIMILATION=QUARANTINED_INVENTORY_ONLY")
