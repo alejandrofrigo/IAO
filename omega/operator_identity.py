@@ -1501,8 +1501,6 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("INVALID_CAPABILITY_SIGNATURE", 401)
         if not isinstance(policy_version, str) or not 1 <= len(policy_version) <= 128:
             raise OperatorIdentityError("INVALID_POLICY_VERSION")
-        if isinstance(grant_ttl_seconds, bool) or not isinstance(grant_ttl_seconds, int) or not 60 <= grant_ttl_seconds <= 900:
-            raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_TTL")
         subject_digest = self._session_subject_digest(subject)
         session_digest = self._session_credential_digest(session_token)
         now = time.time()
