@@ -15,6 +15,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from omega.config import validate_persistent_keys
+
 @asynccontextmanager
 async def _runtime_lifespan(_app):
     # Start persistent service and network workers during configured production boot.
@@ -148,8 +150,10 @@ def _get_service():
             if _service is None:
                 token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
                 audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
-                if len(token_key) < 32 or len(audit_key) < 32:
-                    raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
+                try:
+                    validate_persistent_keys(token_key, audit_key)
+                except ValueError:
+                    raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED") from None
                 from omega.server import build_service
 
                 state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
