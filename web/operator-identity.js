@@ -498,6 +498,7 @@
         result.capability !== "knowledge.search" || !Number.isInteger(result.expires_at)) {
       throw new Error("INVALID_CAPABILITY_GRANT_RESPONSE");
     }
+    window.dispatchEvent(new Event("iao-capabilities-changed"));
     return result;
   }
 
@@ -525,6 +526,7 @@
     if (result.authority !== "OPERATOR_CAPABILITY_REVOKED" || result.revoked !== true) {
       throw new Error("INVALID_CAPABILITY_REVOCATION_RESPONSE");
     }
+    window.dispatchEvent(new Event("iao-capabilities-changed"));
     return result;
   }
 
