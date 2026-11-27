@@ -224,7 +224,7 @@ class AgentAuthority:
         digest = hashlib.sha256(payload).hexdigest()
         primary_device_id = hashlib.sha256(serialization.load_pem_public_key(primary_pem.encode("ascii")).public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
         identity_lock = getattr(self.operator_identity, "lock", None)
-        identity_guard = identity_lock if identity_lock is not None else contextmanager(lambda: (yield))()
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
         with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -302,7 +302,7 @@ class AgentAuthority:
         except Exception:
             raise AgentAuthorityError("PRIMARY_OR_ROOT_AUTHORITY_INVALID", 403) from None
         identity_lock = getattr(self.operator_identity, "lock", None)
-        identity_guard = identity_lock if identity_lock is not None else contextmanager(lambda: (yield))()
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
         with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
