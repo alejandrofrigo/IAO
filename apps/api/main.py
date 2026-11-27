@@ -107,6 +107,8 @@ async def _read_bounded_service_body(request: Request):
     raw_length = request.headers.get("content-length")
     if raw_length is not None:
         try:
+            if not raw_length.isascii() or not raw_length.isdigit():
+                raise ValueError
             declared_length = int(raw_length)
         except ValueError:
             return None, _service_response(
@@ -332,7 +334,9 @@ async def _federation_body(request: Request):
         return None, _federation_json(400, {"error": "INVALID_TRANSFER_ENCODING"})
     raw_length = request.headers.get("content-length")
     try:
-        length = int(raw_length) if raw_length is not None else -1
+        if raw_length is None or not raw_length.isascii() or not raw_length.isdigit():
+            raise ValueError
+        length = int(raw_length)
     except ValueError:
         length = -1
     from omega.federation import MAX_MSG
