@@ -85,8 +85,8 @@ export function allowedRoute(method, pathname) {
   ].includes(pathname)) return true;
 
   if (method === "GET" &&
-      /^\\/v1\\/conversations\\/[0-9a-f-]{36}\\/messages$/.test(pathname)) return true;
-  if (method === "GET" && /^\\/v1\\/tasks\\/[0-9a-f-]{36}$/.test(pathname)) return true;
+      new RegExp("^/v1/conversations/[0-9a-f-]{36}/messages$").test(pathname)) return true;
+  if (method === "GET" && new RegExp("^/v1/tasks/[0-9a-f-]{36}$").test(pathname)) return true;
   return false;
 }
 
