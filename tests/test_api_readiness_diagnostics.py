@@ -97,7 +97,7 @@ def test_task_worker_readiness_requires_heartbeat_and_live_pid(monkeypatch, tmp_
     assert api_main._task_worker_health() == "healthy"
 
     monkeypatch.setattr(
-        api_main,
+        supervision,
         "read_heartbeat",
         lambda *_args, **_kwargs: {"status": "STALE", "pid": 4242},
         raising=False,
@@ -114,7 +114,7 @@ def test_task_worker_readiness_requires_heartbeat_and_live_pid(monkeypatch, tmp_
 def test_task_worker_readiness_rejects_pid_without_heartbeat(monkeypatch, tmp_path):
     monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(
-        api_main,
+        supervision,
         "read_heartbeat",
         lambda *_args, **_kwargs: {"status": "UNVERIFIED", "pid": 4242},
         raising=False,
