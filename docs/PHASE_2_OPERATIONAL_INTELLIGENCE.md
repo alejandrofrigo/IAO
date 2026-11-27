@@ -18,7 +18,7 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 |---:|---|---|---|
 | 01 | Contrato de tareas versionado | `omega/task_contract.py` valida la versión 1.0, campos exactos, capacidades/scopes, digest, presupuesto, expiración, profundidad y tamaño de entrada antes de persistir; `tests/test_task_contract.py` cubre entradas válidas y negativas. | IMPLEMENTADO — CI pendiente |
 | 02 | Planificador determinista | `omega/task_planner.py` valida DAGs acotados, rechaza ciclos/referencias desconocidas y produce orden topológico estable sin ejecutar herramientas ni conceder permisos; `tests/test_task_planner.py` cubre orden, invariancia, ciclos y entradas hostiles. | IMPLEMENTADO — CI pendiente |
-| 03 | Motor de estados de ejecución | Máquina de estados explícita, transiciones permitidas, cancelación y terminalidad idempotentes. | PENDIENTE |
+| 03 | Motor de estados de ejecución | `omega.control` define el grafo determinista; `Store.transition_task_state` aplica compare-and-swap atómico y `OmegaService` lo usa para cada transición, devolviendo conflicto si el estado cambió concurrentemente. Pruebas positivas, de transición ilegal y conflicto CAS en `tests/test_task_queue.py`. | IMPLEMENTADO — CI pendiente |
 | 04 | Cola persistente con leases | Claims atómicos, expiración, fencing token y prevención de doble ejecución; pruebas concurrentes. | PENDIENTE |
 | 05 | Despacho por capacidades | Herramientas/adaptadores seleccionados por capacidades declaradas y verificadas, nunca por nombres o claims no probados. | PENDIENTE |
 | 06 | Router multi-LLM | Selección por tarea, modalidad, límites, disponibilidad, latencia y coste configurado; fallback con límites y sin exponer secretos. | PENDIENTE |
