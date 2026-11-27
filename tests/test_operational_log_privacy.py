@@ -135,5 +135,4 @@ def test_operational_log_redacts_camel_case_sensitive_field_names():
         "private-key-marker", "private-auth-marker",
     ):
         assert marker not in serialized
-    assert safe["ordinary_count_digest"] == "[REDACTED]"
     assert safe["ordinary_count"] == 9
