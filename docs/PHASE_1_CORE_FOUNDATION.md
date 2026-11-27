@@ -41,7 +41,7 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 16 | Manejo uniforme de errores | Errores internos tipados, códigos públicos estables, no filtración de excepciones ni secretos. | EN CURSO |
 | 17 | Empaquetado reproducible | Dependencias fijadas, instalación limpia y build reproducible en versiones Python soportadas. | PENDIENTE |
 | 18 | Contrato de contenedor | Imagen construible, usuario/permisos adecuados, healthcheck y configuración explícita; sin secretos en capas. | IMPLEMENTADO |
-| 19 | Puertas de calidad y regresión | CI ejecuta compilación, tests, lint, contratos y gates críticos en Python soportado; fallos bloquean integración. | EN CURSO |
+| 19 | Puertas de calidad y regresión | CI ejecuta compilación, tests, lint, contratos y gates críticos en Python soportado; fallos bloquean integración. | VERIFICADO (CI del SHA d5b011cff1b620b00a468a5bad84b720fbc8fec4) |
 | 20 | Cierre de fase y guía operativa | Informe de evidencia por objetivo, brechas restantes, procedimiento de recuperación y criterios para iniciar Fase 2. | EN CURSO |
 
 ## Resumen consolidado de los 20 objetivos
@@ -53,9 +53,9 @@ Corte documental del HEAD inspeccionado: `9582a9570704277a11ab5dadbb15732322f055
 | IMPLEMENTADO (pendiente de evidencia de aceptación) | 12 | 02–12 y 18 |
 | EN CURSO | 7 | 01, 13, 14, 15, 16, 19 y 20 |
 | PENDIENTE | 1 | 17 |
-| VERIFICADO | 0 | Ninguno todavía |
+| VERIFICADO | 1 | 19 (CI y regresión sobre el SHA indicado) |
 
-**Resultado global:** 0/20 objetivos verificados; 12/20 tienen implementación documentada, 7/20 siguen en curso y 1/20 está pendiente. Por tanto, la Fase 1 permanece **EN CURSO**. No se inicia formalmente la Fase 2 hasta que cada objetivo tenga evidencia aceptada en el HEAD final, CI completo y las dependencias entre PRs resueltas explícitamente.
+**Resultado global actualizado:** 1/20 objetivos verificados (objetivo 19, alcance de CI); 12/20 tienen implementación documentada, 6/20 siguen en curso y 1/20 está pendiente. La Fase 1 permanece abierta. Por tanto, la Fase 1 permanece **EN CURSO**. No se inicia formalmente la Fase 2 hasta que cada objetivo tenga evidencia aceptada en el HEAD final, CI completo y las dependencias entre PRs resueltas explícitamente.
 
 Los objetivos 02–12 y 18 no se elevan a VERIFICADO por su sola implementación. Los objetivos 01 y 13–16 requieren completar sus brechas de inventario, autorización, privacidad, supervisión y contratos de error. El 17 requiere un `uv.lock` revisado e incorporado y una instalación bloqueada reproducible. El 19 requiere que todas las puertas pasen sobre el mismo SHA final. El 20 requiere reconciliar la evidencia, ejecutar el runbook y aprobar el cierre sin afirmar despliegue o capacidades externas no probadas.
 
@@ -147,3 +147,17 @@ Corte: HEAD de la rama `phase-1-core-foundation-20261127` posterior a los cambio
 Los cambios de esta continuación afectan a `omega/operational_log.py`, `tests/test_operational_log_privacy.py`, `tools/iao_five_motor_supervisor.py`, `tests/test_supervision_health.py`, `omega/supervision.py`, `apps/api/main.py`, `omega/task_worker.py`, `tests/test_api_readiness_diagnostics.py`, `tests/test_service.py`, `tools/iao_node_network_engine.py`, `tools/iao_federation_worker.py`, `tests/test_node_network_privacy.py` y `tests/test_federation_worker_privacy.py`.
 
 En el último SHA consultado, los checks Python 3.12/3.13, instalación bloqueada, contrato API, Mobile Chromium, Docker y quality gate estaban **QUEUED**. No se declara ningún test nuevo aprobado. No fusionar ni desplegar hasta que los checks terminen y se revisen sus logs.
+
+
+## Evidencia CI consolidada — SHA `d5b011cff1b620b00a468a5bad84b720fbc8fec4`
+
+Ejecución final de Fase 1 consultada el 2026-11-27:
+- IAO CI: **SUCCESS**. Python 3.12 y 3.13; instalación bloqueada en ambas versiones; compilación y suite completa. Python 3.12: 613 passed, 1 skipped.
+- IAO quality gate: **SUCCESS**.
+- IAO container build qualification: **SUCCESS**, incluidos build Docker y API contract tests.
+- IAO mobile browser integration: **SUCCESS**.
+- El workflow publica el artefacto temporal `iao-uv-lock` y las instalaciones `uv sync --locked` pasaron en Python 3.12/3.13. Sin embargo, el artefacto `uv.lock` aún no está comprometido en el repositorio: el objetivo 17 continúa PENDIENTE.
+- El paso de Ruff de todo el repositorio es informativo (`continue-on-error: true`) y reportó deuda heredada; el lint de integración bloqueante sí pasó. No se afirma limpieza global de lint.
+- Esta evidencia verifica el objetivo 19 en el alcance de la matriz CI y no demuestra ejecución productiva, despliegue ni disponibilidad mundial.
+
+**Brechas de salida todavía abiertas:** objetivo 01 (inventario actualizado y reconciliación de PRs); 13 (matriz positiva/negativa completa por ruta y adaptador); 14 (historial Git, launchers, imágenes y artefactos); 15 (Guardian, ciclo de vida TaskWorker y recuperación por motor); 16 (auditoría exhaustiva de rutas y errores); 17 (uv.lock comprometido); 20 (runbook ejecutado y cierre de fase). Los objetivos 02–12 y 18 siguen IMPLEMENTADOS, pero no se elevan a VERIFICADOS por inferencia.
