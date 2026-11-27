@@ -209,3 +209,19 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_node_network_heartbeat_is_bound_to_worker_and_supervisor(tmp_path, monkeypatch):
+    from tools import iao_five_motor_supervisor
+
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("IAO_LIBP2P_DISCOVERY_INTERVAL", "60")
+    worker.write_worker_heartbeat(
+        "cycle_completed",
+        last_completed=time.time(),
+        last_result=True,
+    )
+    assert worker._heartbeat_path() == tmp_path / "node-network-heartbeat.json"
+    assert iao_five_motor_supervisor.motor_heartbeat_status(
+        "NODE_NETWORK", os.getpid()
+    ) == "HEALTHY"
