@@ -72,6 +72,10 @@ export function allowedRoute(method, pathname) {
     "/v1/operator/device/bind",
     "/v1/operator/session/challenge",
     "/v1/operator/session/bind",
+    "/v1/operator/capability-grant/challenge",
+    "/v1/operator/capability-grant/complete",
+    "/v1/operator/capability-grant/revoke/challenge",
+    "/v1/operator/capability-grant/revoke/complete",
     "/v1/device/enroll",
     "/v1/device/challenge",
     "/v1/device/command",
@@ -82,6 +86,7 @@ export function allowedRoute(method, pathname) {
   if (method === "GET" && [
     "/v1/me",
     "/v1/operator/session/status",
+    "/v1/operator/capability-grant/status",
   ].includes(pathname)) return true;
 
   if (method === "GET" &&
