@@ -366,9 +366,17 @@ async def federation_message(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.get("/health/live")
-def live() -> dict[str, str]:
-    return {"status": "live"}
+@app.api_route(
+    "/health/live",
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+)
+def live(request: Request):
+    if request.method != "GET":
+        return _method_not_allowed(("GET",))
+    return _service_response(
+        200,
+        {"status": "live", "correlation_id": uuid.uuid4().hex},
+    )
 
 
 @app.api_route("/health/ready", methods=["GET", "POST", "PUT", "DELETE"])
