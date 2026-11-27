@@ -1407,6 +1407,28 @@ class QueuedTaskApiTests(Base):
         )
         self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
 
+
+    def test_queued_task_without_active_dual_signed_grant_is_denied(self) -> None:
+        with self.svc.operator_identity_authority._database() as db:
+            db.execute(
+                "UPDATE operator_capability_grants SET revoked_at=?",
+                (time.time(),),
+            )
+        payload = {
+            "goal": "search without a capability grant",
+            "capability": "knowledge.search",
+            "input": {"query": "audit chain"},
+            "execution_mode": "queued",
+        }
+        status, denied = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(denied["reason"], "CAPABILITY_NOT_GRANTED")
+        self.assertEqual(
+            self.svc.store.count_tasks_since("queued-user", "0000"), 0,
+        )
+
     def test_queued_mode_rejects_non_read_only_capability(self) -> None:
         self.svc.registry.register(
             ToolSpec(
