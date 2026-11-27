@@ -38,6 +38,9 @@ class _ClaimedTaskStore:
     def task_cancel_requested(self, task_id, worker_id, lease_generation):
         return self.cancel_requested
 
+    def renew_task_lease(self, task_id, worker_id, lease_generation, lease_seconds):
+        return not self.cancel_requested and lease_generation == self.task["lease_generation"]
+
     def audit(self, *args, **kwargs):
         self.events.append((args, kwargs))
 
