@@ -466,9 +466,9 @@ class StrictFederationEnvelopeTests(FedBase):
             {"nonce": "x" * 129},
             {"body": []},
         )):
-            status, payload = self.raw(self.env(
-                **changes, nonce=changes.get("nonce", f"invalid-envelope-body-{index:02d}"),
-            ))
+            envelope_changes = {"nonce": f"invalid-envelope-body-{index:02d}"}
+            envelope_changes.update(changes)
+            status, payload = self.raw(self.env(**envelope_changes))
             self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
 
     def test_duplicate_or_non_finite_challenge_fields_are_rejected(self):
