@@ -64,6 +64,7 @@ test("rejects paths outside the API surface and path traversal", () => {
     "//attacker.example/v1/tasks",
     "/admin/secrets",
     "/v1/../admin",
+    "/v1/tasks\\..\\admin",
     "/v1//tasks",
     "/health/..//admin",
   ]) {
