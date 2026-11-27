@@ -2,7 +2,7 @@
 
 **Estado:** evidencia documental adicional; no sustituye la verificación del HEAD ni de CI.
 **SHA base observado:** `0920643d05833a2a761f9168ae1e89ed9944fcc7`.
-**HEAD observado al actualizar:** `88f9cd5f878bb3fbe376f08ede806efc5e0c21b6` (359 ahead / 0 behind).
+**HEAD observado al actualizar:** pendiente de refrescar tras integración de worker lifecycle y API-origin fail-closed; no reutilizar el SHA histórico.
 **Rama destino:** `phase-1-core-foundation-20261127`
 **Alcance:** objetivo 01 de `PHASE_1_CORE_FOUNDATION.md`.
 
@@ -25,11 +25,16 @@ La inspección confirma que existen dos adaptadores HTTP (stdlib y FastAPI), un 
 | PR | Rama / propósito | Relación documentada | Tratamiento |
 |---:|---|---|---|
 | #17 | Gates de calidad y readiness ledger; base `iao-production-gates-20261127T0856Z` | Base de trabajo de la Fase 1 | Mantener como base; comprobar SHA y CI exactos |
-| #16 | Lifecycle opt-in del TaskWorker | Diverge de la base: 132 ahead / 40 behind, según el inventario de PR #20 | No fusionar ni cherry-pickear automáticamente |
-| #19 | Diagnósticos de readiness del TaskWorker | Apilada sobre #16: 4 ahead / 0 behind, según PR #20 | Evaluar junto con #16; no duplicar TaskWorker |
-| #18 | Recuperación IPFS DAG-JSON read-only | Rama independiente: 8 ahead / 0 behind, según PR #20 | Mantener fuera de la integración del núcleo salvo decisión explícita |
+| #16 | Lifecycle opt-in del TaskWorker | Rama apilada sobre chat task intake/capability grants; se adaptó e integró en Fase 1 `apps/api/main.py` (worker opt-in, mismo Store/registry/authority, heartbeat y apagado limitado). | No integrar otra copia; conservar PR original para revisión de divergencias restantes |
+| #19 | Diagnósticos de readiness del TaskWorker | Apilada sobre #16; se integró el estado `blocked/start_failed/running/worker_exited/stop_timeout` y pruebas de lifecycle en Fase 1. | No integrar otra copia; comparar únicamente diferencias pendientes |
+| #18 | Recuperación IPFS DAG-JSON read-only | Rama independiente sobre production gates. | Mantener fuera del núcleo hasta verificar egress, CID, CI y disponibilidad real |
+| #2 | Base Tor/P2P y descubrimiento onion/libp2p | Rama separada sobre `iao-production-build-20261126`; no forma parte de la cadena Fase 1/2. | Bloque crítico de integración para objetivo descentralizado; revisar tests y límites antes de incorporar |
+| #3–#8 | Gateway Cloudflare, proxy fijo y delegación Termux | Cadena de PRs separada desde main; despliegue/activación explícitamente deshabilitados. | Mantener fuera hasta unificar autoridad y decidir backend sin coste; nunca introducir Quick Tunnel |
+| #9–#10 | Protocolo de lease y grants duales root/dispositivo | Rama de agente separada; PR #10 implementa grants de `knowledge.search` con expiración/revocación. | Reconciliar con el allowlist READ_ONLY de Fase 2; no duplicar autoridades ni otorgar scopes globales |
+| #13 | Chat → task intake | Apilada sobre PR #10; panel y E2E con grants. | Comparar con el panel mínimo de Fase 2 y conservar el flujo con grants si sus pruebas superan CI |
+| #20–#21 | Fase 1 y Fase 2 | Cadena actual: PR #20 sobre production gates; PR #21 sobre PR #20. | Mantener como línea principal de consolidación; gates exactos pendientes |
 
-Las relaciones y distancias anteriores son las cifras registradas en el cuerpo de PR #20 y en el ledger de Fase 1; deben volver a comprobarse contra los refs actuales antes de cualquier integración. La búsqueda de PRs abiertas también confirma que #16, #17, #18, #19 y #20 permanecen como líneas de trabajo separadas en el inventario consultado. No se realizó merge, cherry-pick ni despliegue.
+El inventario REST de PRs abiertas del 2026-11-27 confirma la cadena y bases descritas. El código de worker lifecycle/readiness de #16/#19 ya fue adaptado en Fase 1; no se fusionaron sus ramas. #2, #3–#10, #13 y #18 siguen siendo líneas separadas. El manifiesto Render y el workflow Cloud Run dependiente de facturación se retiraron de las ramas Fase 1/2; el API origin del navegador ahora falla cerrado si no se configura HTTPS explícitamente. No se realizó merge ni despliegue.
 
 ## Discrepancia de inventario que debe resolverse
 
@@ -53,7 +58,9 @@ El ledger de Fase 1 registra la rama como **359 commits ahead / 0 behind** de `i
 1. Obtener SHA exactos de HEAD y base y ejecutar comparación de refs actual.
 2. Registrar el resultado actual de los workflows de CI para el SHA exacto de la rama.
 3. Confirmar que los PRs apilados conservan sus relaciones y que no hay divergencia nueva.
-4. Decidir explícitamente si #16/#19 se integran en esta rama o permanecen separados; no resolverlo mediante cherry-pick automático.
-5. Mantener #18 independiente de la consolidación del núcleo salvo que una dependencia real lo exija.
+4. Verificar CI del worker lifecycle/readiness integrado y comparar #16/#19 para identificar solo cambios restantes.
+5. Integrar el chat task intake con capability grants de #10/#13 sin duplicar la autoridad ni debilitar el vínculo al dispositivo.
+6. Evaluar #2 Tor/P2P y #18 IPFS con pruebas de red reales, manteniendo candidatos públicos en cuarentena.
+7. Reconciliar #3–#8 con el backend sin coste y sin activar un segundo plano de autoridad.
 
 **Resultado:** inventario estático y mapa de dependencias ampliados. El objetivo 01 permanece **EN CURSO** hasta verificar los refs/SHAs y CI actuales. Esta auditoría no modifica código de ejecución ni declara producción.
