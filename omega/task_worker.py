@@ -180,6 +180,12 @@ class TaskWorker:
                     {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_REVOKED"},
                 )
 
+            if self._cancel_requested(task_id):
+                return self._finish(
+                    task_id, owner, "CANCELLED",
+                    {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                )
+
             started = datetime.now(timezone.utc).isoformat()
             digest_in = _digest(clean)
             timeout = min(
@@ -216,6 +222,11 @@ class TaskWorker:
                 digest_in, _digest(output), None, started,
                 datetime.now(timezone.utc).isoformat(),
             )
+            if self._cancel_requested(task_id):
+                return self._finish(
+                    task_id, owner, "CANCELLED",
+                    {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                )
             if not self.store.update_claimed_task(
                 task_id, self.worker_id, "VERIFYING",
                 lease_generation=self._active_lease_generation,
@@ -254,13 +265,34 @@ class TaskWorker:
             )
             return True
 
+    def _cancel_requested(self, task_id: str) -> bool:
+        checker = getattr(self.store, "task_cancel_requested", None)
+        if not callable(checker):
+            return False
+        return bool(checker(
+            task_id, self.worker_id,
+            getattr(self, "_active_lease_generation", None),
+        ))
+
     def _finish(
         self, task_id: str, owner: str, state: str, result: dict[str, Any]
     ) -> bool:
-        if not self.store.update_claimed_task(
+        generation = getattr(self, "_active_lease_generation", None)
+        if state != "CANCELLED" and self._cancel_requested(task_id):
+            state = "CANCELLED"
+            result = {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"}
+        updated = self.store.update_claimed_task(
             task_id, self.worker_id, state, result, release=True,
-            lease_generation=getattr(self, "_active_lease_generation", None),
-        ):
+            lease_generation=generation,
+        )
+        if not updated and state != "CANCELLED" and self._cancel_requested(task_id):
+            state = "CANCELLED"
+            result = {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"}
+            updated = self.store.update_claimed_task(
+                task_id, self.worker_id, state, result, release=True,
+                lease_generation=generation,
+            )
+        if not updated:
             self.store.audit(
                 "system", "TASK_WORKER_STALE_COMPLETION", task_id,
                 worker=self.worker_id, attempted_state=state,
