@@ -337,8 +337,12 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self.end_headers()
                 self.wfile.write(data)
                 return
-            n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(min(n, MAX_BODY + 1)) if n else b""
+            raw_length = self.headers.get("Content-Length")
+            try:
+                n = int(raw_length) if raw_length is not None else 0
+            except ValueError:
+                n = -1
+            body = self.rfile.read(min(n, MAX_BODY + 1)) if n > 0 else b""
             hdrs = {k.lower(): v for k, v in self.headers.items()}
             hdrs["x-omega-client-ip"] = self.client_address[0]
             status, payload = svc.handle(self.command, self.path, hdrs, body)
@@ -348,9 +352,16 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            correlation_id = payload.get("correlation_id")
+            if isinstance(correlation_id, str):
+                self.send_header("X-Correlation-ID", correlation_id)
+            allowed_methods = payload.get("allowed_methods")
+            if status == 405 and isinstance(allowed_methods, list):
+                self.send_header("Allow", ", ".join(allowed_methods))
             self.end_headers()
             self.wfile.write(data)
-            sys.stderr.write(json.dumps({"m": self.command, "p": self.path.split("?")[0], "s": status, "cid": payload.get("correlation_id")}) + "\n")
+            sys.stderr.write(json.dumps({"m": self.command, "p": self.path.split("?")[0], "s": status, "cid": correlation_id}) + "\n")
 
         do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = _do
 
