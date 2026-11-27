@@ -20,19 +20,16 @@ _STOP_EVENT = threading.Event()
 
 
 def _record(state_dir: Path, event: str, **details: object) -> None:
+    from omega.operational_log import append_private_jsonl
+
     path = state_dir / "federation-autojoin.jsonl"
     entry = {
         "time": datetime.now(timezone.utc).isoformat(),
         "event": event,
         **details,
     }
-    state_dir.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-        try:
-            os.write(fd, (json.dumps(entry, sort_keys=True) + "\n").encode())
-        finally:
-            os.close(fd)
+        append_private_jsonl(path, entry)
 
 
 def _origin(node: dict) -> str:
@@ -183,7 +180,7 @@ def run_cycle(fed_node, state_dir: Path) -> dict:
                     node.get("node_id", node.get("peer_id", "unknown"))
                     if isinstance(node, dict) else "invalid"
                 ),
-                reason=str(exc)[:180],
+                error_type=type(exc).__name__,
             )
 
     result = {
