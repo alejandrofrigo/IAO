@@ -5,6 +5,7 @@ import fcntl
 import json
 import math
 import os
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -85,7 +86,11 @@ def read_heartbeat(
 ) -> dict[str, Any]:
     """Return a bounded health classification; malformed or stale is unverified."""
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("INVALID_HEARTBEAT_FILE")
+            payload = json.load(stream)
         if (
             not isinstance(payload, dict)
             or isinstance(payload.get("schema_version"), bool)
@@ -147,10 +152,13 @@ def read_heartbeat(
 def read_lock_owner(path: Path) -> int | None:
     """Return the PID holding an advisory lock, or None when no lock is held."""
     path = Path(path)
-    if not path.is_file():
-        return None
+    fd = None
     try:
-        with path.open("r+", encoding="utf-8") as stream:
+        fd = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "r+", encoding="utf-8") as stream:
+            fd = None
             raw_owner = stream.read(32).strip()
             owner = int(raw_owner) if raw_owner.isdigit() else None
             try:
@@ -161,4 +169,7 @@ def read_lock_owner(path: Path) -> int | None:
             return None
     except (OSError, ValueError):
         return None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
