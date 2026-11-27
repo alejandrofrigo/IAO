@@ -26,6 +26,30 @@ El `TaskWorker` standalone publica opcionalmente un heartbeat `TASK_WORKER` sin 
 
 Los heartbeats y eventos operativos se guardan bajo directorios privados (0700) y archivos privados (0600). El logger redacta prompts, consultas, trazas, comandos y rutas; los campos string desconocidos y listas de texto no confiables se convierten en digest por defecto. Solo conserva etiquetas de esquema/códigos acotados y nombres de capabilities validados. No deben añadirse prompts, consultas, credenciales ni contenido de usuario a los logs. El barrido del árbol de trabajo no limpia commits anteriores ni artefactos históricos. Una reescritura de historial o force-push requiere autorización explícita y coordinación de la revisión; no se realiza automáticamente.
 
+## Contrato operativo de errores HTTP
+
+Las respuestas JSON de error de API deben usar un código público estable en `error`, un `correlation_id` hexadecimal de 32 caracteres y la cabecera `X-Correlation-ID` con el mismo valor. Deben incluir `Cache-Control: no-store` y `X-Content-Type-Options: nosniff`; los 405 incluyen `Allow`. No se devuelven excepciones, trazas, rutas internas, detalles de framework ni mensajes de proveedores. La correlación sirve para localizar evidencia privada sin copiar el cuerpo de la solicitud a logs.
+
+- `NOT_FOUND` y `METHOD_NOT_ALLOWED` son errores de contrato, no evidencia de caída del proceso.
+- `INTERNAL_ERROR`, `IAO_SERVICE_UNAVAILABLE` y `FEDERATION_UNAVAILABLE` no exponen causa interna; el diagnóstico se obtiene de logs privados por clase de excepción y del estado de readiness.
+- Una denegación de preflight devuelve `CORS_PREFLIGHT_DENIED`; no debe añadirse una cabecera CORS permisiva a la respuesta denegada.
+- Los errores de cuerpo (longitud, tamaño, codificación o framing) deben conservar el mismo sobre de correlación y privacidad en ambos adaptadores.
+
+El contrato y sus regresiones de FastAPI/stdlib están en proceso de cualificación. No declarar el objetivo 16 como VERIFICADO hasta que la suite completa pase en el SHA exacto y se revise la matriz de rutas y métodos.
+
+## Instalación reproducible
+
+Cuando `uv.lock` haya sido generado, revisado e incorporado al repositorio, la instalación de desarrollo debe usar exclusivamente el lock:
+
+```sh
+uv sync --locked --python 3.12 --extra dev
+uv run --locked --python 3.12 --with pip python -m pip check
+uv sync --locked --python 3.13 --extra dev
+uv run --locked --python 3.13 --with pip python -m pip check
+```
+
+No eliminar `--locked` para ocultar divergencias entre `pyproject.toml` y `uv.lock`. Si el lock no resuelve o la instalación falla en una versión soportada, el objetivo 17 permanece PENDIENTE y no se integra.
+
 ## Persistencia y recuperación
 
 1. Antes de recuperar o actualizar, detener ordenadamente el proceso que escribe en SQLite. No copiar una base de datos activa como si fuera un backup consistente.
