@@ -99,8 +99,9 @@ def sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
             if isinstance(value, BaseException):
                 error_type = type(value).__name__
             elif isinstance(value, str):
-                match = re.match(r"([A-Za-z_][A-Za-z0-9_.]*)", value)
-                error_type = match.group(1) if match else "REDACTED"
+                # Free-form error text is untrusted and may begin with an
+                # operator name, email local-part, or other identifying data.
+                error_type = "REDACTED"
             else:
                 error_type = type(value).__name__
             safe["error_type"] = error_type
