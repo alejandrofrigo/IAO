@@ -55,9 +55,9 @@ button:disabled{opacity:.5}
   if (!apiConfigured) {
     connectBtn.disabled = true;
     sendBtn.disabled = true;
-    status(window.IAO_API_CONFIG_STATUS === "blocked"
-      ? "API_BASE_NOT_CONFIGURED: el servicio está bloqueado hasta configurar un origen HTTPS válido."
-      : "API_CONFIG_UNAVAILABLE: no se pudo cargar la configuración segura de API.");
+    const configError = typeof window.IAO_API_CONFIG_ERROR === "string" &&
+      window.IAO_API_CONFIG_ERROR ? window.IAO_API_CONFIG_ERROR : "API_CONFIG_UNAVAILABLE";
+    status(configError + ": el servicio está bloqueado hasta configurar un origen HTTPS válido.");
   }
 
   async function request(path, method = "GET", body) {
