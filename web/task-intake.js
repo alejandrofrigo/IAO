@@ -2,10 +2,11 @@
   const queryEl = document.querySelector("#iao-task-query");
   const submitButton = document.querySelector("#iao-task-submit");
   const refreshButton = document.querySelector("#iao-task-refresh");
+  const cancelButton = document.querySelector("#iao-task-cancel");
   const authStatusEl = document.querySelector("#iao-task-auth-status");
   const statusEl = document.querySelector("#iao-task-status");
   const resultEl = document.querySelector("#iao-task-result");
-  if (!queryEl || !submitButton || !refreshButton || !authStatusEl || !statusEl || !resultEl) return;
+  if (!queryEl || !submitButton || !refreshButton || !cancelButton || !authStatusEl || !statusEl || !resultEl) return;
 
   let latestTaskId = null;
   let busy = false;
@@ -40,6 +41,7 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = true;
+      cancelButton.disabled = true;
       setAuthStatus("Inicia sesión como operador y vincula el dispositivo primario.");
       return false;
     }
@@ -48,6 +50,7 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = true;
+      cancelButton.disabled = true;
       setAuthStatus("La autoridad de capacidades no está disponible.");
       return false;
     }
@@ -58,6 +61,7 @@
       queryEl.disabled = !active || busy;
       submitButton.disabled = !active || busy;
       refreshButton.disabled = !latestTaskId || busy;
+      cancelButton.disabled = !latestTaskId || !token || busy;
       setAuthStatus(active
         ? "Autorización activa: knowledge.search (solo lectura, corpus IAO)."
         : "Sin autorización activa. Concede knowledge.search desde el panel de identidad.");
@@ -66,6 +70,7 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = true;
+      cancelButton.disabled = !latestTaskId || !token || busy;
       setAuthStatus("No se pudo verificar la autorización: " + String(error.message || error));
       return false;
     }
@@ -158,6 +163,7 @@
 
   submitButton.addEventListener("click", submitTask);
   refreshButton.addEventListener("click", refreshTaskStatus);
+  cancelButton.addEventListener("click", cancelTask);
   window.addEventListener("iao-session-changed", () => {
     const token = sessionToken();
     if (token !== lastSessionToken) {
