@@ -463,7 +463,16 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 return
             hdrs = {k.lower(): v for k, v in self.headers.items()}
             hdrs["x-omega-client-ip"] = self.client_address[0]
-            status, payload = svc.handle(self.command, self.path, hdrs, body)
+            try:
+                status, payload = svc.handle(self.command, self.path, hdrs, body)
+            except Exception as exc:
+                sys.stderr.write(json.dumps({
+                    "event": "API_HTTP_ERROR",
+                    "error_type": type(exc).__name__,
+                }) + "\n")
+                self.close_connection = True
+                self._send_error_json(503, "IAO_SERVICE_UNAVAILABLE")
+                return
             data = json.dumps(payload).encode()
             self.send_response(status)
             self._cors_headers()
