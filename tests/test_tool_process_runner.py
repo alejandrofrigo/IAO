@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import time
 
 import pytest
+from omega.tools import process_runner
 
 from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.process_runner import (
@@ -58,4 +61,52 @@ def test_bound_local_corpus_tool_is_pickleable_in_spawned_process(tmp_path):
 
     assert output["tool"] == "knowledge.search"
     assert output["items"][0]["document_id"] == "security"
+    assert verdict == "PASS"
+
+
+def test_production_mode_fails_closed_without_os_sandbox(monkeypatch):
+    monkeypatch.delenv("IAO_TOOL_SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setattr(process_runner.shutil, "which", lambda _name: None)
+    with pytest.raises(process_runner.ToolProcessError, match="OS_SANDBOX_UNAVAILABLE"):
+        run_tool_isolated(_echo_tool, _verify_echo, {"value": "isolated"}, 5)
+
+
+def test_bubblewrap_mode_uses_read_only_root_and_unshared_network(monkeypatch):
+    monkeypatch.setenv("IAO_TOOL_SANDBOX_MODE", "bubblewrap")
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setattr(process_runner.shutil, "which", lambda _name: "/usr/bin/bwrap")
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            command, 0,
+            stdout=b'{"ok":true,"output":"{\\"value\\":\\"isolated\\"}","verdict":"PASS"}',
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(process_runner.subprocess, "run", fake_run)
+    output, verdict = run_tool_isolated(
+        _echo_tool, _verify_echo, {"value": "isolated"}, 5
+    )
+    assert output == {"value": "isolated"}
+    assert verdict == "PASS"
+    command = captured["command"]
+    assert "--unshare-all" in command
+    assert command[command.index("--ro-bind") + 1:command.index("--ro-bind") + 3] == ["/", "/"]
+    assert command[command.index("--tmpfs") + 1] == "/tmp"
+    assert ["--tmpfs", "/var/lib"] == command[command.index("--tmpfs", command.index("/home") - 2) + 0:command.index("--tmpfs", command.index("/home") - 2) + 2]
+    assert ["--cap-drop", "ALL"] == command[command.index("--cap-drop"):command.index("--cap-drop") + 2]
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap not installed")
+def test_bubblewrap_executes_registered_read_only_tool_in_os_sandbox(monkeypatch):
+    monkeypatch.setenv("IAO_TOOL_SANDBOX_MODE", "bubblewrap")
+    monkeypatch.delenv("APP_ENV", raising=False)
+    output, verdict = run_tool_isolated(
+        _echo_tool, _verify_echo, {"value": "isolated"}, 5
+    )
+    assert output == {"value": "isolated"}
     assert verdict == "PASS"
