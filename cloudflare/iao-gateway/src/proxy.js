@@ -5,6 +5,10 @@ const FORWARDED_HEADERS = [
   "content-type",
   "idempotency-key",
   "x-iao-device-proof",
+  "x-iao-agent-id",
+  "x-iao-agent-nonce",
+  "x-iao-agent-timestamp",
+  "x-iao-agent-signature",
 ];
 
 function json(status, body) {
@@ -44,10 +48,13 @@ export function configuredApiOrigin(value) {
   }
 }
 
-function allowedPath(pathname) {
-  if (pathname === "/health/live" || pathname === "/health/ready") return true;
-  // The API remains the sole authorization and policy authority. The gateway
-  // only forwards versioned API paths; it does not interpret or execute tasks.
+function allowedRoute(method, pathname) {
+  if (pathname === "/health/live" || pathname === "/health/ready") return method === "GET";
+  // Only the two signed, read-only delegated-agent protocol routes are
+  // forwarded. Task polling/claim/completion and every other agent path stay
+  // blocked; the upstream IAO API remains the sole authority.
+  if (pathname === "/v1/agent/challenge") return method === "POST";
+  if (pathname === "/v1/agent/status") return method === "GET";
   return pathname.startsWith("/v1/") &&
     !pathname.startsWith("/v1/gateway/") &&
     !pathname.startsWith("/v1/agent/");
@@ -58,7 +65,7 @@ export async function proxyApi(request, env) {
   if (!origin) return json(503, { error: "IAO_API_ORIGIN_NOT_CONFIGURED" });
 
   const incoming = new URL(request.url);
-  if (!allowedPath(incoming.pathname)) return json(404, { error: "NOT_FOUND" });
+  if (!allowedRoute(request.method, incoming.pathname)) return json(404, { error: "NOT_FOUND" });
   if (!ALLOWED_METHODS.has(request.method)) {
     return json(405, { error: "METHOD_NOT_ALLOWED" });
   }
