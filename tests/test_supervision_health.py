@@ -320,3 +320,29 @@ def test_heartbeat_rejects_reused_pid_even_when_numeric_pid_is_alive(tmp_path, m
     )
     monkeypatch.setattr(supervision, "_process_start_ticks", lambda _pid: "999999")
     assert read_heartbeat(path, expected_component="TASK_WORKER") == {"status": "UNVERIFIED"}
+
+
+def test_five_motor_supervisor_includes_task_worker_functional_heartbeat(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor, "ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "read_children", lambda: {})
+    monkeypatch.setattr(supervisor, "adapters", lambda: {})
+    write_heartbeat(
+        tmp_path / "task-worker-heartbeat.json",
+        component="TASK_WORKER",
+        pid=os.getpid(),
+        phase="cycle_completed",
+        interval_seconds=1,
+        stale_after_seconds=60,
+    )
+    supervisor.status()
+    assert "TASK_WORKER: HEALTHY" in capsys.readouterr().out
+
+
+def test_five_motor_supervisor_does_not_mark_missing_task_worker_healthy(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor, "ROOT", tmp_path)
+    monkeypatch.setattr(supervisor, "read_children", lambda: {})
+    monkeypatch.setattr(supervisor, "adapters", lambda: {})
+    supervisor.status()
+    assert "TASK_WORKER: UNVERIFIED" in capsys.readouterr().out
