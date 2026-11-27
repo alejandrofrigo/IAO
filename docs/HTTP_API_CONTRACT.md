@@ -42,7 +42,7 @@
 | `/v1/audit/events` | GET | 405 |
 | `/v1/memory` y subrutas | GET, POST, PUT, DELETE según operación | 405 para métodos fuera de ese conjunto |
 
-Las rutas de federación `/fed/v1/*` tienen un protocolo y límites propios en cada adaptador; no se consideran intercambiables con las rutas `/v1/*`.
+Las rutas de federación `/fed/v1/*` tienen un protocolo y límites propios en cada adaptador; no se consideran intercambiables con las rutas `/v1/*`. Sus respuestas usan `correlation_id` y `X-Correlation-ID`, `Cache-Control: no-store` y `X-Content-Type-Options: nosniff`; los 405 incluyen `Allow` y las rutas federadas desconocidas devuelven 404 sin exigir bearer.
 
 ## Contratos de entrada principales
 
@@ -55,3 +55,15 @@ Las rutas de federación `/fed/v1/*` tienen un protocolo y límites propios en c
 ## Alcance y brechas
 
 Este documento fija el sobre HTTP común, límites de cuerpo, cabeceras, errores genéricos y métodos de las rutas principales. No pretende sustituir esquemas OpenAPI completos ni documenta todavía cada campo de todos los flujos de identidad, recuperación, memoria y federación. La compatibilidad debe seguir verificándose con pruebas de ambos adaptadores; una prueba unitaria del servicio no prueba por sí sola el comportamiento de red.
+
+## Errores del protocolo federado
+
+| Situación | Código | Respuesta |
+|---|---:|---|
+| Método no permitido | 405 | `METHOD_NOT_ALLOWED`, `allowed_methods` y cabecera `Allow` |
+| Ruta federada desconocida | 404 | `NOT_FOUND` |
+| Cuerpo JSON o firma de peer inválidos | 400/403 | Código estable de protocolo, sin detalle criptográfico interno |
+| Federación no inicializada | 503 | `FEDERATION_UNAVAILABLE` |
+| Respuesta de error | — | Incluye `correlation_id` y `X-Correlation-ID`, `no-store` y `nosniff` |
+
+Los dos adaptadores deben mantener el mismo contrato para estas rutas. Los errores de infraestructura nunca deben devolver mensajes de excepción, rutas locales ni material de claves.
