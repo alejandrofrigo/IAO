@@ -45,3 +45,33 @@ def test_negative_content_length_uses_common_error_contract():
     assert error.headers["cache-control"] == "no-store"
     assert error.headers["x-content-type-options"] == "nosniff"
     assert len(error.headers["x-correlation-id"]) == 32
+
+
+def test_unknown_fastapi_route_uses_common_not_found_contract(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/unmapped-route-private-marker")
+    payload = response.json()
+    assert response.status_code == 404
+    assert payload["error"] == "NOT_FOUND"
+    assert len(payload["correlation_id"]) == 32
+    assert response.headers["x-correlation-id"] == payload["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "private-marker" not in response.text
+
+
+def test_framework_exception_handler_never_echoes_internal_detail():
+    request = Request({
+        "type": "http", "method": "GET", "path": "/unmapped",
+        "headers": [], "query_string": b"", "server": ("test", 80),
+        "client": ("test", 123), "scheme": "http", "http_version": "1.1",
+        "root_path": "",
+    })
+    response = asyncio.run(main._unhandled_exception_handler(
+        request, RuntimeError("private-framework-exception-marker"),
+    ))
+    assert response.status_code == 500
+    assert b"private-framework-exception-marker" not in response.body
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert len(response.headers["x-correlation-id"]) == 32
