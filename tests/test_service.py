@@ -1425,8 +1425,9 @@ class QueuedTaskApiTests(Base):
         )
         self.assertEqual(status, 403)
         self.assertEqual(denied["reason"], "CAPABILITY_NOT_GRANTED")
+        self.assertEqual(denied["state"], "DENIED")
         self.assertEqual(
-            self.svc.store.count_tasks_since("queued-user", "0000"), 0,
+            self.svc.store.count_tasks_since("queued-user", "0000"), 1,
         )
 
     def test_queued_mode_rejects_non_read_only_capability(self) -> None:
