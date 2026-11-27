@@ -59,7 +59,7 @@ def test_fetch_verifies_content_against_cid(monkeypatch):
 
     monkeypatch.setattr("omega.egress.fetch", fake_fetch)
     tool = make_ipfs_fetch(["ipfs.example"])
-    validated = tool.validate({"cid": cid})
+    validated = tool.validate_input({"cid": cid})
     result = tool.run(validated)
     assert result["status"] == "SUCCEEDED"
     assert result["gateway"] == "ipfs.example"
@@ -81,7 +81,7 @@ def test_fetch_rejects_cid_content_mismatch(monkeypatch):
 
     monkeypatch.setattr("omega.egress.fetch", fake_fetch)
     tool = make_ipfs_fetch(["ipfs.example"])
-    result = tool.run(tool.validate({"cid": cid}))
+    result = tool.run(tool.validate_input({"cid": cid}))
     assert result["status"] == "DENIED"
     assert result["error"] == "CID_MISMATCH"
     assert tool.verify(result) == "PASS"
@@ -90,4 +90,4 @@ def test_fetch_rejects_cid_content_mismatch(monkeypatch):
 def test_input_rejects_extra_fields():
     tool = make_ipfs_fetch(["ipfs.example"])
     with pytest.raises(ValueError):
-        tool.validate({"cid": _cid(b"{}"), "url": "https://evil.example"})
+        tool.validate_input({"cid": _cid(b"{}"), "url": "https://evil.example"})
