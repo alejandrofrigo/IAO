@@ -28,7 +28,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system iao \
     && useradd --system --gid iao --home-dir /home/iao --create-home iao \
-    && mkdir -p /var/lib/iao /app/knowledge \
+    && mkdir -p /var/lib/iao/identity-trust /app/knowledge \
     && chown -R iao:iao /var/lib/iao /app
 
 VOLUME ["/var/lib/iao"]
