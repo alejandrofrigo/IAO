@@ -117,3 +117,15 @@ La instrucción del operador reabre el alcance de participación P2P pública de
 - El mando administrativo nunca se delega a la red P2P.
 
 Esto reabre descubrimiento y participación de datos públicos; no elimina las salvaguardas de confianza de ADR-007 ni habilita ejecución remota arbitraria.
+
+
+## Implementación de asimilación automática en cuarentena
+
+El ciclo Kademlia incorpora ahora una etapa de asimilación local automática:
+- Cada peer válido observado en la tabla de routing se agrega o actualiza en `.state/federation/libp2p/p2p-assimilated-peers.json` (o bajo `IAO_STATE_DIR`).
+- La identidad de transporte permanece `UNVERIFIED`; el registro declara `AUTO_ASSIMILATED_UNVERIFIED`, `DHT_ROUTING_TABLE_OBSERVED` y `CANDIDATE_ONLY`.
+- Las observaciones repetidas actualizan `last_seen`, conservan `first_seen`, incrementan un contador acotado y combinan multiaddresses sin duplicados.
+- El archivo se escribe atómicamente con permisos privados; se rechazan enlaces simbólicos, registros corruptos y entradas malformadas.
+- Las capacidades concedidas permanecen vacías; ejecución remota y autoridad de control permanecen desactivadas.
+
+Esta etapa significa que IAO incorpora automáticamente peers públicos al inventario P2P para seguimiento y fases posteriores. No afirma que cada Peer ID sea una identidad IAO autenticada, que todos los peers de Internet hayan sido enumerados, ni que los peers estén ofreciendo cómputo. La autenticación de identidad IAO, presencia firmada y la vinculación criptográfica entre Peer ID y node_id siguen siendo etapas separadas.
