@@ -222,6 +222,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
 
         def _send_error_json(self, status: int, code: str) -> None:
             """Emit a stable, non-disclosing JSON error for adapter-level failures."""
+            self.close_connection = True
             correlation_id = uuid.uuid4().hex
             data = json.dumps({
                 "error": code,
