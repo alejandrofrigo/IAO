@@ -290,7 +290,7 @@ class AgentAuthority:
             payload = self.canonical({"body_sha256": hashlib.sha256(body).hexdigest(), "method": method, "nonce": nonce, "path": path, "protocol": "IAO-AGENT-REQUEST-V1", "timestamp": timestamp})
             try:
                 key = serialization.load_pem_public_key(row[2].encode("ascii"))
-                key.verify(signature, b"IAO-AGENT-REQUEST-V1\\x00" + payload, ec.ECDSA(hashes.SHA256()))
+                key.verify(signature, b"IAO-AGENT-REQUEST-V1\x00" + payload, ec.ECDSA(hashes.SHA256()))
             except (InvalidSignature, ValueError, TypeError):
                 db.execute("ROLLBACK")
                 raise AgentAuthorityError("INVALID_AGENT_SIGNATURE", 401) from None
