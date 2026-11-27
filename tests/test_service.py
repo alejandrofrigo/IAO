@@ -962,6 +962,23 @@ class AuthTests(Base):
         self.assertTrue(all(e["details"]["actor"] == "bob" for e in ev))
 
 
+    def test_authenticated_session_does_not_inherit_ungranted_capabilities(self) -> None:
+        limited = self.tok("member:limited", ["knowledge.search"])
+        status, payload = self.call("GET", "/v1/memory", limited)
+        self.assertEqual((status, payload["error"]), (403, "CAPABILITY_NOT_GRANTED"))
+
+        status, payload = self.call(
+            "POST", "/v1/federation/internet", limited,
+            {"query": "must be denied before external access"},
+        )
+        self.assertEqual((status, payload["error"]), (403, "CAPABILITY_NOT_GRANTED"))
+
+        reader = self.tok("member:reader", ["memory.read"])
+        status, payload = self.call("GET", "/v1/memory", reader)
+        self.assertEqual(status, 200)
+        self.assertIn("items", payload)
+
+
 class PolicyToolTests(Base):
     def test_POL01_capability_outside_allowlist_denied_before_execution(self) -> None:
         s, p = self.task("alice", "shell.execute", scopes=["knowledge.search", "shell.execute"])
