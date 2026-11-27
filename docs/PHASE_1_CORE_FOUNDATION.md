@@ -3,7 +3,7 @@
 **Estado:** EN CURSO  
 **Rama de trabajo:** phase-1-core-foundation-20261127  
 **Base:** iao-production-gates-20261127T0856Z  
-**Política:** no modificar main, no fusionar PRs apilados, no desplegar ni habilitar workers privilegiados desde esta fase.
+**Política:** no modificar main, no fusionar PRs apilados ni desplegar desde esta fase. TaskWorker solo puede iniciarse explícitamente en modo opt-in para tareas READ_ONLY; permanece desactivado por defecto y no obtiene autoridad privilegiada.
 
 ## Propósito
 
@@ -27,7 +27,7 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 02 | Contrato de arquitectura del núcleo | Documentar límites entre API, servicio, dominio, persistencia, herramientas y adaptadores; no duplicar autoridades ni colas. | IMPLEMENTADO |
 | 03 | Configuración tipada y validada | Validar entorno, puertos, host, URL pública y adaptadores; rechazar valores inválidos de forma determinista y sin filtrar secretos. | IMPLEMENTADO |
 | 04 | Gestión segura de secretos | Exigir secretos persistentes donde corresponda; no generar identidades silenciosamente en producción ni registrar valores sensibles. | IMPLEMENTADO |
-| 05 | Ciclo de vida de la API | Arranque y parada explícitos, idempotentes y observables; fallos críticos reflejados en readiness sin ocultar excepciones. | IMPLEMENTADO |
+| 05 | Ciclo de vida de la API | Arranque/parada de API y workers explícitos; TaskWorker opt-in desde FastAPI lifespan, compartiendo Store/registry/authority, configuración acotada, heartbeat y readiness fail-closed; apagado con join limitado. | IMPLEMENTADO — CI pendiente |
 | 06 | Servicio de aplicación único | Una única construcción del servicio y sus autoridades por proceso; inicialización segura y concurrencia controlada. | IMPLEMENTADO |
 | 07 | Persistencia y esquema | Definir backend soportado, inicialización/migraciones repetibles, integridad y comportamiento ante corrupción o indisponibilidad. | IMPLEMENTADO |
 | 08 | Auditoría íntegra | Verificar encadenamiento, persistencia de claves, detección de alteración y degradación fail-closed sin exponer datos personales. | IMPLEMENTADO |
@@ -37,7 +37,7 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 12 | Seguridad de entrada y salida | Validación de entradas, egress mediado, límites de tiempo/tamaño, SSRF y rechazo de redirects no autorizados. | IMPLEMENTADO |
 | 13 | Identidad y autorización desacopladas | Autoridad única, principio de mínimo privilegio y separación entre autenticación, sesión y capacidades. | EN CURSO |
 | 14 | Privacidad operacional | Minimizar datos, redactar logs, evitar identificadores del operador en artefactos y aplicar no-store donde corresponda. | EN CURSO |
-| 15 | Supervisión funcional | Supervisores comprueban salud funcional, heartbeats y recuperación; un PID nunca basta para declarar un motor sano. | EN CURSO |
+| 15 | Supervisión funcional | TaskWorker API publica heartbeat y readiness distingue bloqueado, fallo de arranque, hilo caído y worker activo; supervisor de cinco motores conserva verificación PADGE/Guardian/red pendiente. | EN CURSO |
 | 16 | Manejo uniforme de errores | Errores internos tipados, códigos públicos estables, no filtración de excepciones ni secretos. | EN CURSO |
 | 17 | Empaquetado reproducible | Dependencias fijadas, instalación limpia y build reproducible en versiones Python soportadas. | PENDIENTE |
 | 18 | Contrato de contenedor | Imagen construible, usuario/permisos adecuados, healthcheck y configuración explícita; sin secretos en capas. | IMPLEMENTADO |
