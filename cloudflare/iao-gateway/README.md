@@ -42,4 +42,4 @@ Run npm test from cloudflare/iao-gateway. Tests use Node's built-in test runner 
 
 ## Deployment boundary
 
-Keep the Cloudflare Git integration root directory set to cloudflare/iao-gateway only when deliberately reviewing this Worker. Do not repoint the existing static fon​​str-data deployment. Do not deploy until the API origin, access policy, production readiness and end-to-end device proof have been independently verified.
+Keep the Cloudflare Git integration root directory set to cloudflare/iao-gateway only when deliberately reviewing this Worker. Do not repoint the existing static fonstr-data deployment. Do not deploy until the API origin, access policy, production readiness and end-to-end device proof have been independently verified.
