@@ -23,6 +23,7 @@ function load(overrides = {}, meta = null) {
 test("blocks API calls when no origin is configured", () => {
   const api = load();
   assert.equal(api.IAO_API_CONFIG_STATUS, "blocked");
+  assert.equal(api.IAO_API_CONFIG_ERROR, "API_BASE_NOT_CONFIGURED");
   assert.throws(() => api.iaoApiUrl("/v1/tasks"), /API_BASE_NOT_CONFIGURED/);
 });
 
@@ -49,6 +50,7 @@ test("rejects insecure or ambiguous API origins", () => {
   ]) {
     const api = load({ IAO_API_BASE_OVERRIDE: value });
     assert.equal(api.IAO_API_CONFIG_STATUS, "blocked", value);
+    assert.equal(api.IAO_API_CONFIG_ERROR, "INVALID_API_BASE", value);
     assert.throws(() => api.iaoApiUrl("/v1/tasks"), /INVALID_API_BASE/, value);
   }
 });
@@ -95,6 +97,7 @@ test("public chat remains disabled and never falls back to relative fetch withou
   );
   const window = {
     IAO_API_CONFIG_STATUS: "blocked",
+    IAO_API_CONFIG_ERROR: "API_BASE_NOT_CONFIGURED",
     dispatchEvent() {},
   };
   let fetchCalls = 0;
