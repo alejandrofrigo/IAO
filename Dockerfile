@@ -17,7 +17,7 @@ COPY omega ./omega
 COPY docs/corpus ./knowledge
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 \
+    && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 bubblewrap \
     && apt-mark manual libgmp10 \
     && python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir '.[p2p]' \
