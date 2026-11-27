@@ -14,7 +14,7 @@ QUEUED_TOOL_ALLOWLIST = frozenset({"knowledge.search"})
 _SCHEMA_TYPES = {"object", "array", "string", "integer", "number", "boolean"}
 _SCHEMA_KEYS = {
     "type", "properties", "required", "additionalProperties", "items",
-    "enum", "minLength", "maxLength", "minimum", "maximum",
+    "enum", "minLength", "maxLength", "minimum", "maximum", "format",
 }
 
 
@@ -58,6 +58,10 @@ def _validate_schema(schema: Any, *, depth: int = 0) -> None:
     if (
         "minimum" in schema and "maximum" in schema
         and schema["minimum"] > schema["maximum"]
+    ):
+        raise ValueError("INVALID_TOOL_SCHEMA")
+    if "format" in schema and (
+        kind != "string" or schema["format"] not in {"uri"}
     ):
         raise ValueError("INVALID_TOOL_SCHEMA")
     if kind == "object":
