@@ -112,3 +112,19 @@ def test_bubblewrap_executes_registered_read_only_tool_in_os_sandbox(monkeypatch
     )
     assert output == {"value": "isolated"}
     assert verdict == "PASS"
+
+
+
+def test_runner_rejects_invalid_timeout_and_non_json_input_before_spawn():
+    with pytest.raises(ValueError, match="INVALID_TOOL_TIMEOUT"):
+        run_tool_isolated(_echo_tool, _verify_echo, {"value": "ok"}, float("nan"))
+    with pytest.raises(ValueError, match="INVALID_TOOL_INPUT"):
+        run_tool_isolated(_echo_tool, _verify_echo, {"value": object()}, 2)
+
+
+def test_child_resource_limits_are_mandatory_on_posix(monkeypatch):
+    import omega.tools.process_runner as runner
+
+    monkeypatch.setattr(runner.os, "name", "nt")
+    with pytest.raises(RuntimeError, match="OS_RESOURCE_LIMITS_UNAVAILABLE"):
+        runner._apply_child_limits(1)
