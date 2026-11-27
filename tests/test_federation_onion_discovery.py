@@ -81,7 +81,7 @@ def test_public_iao_candidates_use_signed_pinned_autojoin_not_legacy_probe(
     monkeypatch.setattr(federation, "AUDIT", tmp_path / "audit" / "events.jsonl")
     federation.NODES.write_text(json.dumps({
         "nodes": [{
-            "url": "https://public-peer.example.org",
+            "url": "https://public-peer.example.org/fed/v1/message",
             "id": "0123456789abcdef",
             "source": "public_feed",
             "authorized": False,
