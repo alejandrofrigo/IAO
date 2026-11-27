@@ -17,3 +17,5 @@ def test_node_network_event_details_are_hashed(tmp_path, monkeypatch):
     assert row[0] == "TASK_EXECUTED"
     assert row[1].startswith("sha256:")
     assert marker not in row[1]
+    assert node_engine.DATA.stat().st_mode & 0o777 == 0o700
+    assert node_engine.DB.stat().st_mode & 0o777 == 0o600
