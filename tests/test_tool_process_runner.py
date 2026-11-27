@@ -98,6 +98,7 @@ def test_bubblewrap_mode_uses_read_only_root_and_unshared_network(monkeypatch):
     assert command[command.index("--ro-bind") + 1:command.index("--ro-bind") + 3] == ["/", "/"]
     assert command[command.index("--tmpfs") + 1] == "/tmp"
     pairs = set(zip(command, command[1:]))
+    assert ("--tmpfs", "/root") in pairs
     assert ("--tmpfs", "/var/lib") in pairs
     assert ("--tmpfs", "/run") in pairs
     assert ("--cap-drop", "ALL") in pairs
