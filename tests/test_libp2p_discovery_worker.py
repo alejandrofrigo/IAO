@@ -95,6 +95,46 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(report["error_class"], "ImportError")
         self.assertFalse(report["enrollment_performed"])
 
+
+    def test_tor_discovery_runs_even_when_libp2p_bootstrap_is_unavailable(self):
+        result = {
+            "status": "BOOTSTRAP_UNAVAILABLE",
+            "connected_bootstrappers": 0,
+            "routing_peers_discovered": 0,
+            "persisted_new_peers": 0,
+            "peers": [],
+        }
+        tor = {
+            "status": "ONION_DISCOVERY_COMPLETED",
+            "feeds_checked": 1,
+            "candidates": 2,
+            "assimilation": {"new": 2, "observed": 2, "total": 2},
+            "enrollment_performed": False,
+            "capabilities_granted": [],
+        }
+        with patch.object(worker, "state_dir", return_value=self.state), patch.object(
+            worker.libp2p_discovery, "discover_sync", return_value=result
+        ), patch.object(worker, "tor_discovery_cycle", return_value=tor) as tor_cycle:
+            report = worker.cycle()
+        tor_cycle.assert_called_once_with()
+        self.assertEqual(report["status"], "BOOTSTRAP_UNAVAILABLE")
+        self.assertEqual(report["tor_onion_discovery"], tor)
+
+    def test_tor_discovery_runs_even_when_libp2p_raises(self):
+        tor = {
+            "status": "ONION_DISCOVERY_COMPLETED",
+            "feeds_checked": 1,
+            "candidates": 1,
+            "assimilation": {"new": 1, "observed": 1, "total": 1},
+        }
+        with patch.object(worker, "state_dir", return_value=self.state), patch.object(
+            worker.libp2p_discovery, "discover_sync",
+            side_effect=ImportError("libp2p unavailable")
+        ), patch.object(worker, "tor_discovery_cycle", return_value=tor):
+            report = worker.cycle()
+        self.assertEqual(report["status"], "DISCOVERY_ERROR")
+        self.assertEqual(report["tor_onion_discovery"], tor)
+
     def test_interval_is_bounded(self):
         with patch.dict(os.environ, {"IAO_LIBP2P_DISCOVERY_INTERVAL": "1"}):
             self.assertEqual(worker.read_interval(), worker.MIN_INTERVAL)
