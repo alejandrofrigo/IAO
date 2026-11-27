@@ -1353,6 +1353,23 @@ class QueuedTaskApiTests(Base):
         )
         self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
 
+
+    def test_synchronous_mode_also_rejects_non_read_only_effects(self) -> None:
+        self.svc.registry.register(
+            ToolSpec(
+                "test.write", "1", "test.write", "WRITE",
+                1.0, lambda value: value, lambda value: value,
+                lambda output: "PASS",
+            )
+        )
+        status, response = self.task(
+            "operator:sync-write", "test.write", {"value": "blocked"},
+            scopes=["test.write"],
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(response["reason"], "TASK_EFFECT_NOT_GRANTED")
+        self.assertEqual(response["state"], "DENIED")
+
     def test_queued_mode_rejects_non_read_only_capability(self) -> None:
         self.svc.registry.register(
             ToolSpec(
