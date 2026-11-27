@@ -1,6 +1,7 @@
 """Small, privacy-safe heartbeat primitives for local IAO supervisors."""
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import os
@@ -140,3 +141,23 @@ def read_heartbeat(
         }
     except (OSError, ValueError, TypeError, OverflowError):
         return {"status": "UNVERIFIED"}
+
+
+def read_lock_owner(path: Path) -> int | None:
+    """Return the PID holding an advisory lock, or None when no lock is held."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        with path.open("r+", encoding="utf-8") as stream:
+            raw_owner = stream.read(32).strip()
+            owner = int(raw_owner) if raw_owner.isdigit() else None
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return owner
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            return None
+    except (OSError, ValueError):
+        return None
+
