@@ -1,6 +1,6 @@
 # IAO — Diseño de transporte descentralizado Tor + P2P
 
-**Estado:** propuesta técnica en rama aislada; no desplegada ni activada en nodos.
+**Estado:** componentes integrados en la rama Fase 1; CI/runtime smoke y verificación de red real pendientes; no se declara producción.
 **Fecha:** 2026-11-26
 
 ## Objetivo
@@ -24,9 +24,9 @@ El diagnóstico posterior (2026-11-26) mostró Tor sin SOCKS accesible en 127.0.
 ### 1. Plano de transporte
 - **Tor client:** SOCKS5 en loopback, con comprobación de bootstrap y circuitos antes de habilitar rutas Tor.
 - **Onion ingress:** HiddenServicePort dirigido únicamente a un listener local verificado; nunca a un puerto supuesto.
-- **P2P nativo:** mantener libp2p/IPFS para peers TCP/QUIC compatibles y rutas directas permitidas.
+- **P2P nativo:** mantener libp2p/IPFS para peers TCP/QUIC compatibles. El descubrimiento directo está deshabilitado por defecto porque revela la IP de origen a bootstrap peers; solo se permite con `IAO_P2P_ALLOW_DIRECT=true` cuando la política de privacidad lo autorice.
 - **P2P sobre Tor:** habilitar solo cuando la implementación y el tipo de dirección del peer soporten explícitamente SOCKS/TCP u onion. No fingir soporte QUIC/UDP a través de SOCKS TCP.
-- **Fallback:** si Tor cae, no degradar silenciosamente a una conexión directa cuando la política de privacidad exija Tor.
+- **Fallback:** si Tor cae, no degradar a conexiones directas. El default es fail-closed; `IAO_P2P_ALLOW_DIRECT=true` es una excepción explícita y no se activa en el runtime normal.
 
 ### 2. Plano de descubrimiento
 - Consultar bootstrap peers públicos documentados y DHT/IPFS.
@@ -50,7 +50,7 @@ El diagnóstico posterior (2026-11-26) mostró Tor sin SOCKS accesible en 127.0.
 ## Secuencia de implementación
 
 1. Revalidar IPFS, peers, procesos y Tor SOCKS en cada runtime.
-2. Añadir un adaptador Tor aislado con timeout, circuit isolation, DNS remoto donde aplique, límites y métricas; sin cambiar el comportamiento directo por defecto.
+2. Añadir adaptadores Tor aislados con timeout, DNS remoto donde aplique, límites y métricas; mantener deshabilitado el egress P2P directo por defecto.
 3. Añadir pruebas unitarias de configuración, SOCKS5, fallo de proxy, no-fallback y filtrado de direcciones.
 4. Implementar el registro de transportes por peer y el dialer compatible; rechazar explícitamente transportes no soportados.
 5. Publicar el servicio onion existente solo después de verificar backend, rutas y autenticación.
@@ -71,20 +71,20 @@ La rama incluye ahora un primer ciclo ejecutable de descubrimiento P2P:
 Activación en un nodo IAO con Python 3.12/3.13:
 
 ```bash
-python -m pip install -e ".[p2p,tor]"
-python tools/iao_libp2p_discovery.py --status
-python tools/iao_libp2p_discovery.py --once
+( cd "$HOME/so-omega-prime" && python -m pip install -e '.[p2p,tor]' )
+( cd "$HOME/so-omega-prime" && python tools/iao_libp2p_discovery.py --status )
+( cd "$HOME/so-omega-prime" && python tools/iao_libp2p_discovery.py --once )
 ```
 
 Para ejecución continua aislada del supervisor:
 
 ```bash
-python tools/iao_libp2p_discovery.py --run
+( cd "$HOME/so-omega-prime" && python tools/iao_libp2p_discovery.py --run )
 ```
 
 Para que el supervisor de cinco motores lo gestione, el motor `NODE_NETWORK` debe estar habilitado en `.state/iao-five-motors/adapters.json`. La migración automática solo añade una configuración ausente; respeta cualquier configuración ya definida.
 
-**Alcance actual:** descubrimiento de peers visibles en la tabla de enrutamiento Kademlia y registro local como `DISCOVERED_UNVERIFIED`. No es un escáner global, no garantiza descubrir todos los nodos, no abre un listener, no publica un servicio onion, no transfiere tareas ni concede permisos. La integración de intercambio de contenido/CID, presencia autenticada, transporte onion de mensajes y ejecución de workers se desarrolla en fases posteriores. La capa onion existente de `omega/federation_transport.py` es explícita y requiere PySocks y un SOCKS Tor local accesible.
+**Alcance actual:** el worker `NODE_NETWORK` mantiene un ciclo outbound-only; el descubrimiento directo libp2p/DHT permanece deshabilitado salvo `IAO_P2P_ALLOW_DIRECT=true`, mientras los feeds onion explícitos usan SOCKS Tor. Los peers se registran como `DISCOVERED_UNVERIFIED` en cuarentena. El worker escribe heartbeat ligado al PID/starttime y el supervisor comprueba frescura. `omega.ipfs_content` recupera CIDs solo desde Kubo local; `omega.tools.ipfs_gateway` ofrece una herramienta HTTPS opcional con allowlist y verificación CID; `omega.p2p_presence` verifica firmas Ed25519 con nonce/lease pero declara `SIGNED_ASSERTION_ONLY`. No es un escáner global, no garantiza descubrir todos los nodos, no abre un listener, no publica un servicio onion, no ejecuta código remoto ni concede permisos. La evidencia Tor/Kubo de CI y la prueba entre dos nodos controlados siguen pendientes.
 
 ## Criterios de aceptación
 
@@ -141,7 +141,7 @@ La fase siguiente incorpora Tor como un segundo brazo de descubrimiento ejecutad
 - Los servicios anunciados se incorporan automáticamente a `.state/iao-onion-candidates.json`, separados del inventario HTTPS y del inventario libp2p.
 - Un anuncio de directorio se marca `FEED_ADVERTISED_UNPROBED`; no se presenta como servicio alcanzable. La identidad sigue `UNVERIFIED`, la participación `CANDIDATE_ONLY`, y las capacidades/autoridad/ejecución permanecen desactivadas.
 - `tools/iao_libp2p_discovery.py` ejecuta el ciclo onion de forma independiente: un fallo de bootstrap libp2p no bloquea el descubrimiento Tor, y un fallo Tor no convierte el resultado libp2p en éxito.
-- El supervisor NODE_NETWORK gestiona ambos brazos mediante el mismo proceso persistente, cuando el nodo operador lo active.
+- El supervisor NODE_NETWORK gestiona ambos brazos mediante el mismo proceso persistente; el motor se añade como default solo cuando no existe configuración previa y respeta cualquier configuración existente del operador.
 
 Ejemplo de configuración privada (añadir únicamente direcciones reales de feeds onion v3 conocidos y confiables como fuentes de datos, no como identidades confiables):
 
@@ -165,4 +165,4 @@ No existe un directorio onion global que permita enumerar automáticamente todos
 - Las direcciones onion y los CIDs permanecen como metadatos públicos no autenticados hasta que una fase posterior valide identidad, firma, origen y política de contenido.
 
 
-La configuración del transporte Tor usa por defecto SOCKS5 en `127.0.0.1:19050`, alineado con el puerto SOCKS del `torrc` del nodo IAO; puede cambiarse mediante `IAO_TOR_SOCKS_HOST` y `IAO_TOR_SOCKS_PORT`. El código no inicia Tor ni presupone que el socket esté activo.
+La configuración del transporte Tor usa por defecto SOCKS5 en `127.0.0.1:9050`; el puerto y host pueden cambiarse mediante `IAO_TOR_SOCKS_HOST` y `IAO_TOR_SOCKS_PORT` (por ejemplo, si el `torrc` local usa otro puerto). El código no inicia Tor ni presupone que el socket esté activo. El smoke test efímero de CI activa `IAO_P2P_ALLOW_DIRECT=true` solo dentro del runner aislado para probar DHT; el runtime local no hereda esa excepción.
