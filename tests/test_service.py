@@ -1385,7 +1385,12 @@ class QueuedTaskApiTests(Base):
             "execution_mode": "queued",
         }
         headers = self.queued_headers(payload)
-        status, response = self.call("POST", "/v1/tasks", headers, payload)
+        with patch.object(
+            self.svc.operator_identity_authority,
+            "active_capabilities_for_session",
+            return_value=frozenset({"test.write"}),
+        ):
+            status, response = self.call("POST", "/v1/tasks", headers, payload)
         self.assertEqual(status, 403)
         self.assertEqual(response["state"], "DENIED")
         self.assertEqual(
@@ -1411,9 +1416,14 @@ class QueuedTaskApiTests(Base):
             "input": {"value": "x"},
             "execution_mode": "queued",
         }
-        status, response = self.call(
-            "POST", "/v1/tasks", self.queued_headers(payload), payload
-        )
+        with patch.object(
+            self.svc.operator_identity_authority,
+            "active_capabilities_for_session",
+            return_value=frozenset({"test.remote_read"}),
+        ):
+            status, response = self.call(
+                "POST", "/v1/tasks", self.queued_headers(payload), payload
+            )
         self.assertEqual(status, 403)
         self.assertEqual(
             response["reason"], "QUEUED_TASK_CAPABILITY_NOT_ALLOWLISTED"
@@ -1701,6 +1711,59 @@ class QueuedTaskApiTests(Base):
         )
         self.assertEqual((status, payload["error"]), (400, "INVALID_EXECUTION_MODE"))
 
+
+    def test_queued_task_is_denied_after_capability_grant_revocation(self) -> None:
+        with self.svc.operator_identity_authority._database() as db:
+            db.execute(
+                "UPDATE operator_capability_grants SET revoked_at=?",
+                (time.time(),),
+            )
+        payload = {
+            "goal": "search after grant revocation",
+            "capability": "knowledge.search",
+            "input": {"query": "audit"},
+            "execution_mode": "queued",
+        }
+        status, denied = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(denied["reason"], "CAPABILITY_NOT_GRANTED")
+        self.assertEqual(denied["state"], "DENIED")
+        self.assertEqual(
+            self.svc.store.count_tasks_since("queued-user", "0000"),
+            1,
+        )
+
+    def test_worker_rechecks_capability_grant_after_queue_acceptance(self) -> None:
+        payload = {
+            "goal": "search before revocation",
+            "capability": "knowledge.search",
+            "input": {"query": "audit hash chain"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload,
+        )
+        self.assertEqual(status, 202)
+        with self.svc.operator_identity_authority._database() as db:
+            db.execute(
+                "UPDATE operator_capability_grants SET revoked_at=?",
+                (time.time(),),
+            )
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="revoked-capability-worker", lease_seconds=30,
+            operator_identity_authority=self.svc.operator_identity_authority,
+        )
+        self.assertTrue(worker.run_once())
+        failed = self.svc.store.get_task(accepted["task_id"], "queued-user")
+        self.assertEqual(failed["state"], "FAILED")
+        self.assertEqual(
+            json.loads(failed["result_json"])["error"],
+            "WORKER_OPERATOR_AUTHORITY_REVOKED",
+        )
+        self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
 
 class LimitsAndIntegrityTests(Base):
     def test_COST01_quota_and_rate_limit_cut_with_audit_event(self) -> None:
