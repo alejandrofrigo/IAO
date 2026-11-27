@@ -782,6 +782,14 @@ class Store:
                     lease_generation, now,
                 ),
             ).rowcount
+        self.audit(
+            "system",
+            "TASK_BUDGET_CHARGED" if changed == 1 else "TASK_BUDGET_DENIED",
+            task_id,
+            decision="ALLOW" if changed == 1 else "DENY",
+            budget_kind=budget_kind,
+            amount=amount,
+        )
         return changed == 1
 
     def task_budget_status(self, task_id: str, owner: str) -> dict[str, int] | None:
