@@ -21,11 +21,13 @@ class _ClaimedTaskStore:
         self.final_state = None
         self.final_result = None
         self.cancel_requested = False
+        self.active_task = None
         self.executions = []
         self.events = []
 
     def claim_next_task(self, worker_id: str, *, lease_seconds: int = 60):
         task, self.task = self.task, None
+        self.active_task = task
         return task
 
     def update_claimed_task(
@@ -39,7 +41,11 @@ class _ClaimedTaskStore:
         return self.cancel_requested
 
     def renew_task_lease(self, task_id, worker_id, lease_generation, lease_seconds):
-        return not self.cancel_requested and lease_generation == self.task["lease_generation"]
+        return (
+            not self.cancel_requested
+            and self.active_task is not None
+            and lease_generation == self.active_task["lease_generation"]
+        )
 
     def audit(self, *args, **kwargs):
         self.events.append((args, kwargs))
