@@ -16,7 +16,7 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 
 | Nº | Objetivo | Criterio verificable | Estado |
 |---:|---|---|---|
-| 01 | Contrato de tareas versionado | Esquema versionado de tareas, estados, entradas/salidas y compatibilidad; tests de validación y migración. | PENDIENTE |
+| 01 | Contrato de tareas versionado | `omega/task_contract.py` valida la versión 1.0, campos exactos, capacidades/scopes, digest, presupuesto, expiración, profundidad y tamaño de entrada antes de persistir; `tests/test_task_contract.py` cubre entradas válidas y negativas. | IMPLEMENTADO — CI pendiente |
 | 02 | Planificador determinista | Planes con pasos, dependencias, precondiciones y criterios de finalización; mismo input/policy produce plan estable. | PENDIENTE |
 | 03 | Motor de estados de ejecución | Máquina de estados explícita, transiciones permitidas, cancelación y terminalidad idempotentes. | PENDIENTE |
 | 04 | Cola persistente con leases | Claims atómicos, expiración, fencing token y prevención de doble ejecución; pruebas concurrentes. | PENDIENTE |
