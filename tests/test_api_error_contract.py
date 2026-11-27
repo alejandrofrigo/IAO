@@ -60,6 +60,27 @@ def test_unknown_fastapi_route_uses_common_not_found_contract(monkeypatch, tmp_p
     assert "private-marker" not in response.text
 
 
+def test_framework_405_allow_header_is_validated():
+    request = Request({
+        "type": "http", "method": "GET", "path": "/resource",
+        "headers": [], "query_string": b"", "server": ("test", 80),
+        "client": ("test", 123), "scheme": "http", "http_version": "1.1",
+        "root_path": "",
+    })
+    from starlette.exceptions import HTTPException
+
+    valid = asyncio.run(main._http_exception_handler(
+        request, HTTPException(405, headers={"Allow": "GET, POST"}),
+    ))
+    assert valid.headers["allow"] == "GET, POST"
+
+    for raw in ("", "GET,,POST", "GET, POST\r\nX-Injected: yes"):
+        invalid = asyncio.run(main._http_exception_handler(
+            request, HTTPException(405, headers={"Allow": raw}),
+        ))
+        assert "allow" not in invalid.headers
+
+
 def test_framework_exception_handler_never_echoes_internal_detail():
     request = Request({
         "type": "http", "method": "GET", "path": "/unmapped",
