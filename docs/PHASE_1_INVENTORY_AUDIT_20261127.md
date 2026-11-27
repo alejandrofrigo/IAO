@@ -2,7 +2,7 @@
 
 **Estado:** evidencia documental adicional; no sustituye la verificación del HEAD ni de CI.
 **SHA base observado:** `0920643d05833a2a761f9168ae1e89ed9944fcc7`.
-**HEAD observado al actualizar:** pendiente de refrescar tras integración de worker lifecycle y API-origin fail-closed; no reutilizar el SHA histórico.
+**HEAD observado al actualizar:** `1cde5344903a5a436d6a3221ccc731c2cf8debda` (479 ahead / 0 behind de la base).
 **Rama destino:** `phase-1-core-foundation-20261127`
 **Alcance:** objetivo 01 de `PHASE_1_CORE_FOUNDATION.md`.
 
@@ -63,4 +63,10 @@ El ledger de Fase 1 registra la rama como **359 commits ahead / 0 behind** de `i
 6. Evaluar #2 Tor/P2P y #18 IPFS con pruebas de red reales, manteniendo candidatos públicos en cuarentena.
 7. Reconciliar #3–#8 con el backend sin coste y sin activar un segundo plano de autoridad.
 
-**Resultado:** inventario estático y mapa de dependencias ampliados. El objetivo 01 permanece **EN CURSO** hasta verificar los refs/SHAs y CI actuales. Esta auditoría no modifica código de ejecución ni declara producción.
+## Cambios de consolidación desde el inventario anterior
+
+- PR #16/#19: el ciclo de vida opt-in del TaskWorker se adaptó a `apps/api/main.py`; usa el Store/registry/autoridad existentes, valida lease/poll, publica heartbeat, distingue `blocked/start_failed/running/worker_exited/stop_timeout` y apaga con join limitado. Se añadieron pruebas en `tests/test_api_task_worker_lifecycle.py`. Esto no activa el worker por defecto ni acredita ejecución de producción.
+- Despliegue: `render.yaml` y el workflow `deploy-cloud-run.yml` se retiraron de Fase 1 por incompatibilidad con la restricción de no usar Render ni infraestructura que pueda generar facturación. El cliente web eliminó Quick Tunnel y ahora bloquea chat/API si no recibe un origen HTTPS explícito. GitHub Pages sigue siendo solo frontend; no constituye backend.
+- La PR #21 de Fase 2 continúa apilada sobre esta rama; sus cambios no se consideran aceptados ni sustituyen el cierre de Fase 1.
+
+**Resultado:** inventario y mapa de dependencias actualizados con refs exactos. El objetivo 01 permanece **EN CURSO** hasta CI verde en los HEAD exactos, revisión final de las ramas independientes y cierre de discrepancias. Esta auditoría no declara producción.
