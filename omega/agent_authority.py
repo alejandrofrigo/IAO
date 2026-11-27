@@ -14,7 +14,7 @@ import sqlite3
 import stat
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +59,7 @@ class AgentAuthority:
                 CREATE TABLE IF NOT EXISTS agent_challenges(
                     nonce TEXT PRIMARY KEY, identity_id TEXT NOT NULL,
                     key_version INTEGER NOT NULL, expires_at REAL NOT NULL,
-                    consumed_at REAL
+                    consumed_at REAL, primary_device_id TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS agent_challenge_expiry
                     ON agent_challenges(expires_at);
@@ -76,8 +76,16 @@ class AgentAuthority:
                     nonce TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
                     expires_at REAL NOT NULL, consumed_at REAL
                 );
-                CREATE INDEX IF NOT EXISTS agent_request_challenge_expiry ON agent_request_challenges(expires_at);
+                CREATE INDEX IF NOT EXISTS agent_request_challenge_expiry
+                    ON agent_request_challenges(expires_at);
             """)
+            challenge_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(agent_challenges)")
+            }
+            if "primary_device_id" not in challenge_columns:
+                db.execute(
+                    "ALTER TABLE agent_challenges ADD COLUMN primary_device_id TEXT NOT NULL DEFAULT ''"
+                )
         os.chmod(self.database, 0o600)
 
     @contextmanager
@@ -93,21 +101,36 @@ class AgentAuthority:
         finally:
             db.close()
 
-    def _current_parent_key_version(self, identity_id: str) -> int:
+    def _current_parent_binding(self, identity_id: str) -> tuple[int, str, str]:
+        """Read the exact active root/device pair while the identity lock is held."""
         identity_db = getattr(self.operator_identity, "database", None)
         if identity_db is None:
             raise AgentAuthorityError("OPERATOR_IDENTITY_UNAVAILABLE", 503)
         try:
             with sqlite3.connect(str(identity_db), timeout=5) as db:
                 row = db.execute(
-                    "SELECT i.key_version,i.status,b.key_version FROM operator_identities i JOIN primary_device_bindings b ON b.identity_id=i.identity_id WHERE i.identity_id=?",
+                    """SELECT i.key_version,i.status,b.key_version,b.device_id,
+                    b.device_public_key_pem
+                    FROM operator_identities i
+                    JOIN primary_device_bindings b ON b.identity_id=i.identity_id
+                    WHERE i.identity_id=?""",
                     (identity_id,),
                 ).fetchone()
         except sqlite3.Error:
             raise AgentAuthorityError("OPERATOR_IDENTITY_UNAVAILABLE", 503) from None
-        if row is None or row[1] != "ACTIVE" or row[0] != row[2]:
+        if (
+            row is None or row[1] != "ACTIVE" or row[0] != row[2]
+            or not isinstance(row[3], str) or len(row[3]) != 64
+            or not isinstance(row[4], str) or not row[4]
+        ):
             raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
-        return int(row[0])
+        _, canonical_pem, fingerprint = self._public_key(row[4])
+        if not __import__("hmac").compare_digest(row[3], fingerprint):
+            raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        return int(row[0]), canonical_pem, fingerprint
+
+    def _current_parent_key_version(self, identity_id: str) -> int:
+        return self._current_parent_binding(identity_id)[0]
 
     @staticmethod
     def _public_key(value: Any) -> tuple[Any, str, str]:
@@ -138,28 +161,43 @@ class AgentAuthority:
             raise AgentAuthorityError("INVALID_PRIMARY_DEVICE_SIGNATURE", 401) from None
 
     def issue_challenge(self, identity_id: str, key_version: int) -> dict[str, Any]:
-        if not isinstance(identity_id, str) or len(identity_id) != 32 or isinstance(key_version, bool) or not isinstance(key_version, int) or key_version < 1:
+        if (
+            not isinstance(identity_id, str) or len(identity_id) != 32
+            or isinstance(key_version, bool) or not isinstance(key_version, int)
+            or key_version < 1
+        ):
             raise AgentAuthorityError("INVALID_OPERATOR_BINDING", 403)
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
         try:
-            if self._current_parent_key_version(identity_id) != key_version:
-                raise AgentAuthorityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
-            primary_pem = self.operator_identity.primary_device_public_key()
-            self.operator_identity.verify_primary_device(identity_id, primary_pem)
+            with identity_guard:
+                current_version, primary_pem, primary_device_id = self._current_parent_binding(identity_id)
+                if current_version != key_version:
+                    raise AgentAuthorityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
+                self.operator_identity.verify_primary_device(identity_id, primary_pem)
+                now = time.time()
+                nonce = secrets.token_hex(32)
+                with self.lock, self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute("DELETE FROM agent_challenges WHERE expires_at<=?", (now,))
+                    count = db.execute(
+                        "SELECT COUNT(*) FROM agent_challenges WHERE identity_id=? AND consumed_at IS NULL AND expires_at>?",
+                        (identity_id, now),
+                    ).fetchone()[0]
+                    if count >= 5:
+                        db.execute("ROLLBACK")
+                        raise AgentAuthorityError("AGENT_CHALLENGE_LIMIT", 429)
+                    db.execute(
+                        """INSERT INTO agent_challenges
+                        (nonce,identity_id,key_version,expires_at,primary_device_id)
+                        VALUES(?,?,?,?,?)""",
+                        (nonce, identity_id, key_version, now + CHALLENGE_TTL, primary_device_id),
+                    )
+                    db.execute("COMMIT")
         except AgentAuthorityError:
             raise
         except Exception:
             raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403) from None
-        now = time.time()
-        nonce = secrets.token_hex(32)
-        with self.lock, self._db() as db:
-            db.execute("BEGIN IMMEDIATE")
-            db.execute("DELETE FROM agent_challenges WHERE expires_at<=?", (now,))
-            count = db.execute("SELECT COUNT(*) FROM agent_challenges WHERE identity_id=? AND consumed_at IS NULL AND expires_at>?", (identity_id, now)).fetchone()[0]
-            if count >= 5:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_CHALLENGE_LIMIT", 429)
-            db.execute("INSERT INTO agent_challenges(nonce,identity_id,key_version,expires_at) VALUES(?,?,?,?)", (nonce, identity_id, key_version, now + CHALLENGE_TTL))
-            db.execute("COMMIT")
         return {"nonce": nonce, "expires_in": CHALLENGE_TTL, "protocol": PROTOCOL}
 
     def create_delegation(self, *, identity_id: str, key_version: int, nonce: str,
@@ -192,20 +230,44 @@ class AgentAuthority:
         agent_id = secrets.token_hex(16)
         digest = hashlib.sha256(payload).hexdigest()
         primary_device_id = hashlib.sha256(serialization.load_pem_public_key(primary_pem.encode("ascii")).public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
-        with self.lock, self._db() as db:
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
+        with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            challenge = db.execute("SELECT * FROM agent_challenges WHERE nonce=?", (nonce,)).fetchone()
-            if challenge is None or challenge["identity_id"] != identity_id or challenge["key_version"] != key_version or challenge["consumed_at"] is not None or challenge["expires_at"] <= now:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 409)
-            if db.execute("SELECT 1 FROM delegated_agents WHERE identity_id=? AND revoked_at IS NULL AND expires_at>? AND public_key_pem=?", (identity_id, now, canonical_pem)).fetchone():
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_ALREADY_ENROLLED", 409)
-            db.execute("UPDATE agent_challenges SET consumed_at=? WHERE nonce=? AND consumed_at IS NULL", (now, nonce))
-            db.execute("""INSERT INTO delegated_agents
-                (agent_id,identity_id,key_version,primary_device_id,public_key_pem,scopes_json,created_at,expires_at,grant_digest)
-                VALUES(?,?,?,?,?,?,?,?,?)""", (agent_id, identity_id, key_version, primary_device_id, canonical_pem, json.dumps(sorted(scopes)), now, expires_at, digest))
-            db.execute("COMMIT")
+            try:
+                current_version, current_primary_pem, current_device_id = self._current_parent_binding(identity_id)
+                if (
+                    current_version != key_version
+                    or current_device_id != primary_device_id
+                    or current_primary_pem != primary_pem
+                ):
+                    raise AgentAuthorityError("OPERATOR_OR_PRIMARY_DEVICE_CHANGED", 409)
+                self.operator_identity.verify_primary_device(identity_id, current_primary_pem)
+                challenge = db.execute("SELECT * FROM agent_challenges WHERE nonce=?", (nonce,)).fetchone()
+                if (
+                    challenge is None or challenge["identity_id"] != identity_id
+                    or challenge["key_version"] != key_version
+                    or challenge["primary_device_id"] != primary_device_id
+                    or challenge["consumed_at"] is not None
+                    or challenge["expires_at"] <= now
+                ):
+                    raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 409)
+                if db.execute("SELECT 1 FROM delegated_agents WHERE identity_id=? AND revoked_at IS NULL AND expires_at>? AND public_key_pem=?", (identity_id, now, canonical_pem)).fetchone():
+                    raise AgentAuthorityError("AGENT_ALREADY_ENROLLED", 409)
+                changed = db.execute(
+                    "UPDATE agent_challenges SET consumed_at=? WHERE nonce=? AND consumed_at IS NULL AND expires_at>?",
+                    (now, nonce, now),
+                ).rowcount
+                if changed != 1:
+                    raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 409)
+                db.execute("""INSERT INTO delegated_agents
+                    (agent_id,identity_id,key_version,primary_device_id,public_key_pem,scopes_json,created_at,expires_at,grant_digest)
+                    VALUES(?,?,?,?,?,?,?,?,?)""", (agent_id, identity_id, key_version, primary_device_id, canonical_pem, json.dumps(sorted(scopes)), now, expires_at, digest))
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
         return {"agent_id": agent_id, "fingerprint": fingerprint, "scopes": sorted(scopes), "expires_at": expires_at, "authority": "DELEGATED_READ_ONLY"}
 
     @staticmethod
@@ -235,32 +297,42 @@ class AgentAuthority:
     def issue_agent_challenge(self, agent_id: Any) -> dict[str, Any]:
         if not isinstance(agent_id, str) or len(agent_id) != 32:
             raise AgentAuthorityError("INVALID_AGENT_ID", 400)
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
         now = time.time()
-        with self.lock, self._db() as db:
+        with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT identity_id,key_version,expires_at,revoked_at FROM delegated_agents WHERE agent_id=?", (agent_id,)).fetchone()
-            if row is None or row[3] is not None or row[2] <= now:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
             try:
-                current_version = self._current_parent_key_version(row[0])
-            except AgentAuthorityError:
-                db.execute("ROLLBACK")
+                row = db.execute(
+                    "SELECT identity_id,key_version,expires_at,revoked_at FROM delegated_agents WHERE agent_id=?",
+                    (agent_id,),
+                ).fetchone()
+                if row is None or row[3] is not None or row[2] <= now:
+                    raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
+                current_version, _, _ = self._current_parent_binding(row[0])
+                if row[1] != current_version:
+                    raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
+                db.execute("DELETE FROM agent_request_challenges WHERE expires_at<=?", (now,))
+                active = db.execute(
+                    "SELECT COUNT(*) FROM agent_request_challenges WHERE agent_id=? AND consumed_at IS NULL AND expires_at>?",
+                    (agent_id, now),
+                ).fetchone()[0]
+                if active >= 5:
+                    raise AgentAuthorityError("AGENT_CHALLENGE_LIMIT", 429)
+                nonce = secrets.token_hex(32)
+                db.execute(
+                    "INSERT INTO agent_request_challenges(nonce,agent_id,expires_at) VALUES(?,?,?)",
+                    (nonce, agent_id, now + 60),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
                 raise
-            if row[1] != current_version:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
-            db.execute("DELETE FROM agent_request_challenges WHERE expires_at<=?", (now,))
-            active = db.execute("SELECT COUNT(*) FROM agent_request_challenges WHERE agent_id=? AND consumed_at IS NULL AND expires_at>?", (agent_id, now)).fetchone()[0]
-            if active >= 5:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_CHALLENGE_LIMIT", 429)
-            nonce = secrets.token_hex(32)
-            db.execute("INSERT INTO agent_request_challenges(nonce,agent_id,expires_at) VALUES(?,?,?)", (nonce, agent_id, now + 60))
-            db.execute("COMMIT")
         return {"nonce": nonce, "expires_in": 60, "protocol": "IAO-AGENT-REQUEST-V1"}
 
-    def verify_agent_request(self, *, agent_id: Any, nonce: Any, timestamp: Any, signature: bytes, method: str, path: str, body: bytes) -> dict[str, str]:
+    def verify_agent_request(self, *, agent_id: Any, nonce: Any, timestamp: Any,
+                             signature: bytes, method: str, path: str, body: bytes) -> dict[str, str]:
         if not isinstance(agent_id, str) or len(agent_id) != 32 or not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{64}", nonce):
             raise AgentAuthorityError("INVALID_AGENT_REQUEST_IDENTITY", 401)
         if isinstance(timestamp, bool) or not isinstance(timestamp, int) or abs(time.time() - timestamp) > 60:
@@ -269,50 +341,81 @@ class AgentAuthority:
             raise AgentAuthorityError("AGENT_REQUEST_SCOPE_DENIED", 403)
         if not isinstance(signature, bytes) or not 64 <= len(signature) <= 80:
             raise AgentAuthorityError("INVALID_AGENT_SIGNATURE", 401)
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
         now = time.time()
-        with self.lock, self._db() as db:
+        with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT a.identity_id,a.key_version,a.public_key_pem,a.scopes_json,a.expires_at,a.revoked_at,c.expires_at,c.consumed_at FROM delegated_agents a JOIN agent_request_challenges c ON c.agent_id=a.agent_id WHERE a.agent_id=? AND c.nonce=?", (agent_id, nonce)).fetchone()
-            if row is None or row[5] is not None or row[4] <= now or row[6] <= now or row[7] is not None:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 401)
             try:
-                current_version = self._current_parent_key_version(row[0])
-            except AgentAuthorityError:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403) from None
-            if row[1] != current_version:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
-            if "agent.status.read" not in json.loads(row[3]):
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_SCOPE_NOT_ALLOWED", 403)
-            payload = self.canonical({"body_sha256": hashlib.sha256(body).hexdigest(), "method": method, "nonce": nonce, "path": path, "protocol": "IAO-AGENT-REQUEST-V1", "timestamp": timestamp})
-            try:
-                key = serialization.load_pem_public_key(row[2].encode("ascii"))
-                key.verify(signature, b"IAO-AGENT-REQUEST-V1\x00" + payload, ec.ECDSA(hashes.SHA256()))
-            except (InvalidSignature, ValueError, TypeError):
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("INVALID_AGENT_SIGNATURE", 401) from None
-            changed = db.execute("UPDATE agent_request_challenges SET consumed_at=? WHERE nonce=? AND consumed_at IS NULL", (now, nonce)).rowcount
-            if changed != 1:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 401)
-            db.execute("COMMIT")
+                row = db.execute(
+                    """SELECT a.identity_id,a.key_version,a.public_key_pem,a.scopes_json,
+                    a.expires_at,a.revoked_at,c.expires_at,c.consumed_at
+                    FROM delegated_agents a JOIN agent_request_challenges c
+                    ON c.agent_id=a.agent_id
+                    WHERE a.agent_id=? AND c.nonce=?""",
+                    (agent_id, nonce),
+                ).fetchone()
+                if row is None or row[5] is not None or row[4] <= now or row[6] <= now or row[7] is not None:
+                    raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 401)
+                current_version, _, _ = self._current_parent_binding(row[0])
+                if row[1] != current_version:
+                    raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
+                if "agent.status.read" not in json.loads(row[3]):
+                    raise AgentAuthorityError("AGENT_SCOPE_NOT_ALLOWED", 403)
+                payload = self.canonical({
+                    "body_sha256": hashlib.sha256(body).hexdigest(),
+                    "method": method, "nonce": nonce, "path": path,
+                    "protocol": "IAO-AGENT-REQUEST-V1", "timestamp": timestamp,
+                })
+                try:
+                    key = serialization.load_pem_public_key(row[2].encode("ascii"))
+                    key.verify(
+                        signature, b"IAO-AGENT-REQUEST-V1\x00" + payload,
+                        ec.ECDSA(hashes.SHA256()),
+                    )
+                except (InvalidSignature, ValueError, TypeError):
+                    raise AgentAuthorityError("INVALID_AGENT_SIGNATURE", 401) from None
+                changed = db.execute(
+                    """UPDATE agent_request_challenges SET consumed_at=?
+                    WHERE nonce=? AND consumed_at IS NULL AND expires_at>?""",
+                    (now, nonce, now),
+                ).rowcount
+                if changed != 1:
+                    raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 401)
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
         return {"agent_id": agent_id, "identity_id": row[0], "authority": "READ_ONLY"}
 
     def status_for_agent(self, agent_id: str) -> dict[str, Any]:
+        if not isinstance(agent_id, str) or len(agent_id) != 32:
+            raise AgentAuthorityError("INVALID_AGENT_ID", 400)
         now = time.time()
         with self._db() as db:
-            row = db.execute("SELECT agent_id,scopes_json,created_at,expires_at,revoked_at,key_version,identity_id FROM delegated_agents WHERE agent_id=?", (agent_id,)).fetchone()
+            row = db.execute(
+                """SELECT agent_id,scopes_json,created_at,expires_at,revoked_at,
+                key_version,identity_id FROM delegated_agents WHERE agent_id=?""",
+                (agent_id,),
+            ).fetchone()
         if row is None:
             raise AgentAuthorityError("AGENT_NOT_FOUND", 404)
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
         try:
-            current_version = self._current_parent_key_version(row[6])
+            with identity_guard:
+                current_version, _, _ = self._current_parent_binding(row[6])
         except AgentAuthorityError:
             current_version = -1
         active = bool(current_version == row[5] and row[4] is None and row[3] > now)
-        return {"agent_id": row[0], "scopes": json.loads(row[1]), "created_at": int(row[2]), "expires_at": int(row[3]), "revoked": row[4] is not None, "active": active, "authority": "READ_ONLY"}
+        return {
+            "agent_id": row[0], "scopes": json.loads(row[1]),
+            "created_at": int(row[2]), "expires_at": int(row[3]),
+            "revoked": row[4] is not None, "active": active,
+            "authority": "READ_ONLY",
+        }
+
     def revoke(self, *, identity_id: str, key_version: int, agent_id: str,
                root_signature: bytes, primary_signature: bytes) -> dict[str, str]:
         if not isinstance(agent_id, str) or len(agent_id) != 32:
@@ -327,11 +430,24 @@ class AgentAuthority:
             raise
         except Exception:
             raise AgentAuthorityError("PRIMARY_OR_ROOT_AUTHORITY_INVALID", 403) from None
-        with self.lock, self._db() as db:
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
+        with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            changed = db.execute("UPDATE delegated_agents SET revoked_at=? WHERE agent_id=? AND identity_id=? AND key_version=? AND revoked_at IS NULL", (time.time(), agent_id, identity_id, key_version)).rowcount
-            if changed != 1:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 404)
-            db.execute("COMMIT")
+            try:
+                current_version, current_primary_pem, _ = self._current_parent_binding(identity_id)
+                if current_version != key_version or current_primary_pem != primary_pem:
+                    raise AgentAuthorityError("OPERATOR_OR_PRIMARY_DEVICE_CHANGED", 409)
+                self.operator_identity.verify_primary_device(identity_id, current_primary_pem)
+                changed = db.execute(
+                    "UPDATE delegated_agents SET revoked_at=? WHERE agent_id=? AND identity_id=? AND key_version=? AND revoked_at IS NULL",
+                    (time.time(), agent_id, identity_id, key_version),
+                ).rowcount
+                if changed != 1:
+                    raise AgentAuthorityError("AGENT_NOT_ACTIVE", 404)
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
         return {"revoked": True, "authority": "READ_ONLY"}
