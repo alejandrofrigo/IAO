@@ -5,6 +5,7 @@ import urllib.error
 from contextlib import redirect_stderr
 from io import StringIO
 import urllib.request
+import socket
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
@@ -87,3 +88,45 @@ def test_stdlib_cors_preflight_matches_api_mutation_methods_and_rejects_patch():
         httpd.server_close()
         if thread.is_alive():
             thread.join(timeout=3)
+
+
+def test_stdlib_api_rejects_invalid_and_oversized_content_length():
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(_Service()))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    cases = (
+        ("Content-Length: -1", 400, "INVALID_CONTENT_LENGTH"),
+        ("Content-Length: not-a-number", 400, "INVALID_CONTENT_LENGTH"),
+        ("Content-Length: 65537", 413, "PAYLOAD_TOO_LARGE"),
+        ("Transfer-Encoding: chunked", 400, "INVALID_TRANSFER_ENCODING"),
+    )
+    try:
+        for header, expected_status, expected_error in cases:
+            with socket.create_connection(httpd.server_address, timeout=3) as sock:
+                request = (
+                    "POST /v1/memory HTTP/1.1\\r\\n"
+                    "Host: localhost\\r\\n"
+                    f"{header}\\r\\n"
+                    "Connection: close\\r\\n\\r\\n"
+                )
+                sock.sendall(request.encode("ascii"))
+                response = bytearray()
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    response.extend(chunk)
+            head, _, body = bytes(response).partition(b"\\r\\n\\r\\n")
+            status_line = head.split(b"\\r\\n", 1)[0]
+            assert int(status_line.split()[1]) == expected_status
+            payload = __import__("json").loads(body)
+            assert payload["error"] == expected_error
+            assert len(payload["correlation_id"]) == 32
+            headers = head.decode("latin-1").lower()
+            assert f"x-correlation-id: {payload['correlation_id']}" in headers
+            assert "cache-control: no-store" in headers
+            assert "x-content-type-options: nosniff" in headers
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=3)
