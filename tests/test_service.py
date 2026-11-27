@@ -1342,6 +1342,16 @@ class QueuedTaskApiTests(Base):
             (401, "AUTHENTICATION_REQUIRED"),
         )
 
+        with patch.dict(os.environ, {"IAO_DEVICE_ENROLLMENT_ENABLED": "0"}):
+            guest_denied = self.call(
+                "POST", "/v1/device/enroll", self.tok("guest:device-test", []),
+                {"code": code, "public_key_pem": "invalid"},
+            )
+        self.assertEqual(
+            (guest_denied[0], guest_denied[1]["error"]),
+            (403, "OPERATOR_SESSION_REQUIRED"),
+        )
+
         guest_status, guest_session = self.call(
             "POST", "/v1/public/session", {}, {}
         )
