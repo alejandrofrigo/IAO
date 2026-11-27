@@ -23,8 +23,7 @@ async def _runtime_lifespan(_app):
     # Start persistent service and network workers during configured production boot.
     # Liveness-only qualification may omit secrets; in that case the API remains
     # live but readiness and service routes stay fail-closed.
-    if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
-            and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
+    if os.environ.get("OMEGA_DEV_TOKEN_KEY") or os.environ.get("AUDIT_HMAC_KEY"):
         try:
             _get_service()
         except Exception as exc:
