@@ -42,9 +42,9 @@ La siguiente tabla refleja los controles observados en `OmegaService._route`, `h
 | `GET /v1/operator/session/status` | Bearer válido; guest solo obtiene estado READ_ONLY | Consulta asociación; no cambia permisos. |
 | `GET /v1/federation/status` | Pública | Diagnóstico `unknown/discovery_only`; no afirma peers ni red operativa. |
 | `POST /v1/federation/internet` | Bearer + scope explícito `federation.internet` | Consulta externa; la denegación se audita y la consulta se registra por digest. |
-| `POST /v1/device/enroll` | Bearer no guest + `IAO_DEVICE_ENROLLMENT_ENABLED=1` + código de enrolamiento | Registra clave pública; no concede scopes. |
-| `POST /v1/device/challenge` | Bearer no guest | Emite challenge para el dispositivo perteneciente al sujeto. |
-| `POST /v1/device/command` | Bearer + prueba de posesión del dispositivo | Devuelve estado READ_ONLY; no ejecuta comandos arbitrarios. |
+| `POST /v1/device/enroll` | Bearer `operator:` con sesión raíz vigente + `IAO_DEVICE_ENROLLMENT_ENABLED=1` + código de enrolamiento | Registra clave pública; no concede scopes. Rechaza guest y sujetos no operadores antes de consultar configuración. |
+| `POST /v1/device/challenge` | Bearer `operator:` con sesión raíz vigente | Emite challenge para el dispositivo primario del operador. |
+| `POST /v1/device/command` | Bearer `operator:` con sesión raíz vigente + prueba de posesión del dispositivo | Devuelve estado READ_ONLY; no ejecuta comandos arbitrarios. |
 | `GET /v1/me` | Bearer; sujetos `operator:` requieren sesión raíz vigente | Devuelve sujeto y scopes del propio token. |
 | `POST /v1/conversations` | Bearer | Crea conversación del sujeto autenticado; guest permitido para chat público. |
 | `GET /v1/conversations/{uuid}/messages` | Bearer + propiedad de la conversación | Lee solo mensajes propios. |
