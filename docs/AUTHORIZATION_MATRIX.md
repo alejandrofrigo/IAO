@@ -21,6 +21,18 @@
 | Tarea en cola | `POST /v1/tasks` con `execution_mode=queued` | Sesión raíz asociada al bearer exacto; prueba ECDSA del dispositivo sobre método, ruta, timestamp, nonce y hash del cuerpo; dispositivo primario vinculado a esa sesión; scope de herramienta; efecto READ_ONLY y allowlist de cola. | Encolado limitado a capacidades read-only aprobadas. No se admite ejecución privilegiada/destructiva. |
 | Auditoría | `GET /v1/audit/events` | Bearer válido; `audit.admin` determina vista global; en otro caso, eventos del propio sujeto. | Lectura acotada por sujeto o scope. |
 
+## Protocolo de federación `/fed/v1/*`
+
+| Ruta | Exposición | Comprobaciones y autoridad |
+|---|---|---|
+| `GET /fed/v1/identity`, `GET /fed/v1/contract` | Pública | Publica identidad criptográfica y capacidades declaradas; no enrola peers ni concede grants. |
+| `GET /fed/v1/publication` | Pública y opt-in | Solo publica si `IAO_FEDERATION_PUBLIC_PEERING=true` y existe un origen HTTPS válido configurado; `consent=true` expresa esa configuración local explícita. |
+| `POST /fed/v1/handshake` | Pública, prueba de posesión | Responde a un nonce fresco con prueba firmada; no crea confianza ni enrola al solicitante. |
+| `POST /fed/v1/message` | Protocolo de peer firmado | Verifica peer previamente enrolado, firma Ed25519, destinatario, ventana temporal, nonce anti-replay, lease, límite por peer, grant entrante local, capability servida y `effect_class=READ_ONLY`. Las denegaciones se auditan. |
+
+El protocolo de peers no usa bearer de usuario: su autenticación es la clave Ed25519 del peer. La clave pública publicada o descubierta no basta para enrolarlo; los grants entrantes se almacenan por separado y permanecen vacíos salvo concesión local explícita.
+
+Prueba de regresión: `tests/test_federation_http_adapters.py` envía una firma falsificada para un peer enrolado a FastAPI y al adaptador stdlib; ambos deben responder `BAD_SIGNATURE` y auditar la denegación. La cobertura completa de cada ruta y de todos los métodos sigue pendiente.
 ## Invariantes de seguridad
 
 1. Un bearer token solo autentica el sujeto y transporta scopes firmados; no prueba por sí mismo posesión de la clave raíz ni del dispositivo.
