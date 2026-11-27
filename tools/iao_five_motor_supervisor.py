@@ -177,7 +177,7 @@ def task_worker_status():
     state_dir = Path(
         os.environ.get(
             "IAO_STATE_DIR",
-            os.environ.get("OMEGA_STATE_DIR", "/var/lib/iao"),
+            os.environ.get("OMEGA_STATE_DIR", ".state"),
         )
     )
     heartbeat = read_heartbeat(
