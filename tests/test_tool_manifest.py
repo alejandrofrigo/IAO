@@ -68,3 +68,24 @@ def test_schema_validator_rejects_unsupported_and_unbounded_array_shapes():
         with unittest.TestCase().assertRaises(ValueError):
             registry = ToolRegistry()
             registry.register(make_spec(input_schema=schema))
+
+
+
+def test_uri_format_schema_is_supported_for_registered_web_tools():
+    registry = ToolRegistry()
+    registry.register(make_spec(input_schema={
+        "type": "object",
+        "properties": {"url": {"type": "string", "format": "uri"}},
+        "required": ["url"],
+        "additionalProperties": False,
+    }))
+    assert registry.manifest()[0]["input_schema"]["properties"]["url"]["format"] == "uri"
+
+
+def test_unknown_schema_format_is_rejected():
+    registry = ToolRegistry()
+    with unittest.TestCase().assertRaises(ValueError):
+        registry.register(make_spec(input_schema={
+            "type": "object",
+            "properties": {"url": {"type": "string", "format": "javascript"}},
+        }))
