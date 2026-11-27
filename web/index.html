@@ -101,7 +101,7 @@ button:disabled{opacity:.5}
       messageEl.disabled = false;
       sendBtn.disabled = false;
       taskPanel.hidden = false;
-      status("Sesión de operador autenticada. El centro de mando solo admite consultas locales de lectura con firma del dispositivo primario. Caduca en 15 minutos.");
+      status("Sesión de operador autenticada. Solo lectura; sin permisos de mando. El centro de mando admite únicamente consultas locales firmadas con el dispositivo primario. Caduca en 15 minutos.");
       messageEl.focus();
     } catch (error) {
       token = null;
