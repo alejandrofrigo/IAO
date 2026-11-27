@@ -300,7 +300,7 @@ def _request_json(
                 raise FederationTransportError("RESPONSE_TOO_LARGE")
             try:
                 decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
-            except (UnicodeDecodeError, ValueError) as exc:
+            except (UnicodeDecodeError, ValueError, RecursionError) as exc:
                 raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
             return response.status, decoded
         except FederationTransportError:
