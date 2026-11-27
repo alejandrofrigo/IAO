@@ -78,3 +78,14 @@ Commit `367b96785cd283b1781866c02fea9570330e5872`:
 - This is a discovery/bootstrap improvement, not proof of live Tor reachability or a usable external compute node. No onion feed has been configured or contacted in production, and no external candidate has been enrolled.
 - Remaining gap: libp2p DHT peers and onion/HTTPS feed entries are still discovery records. Most arbitrary external peers do not speak IAO's federation protocol. A safe adapter layer for genuinely open, documented, read-only services is still required before IAO can use them as workers or model endpoints. Do not describe discovery as assimilation or claim an active node count.
 
+## Public IAO peer autojoin wired to trusted transport (2026-11-27)
+
+- The autonomous CLI now routes HTTPS candidates originating from configured `public_feed` or `signed_directory` sources into `omega.federation_autonomous.run_discovered_cycle`. It no longer sends these public candidates through the legacy `urllib` probe path.
+- Candidate admission requires a normalized public HTTPS origin and a 16-character lowercase hexadecimal node ID. Conflicting IDs for an already-known origin are quarantined as `IDENTITY_CONFLICT`.
+- The trusted path uses bounded HTTPS transport with public-DNS pinning, TLS hostname validation and redirect refusal; it verifies the peer's signed publication, explicit `consent=true`, nonce-bound Ed25519 challenge, matching public identity and participation-contract key. Capabilities are intersected with locally served capabilities and inbound grants remain empty.
+- The local enrollment path is now connected to the autonomous CLI. The integration test mocks the trusted cycle and proves the CLI routes public candidates there without calling the legacy probe. Existing `tests/test_federation_autonomous.py` separately exercises the signed publication/challenge/contract flow with mocked transport.
+- IAO Production Gates run #40: **success** on Python 3.12 and 3.13; 132 deterministic tests passed per matrix job and Ruff passed.
+- IAO CI run #1625: **success** on Python 3.12 and 3.13; full suite reported 453 passed, 1 skipped on each version. Quality gate #1625, container qualification #1275 (API contract tests and build/liveness; no publication), and mobile Chromium run #668 also passed.
+- This makes a consenting, compatible public IAO peer technically eligible for the autonomous signed enrollment path. It does **not** make arbitrary public servers IAO workers: non-IAO IPFS/libp2p peers, Nostr relays and onion endpoints still need protocol-specific, documented read-only service adapters. No external peer endpoint has been contacted or independently verified in this run; active external node count remains unproven.
+- The legacy CLI probe remains loopback-only. Public HTTPS autojoin must continue to use the pinned `omega.federation_autonomous` path; do not relax the legacy guard or fall back to `urllib`.
+
