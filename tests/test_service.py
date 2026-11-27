@@ -876,6 +876,20 @@ class AuthTests(Base):
         forged = issue_token("other-key-0123456789", "a", ["audit.admin"])
         self.assertEqual(self.call("GET", "/v1/me", {"authorization": "Bearer " + forged})[0], 401)
 
+    def test_federation_internet_requires_explicit_capability(self) -> None:
+        status, payload = self.call(
+            "POST", "/v1/federation/internet", self.tok("guest-like"),
+            {"query": "must not reach external provider"},
+        )
+        self.assertEqual((status, payload["error"]), (403, "CAPABILITY_NOT_GRANTED"))
+        events = self.svc.store._all_events()
+        self.assertTrue(any(
+            event["event_type"] == "DECISION"
+            and event["details"].get("capability") == "federation.internet"
+            and event["details"].get("decision") == "DENY"
+            for event in events
+        ))
+
     def test_operator_bearer_without_root_bound_session_is_read_only_denied(self) -> None:
         token = issue_token(
             KEY, "operator:" + "a" * 32,
