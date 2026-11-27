@@ -367,8 +367,6 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             allowed_methods = payload.get("allowed_methods")
             if status == 405 and isinstance(allowed_methods, list):
                 self.send_header("Allow", ", ".join(allowed_methods))
-            self.end_headers()
-            self.wfile.write(data)
             request_path = self.path.split("?", 1)[0]
             route_group = (
                 "federation" if request_path.startswith("/fed/v1/")
@@ -381,6 +379,8 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 "m": self.command, "route_group": route_group,
                 "s": status, "cid": correlation_id,
             }) + "\n")
+            self.end_headers()
+            self.wfile.write(data)
 
         do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = _do
 
