@@ -73,10 +73,10 @@ El primer incremento de Fase 2 no ejecutará shell arbitrario, no descargará ni
 
 | Objetivo | Estado inicial | Evidencia |
 |---:|---|---|
-| 01 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
+| 01 | IMPLEMENTADO — pendiente CI | `omega/command_protocol.py` valida un esquema cerrado y versionado, límites, expiración, nonce, capacidades ordenadas, ID UUID, device ID y firma codificada; rechaza miembros JSON duplicados y números no finitos. `tests/test_command_protocol.py` añade regresiones negativas y de canonicalización. |
 | 02 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
 | 03 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
-| 04 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
+| 04 | PARCIAL — pendiente CI | `canonical_command_bytes()` define bytes estables con dominio `IAO-COMMAND-V1` y excluye la firma del contenido firmado. La verificación ECDSA contra la clave primaria del dispositivo aún no está conectada al ingreso. |
 | 05 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
 | 06 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
 | 07 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
@@ -95,3 +95,15 @@ El primer incremento de Fase 2 no ejecutará shell arbitrario, no descargará ni
 | 20 | PENDIENTE | Criterios definidos; implementación y pruebas aún no aceptadas. |
 
 **Resultado:** Fase 2 queda abierta como rama de trabajo dependiente de Fase 1. Este documento define el contrato y la secuencia; no equivale a una implementación funcional ni a una conexión ya operativa entre el chat móvil y el daemon.
+
+
+## Primer incremento implementado — protocolo de órdenes
+
+En la rama inicial se añadieron:
+- `omega/command_protocol.py`: parseo JSON acotado con rechazo de miembros duplicados/NaN, esquema exacto `iao.command.v1`, audiencia fija, emisor operador, UUID canónico, device ID SHA-256, ventana temporal máxima de 120 segundos, skew futuro máximo de 30 segundos, nonce base64url, tipo de orden y capacidades explícitas ordenadas y únicas, cuerpo objeto de hasta 16 KiB y firma codificada canónicamente.
+- `canonical_command_bytes()`: serialización determinista con separador de dominio binario; la firma no se incluye en los bytes que ella misma autentica.
+- `command_digest()`: huella SHA-256 para correlación/auditoría; no reemplaza firma ni autorización.
+- `tests/test_command_protocol.py`: regresiones para esquema cerrado, campos inválidos, duplicados JSON, no finitos, expiración, capacidades duplicadas/no canónicas, límites, codificación de firma y bytes estables.
+- El lint bloqueante de integración incluye el módulo y su suite de pruebas.
+
+**Límite explícito:** el campo `signature` se valida sintácticamente, pero aún no se verifica criptográficamente contra la clave enrolada; tampoco se persiste ni consume el nonce. Por tanto, este módulo no debe usarse aún para aceptar o ejecutar órdenes. La rama permanece en desarrollo hasta que CI pase y se implemente la verificación de extremo a extremo.
