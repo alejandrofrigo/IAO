@@ -1091,6 +1091,27 @@ class QueuedTaskApiTests(Base):
         identity.bind_primary_device_for_session(
             "queued-user", self.operator_token, public_pem, device_signature,
         )
+        grant_challenge = identity.create_capability_challenge(
+            "queued-user", self.operator_token, self.device_id,
+            "knowledge.search", POLICY_VERSION,
+        )
+        grant_payload = base64.urlsafe_b64decode(
+            grant_challenge["signing_payload"]
+            + "=" * (-len(grant_challenge["signing_payload"]) % 4)
+        )
+        grant_root_signature = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + grant_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        grant_device_signature = self.device_private_key.sign(
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + grant_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        identity.complete_capability_challenge(
+            "queued-user", self.operator_token, grant_challenge["challenge"],
+            grant_root_signature, grant_device_signature,
+            policy_version=POLICY_VERSION,
+        )
 
     def queued_headers(self, payload: dict) -> dict[str, str]:
         body = json.dumps(payload).encode()
