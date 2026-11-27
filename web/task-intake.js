@@ -108,7 +108,7 @@
       resultEl.textContent = JSON.stringify({
         task_id: result.task_id,
         state: result.state,
-        capability: result.capability
+        capability: "knowledge.search"
       }, null, 2);
       setStatus("Búsqueda aceptada por la cola de IAO. Si el TaskWorker está activo, volverá a verificar la autorización antes de ejecutarla.");
     } catch (error) {
@@ -144,7 +144,7 @@
       resultEl.textContent = JSON.stringify({
         task_id: data.task_id,
         state: data.state,
-        capability: data.capability,
+        capability: "knowledge.search",
         result: data.result || null
       }, null, 2);
       setStatus("Estado consultado: " + data.state + ".");
