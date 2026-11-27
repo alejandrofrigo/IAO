@@ -110,6 +110,14 @@ def test_signed_non_decimal_content_length_is_rejected():
     assert error.headers["x-content-type-options"] == "nosniff"
 
 
+def test_service_response_omits_empty_allow_header():
+    response = main._service_response(
+        405,
+        {"error": "METHOD_NOT_ALLOWED", "allowed_methods": []},
+    )
+    assert "allow" not in response.headers
+
+
 def test_api_v1_service_exception_returns_safe_503(monkeypatch, tmp_path):
     client = configured_client(monkeypatch, tmp_path)
 
