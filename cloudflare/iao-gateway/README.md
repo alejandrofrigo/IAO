@@ -27,6 +27,10 @@ Set IAO_API_ORIGIN as a Worker environment variable in Cloudflare, for example t
 
 The origin must already serve the IAO API and enforce its existing root, operator-session, primary-device and delegated-agent proof checks. A public tunnel URL alone does not authenticate the caller and does not make Termux continuously available.
 
+## Explicit enablement gate
+
+The checked-in Worker configuration sets IAO_GATEWAY_MODE to disabled. In this state, liveness and the public protocol contract remain readable, but API forwarding and readiness remain blocked even if IAO_API_ORIGIN is accidentally populated. Do not change this flag to enabled until the upstream API, primary-device authorization, exact browser origin allowlist and end-to-end checks are verified. Enabling the gateway is a separate deployment decision; this repository change does not perform it.
+
 ## Browser origin policy
 
 Set `IAO_WEB_ORIGINS` as a comma-separated list of exact HTTPS origins allowed to call the Worker from a browser, for example `https://chat.example.org`. Do not use wildcards, URL paths, credentials or trailing slashes. The Worker rejects browser requests whose `Origin` is not in this list and validates CORS preflight methods and headers against the same API route allowlist. If the variable is absent, cross-origin browser requests are blocked by default. Non-browser signed agent requests without an `Origin` header are not affected.
