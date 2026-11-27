@@ -409,7 +409,7 @@ def fetch_onion_json(
             raise FederationTransportError("RESPONSE_TOO_LARGE")
         try:
             return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, ValueError, RecursionError) as exc:
             raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
     except FederationTransportError:
         raise
