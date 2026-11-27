@@ -1,5 +1,7 @@
 """web.fetch v1.0.0 - READ_ONLY. Only reachable through omega.egress; registered only when an
 allowlist is configured. Fetched content is untrusted data and never alters policy."""
+import base64
+import binascii
 import hashlib
 from typing import Any
 
@@ -24,9 +26,16 @@ def make_web_fetch(pol: EgressPolicy) -> ToolSpec:
         try:
             if out.get("status") == "DENIED":
                 return "PASS" if isinstance(out.get("error"), str) else "FAIL"  # a denial is a correct, verifiable outcome
-            ok = out["sha256"] == "sha256:" + hashlib.sha256(out["body"].encode()).hexdigest() or out["body"].endswith("\ufffd")
-            return "PASS" if ok and out["untrusted"] is True and out["status"] == 200 else "FAIL"
-        except (KeyError, AttributeError, TypeError):
+            if out.get("status") != 200 or out.get("untrusted") is not True:
+                return "FAIL"
+            encoded = out["body_base64"]
+            if not isinstance(encoded, str):
+                return "FAIL"
+            raw = base64.b64decode(encoded, validate=True)
+            digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+            decoded = raw.decode("utf-8", "replace")
+            return "PASS" if out.get("sha256") == digest and out.get("body") == decoded else "FAIL"
+        except (KeyError, AttributeError, TypeError, ValueError, binascii.Error):
             return "FAIL"
 
     return ToolSpec("web.fetch", "1.0.0", "web.fetch", "READ_ONLY", pol.total_timeout + 2, validate, run, verify)
