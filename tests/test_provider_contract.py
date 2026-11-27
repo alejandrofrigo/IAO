@@ -34,6 +34,8 @@ def test_valid_provider_config_is_accepted_without_resolving_secret():
 @pytest.mark.parametrize("patch,code", [
     ({"url": "http://gateway.example"}, "PROVIDER_URL_INVALID"),
     ({"url": "https://user:pass@gateway.example"}, "PROVIDER_URL_INVALID"),
+    ({"url": "https://gateway.example/?token=inline"}, "PROVIDER_URL_INVALID"),
+    ({"api_key": "inline-secret"}, "PROVIDER_CONFIG_INVALID"),
     ({"id": "invalid id"}, "PROVIDER_ID_INVALID"),
     ({"key_env": "bad-name"}, "PROVIDER_SECRET_REFERENCE_INVALID"),
     ({"timeout_seconds": 121}, "PROVIDER_TIMEOUT_INVALID"),
@@ -54,6 +56,8 @@ def test_messages_are_bounded_and_have_exact_role_content_shape():
         validate_chat_messages([{"role": "tool", "content": "not allowed"}])
     with pytest.raises(ProviderContractError, match="PROVIDER_MESSAGE_TOO_LARGE"):
         validate_chat_messages([{"role": "user", "content": "x" * 300_000}])
+    with pytest.raises(ProviderContractError, match="PROVIDER_REQUEST_INVALID"):
+        validate_chat_messages([{"role": [], "content": "malformed"}])
 
 
 def test_provider_response_contract_accepts_only_bounded_text():
