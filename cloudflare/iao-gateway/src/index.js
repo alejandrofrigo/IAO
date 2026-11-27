@@ -67,6 +67,7 @@ export default {
         mode: "fixed_origin_api_proxy",
         task_submission: "forwarded_to_IAO_API_authorization_required",
         agent_polling: "disabled",
+        agent_status: "signed_read_only_forwarding_only",
         privileged_commands: "disabled",
         durable_object_queue: "disabled; IAO API task store remains authoritative",
         authority: "existing IAO root, operator session and registered primary device",
@@ -74,9 +75,15 @@ export default {
     }
 
     if (url.pathname.startsWith("/v1/agent/")) {
+      if (
+        (url.pathname === "/v1/agent/challenge" && request.method === "POST") ||
+        (url.pathname === "/v1/agent/status" && request.method === "GET")
+      ) {
+        return proxyApi(request, env);
+      }
       return json(503, {
-        error: "AGENT_PROTOCOL_NOT_INTEGRATED",
-        message: "No Termux agent claim or completion endpoint is enabled.",
+        error: "AGENT_TASK_PROTOCOL_DISABLED",
+        message: "Only signed challenge and read-only status requests may be forwarded.",
       });
     }
 
