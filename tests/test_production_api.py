@@ -234,3 +234,42 @@ def test_federation_initialization_failure_does_not_take_down_local_api(monkeypa
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
     assert (tmp_path / "state" / "omega.db").is_file()
+
+
+def test_known_route_wrong_method_returns_stable_405_and_allow_header(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/v1/chat")
+    assert response.status_code == 405
+    assert response.json()["error"] == "METHOD_NOT_ALLOWED"
+    assert response.json()["allowed_methods"] == ["POST"]
+    assert response.headers["allow"] == "POST"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_api_rejects_oversized_body_before_service_dispatch(monkeypatch, tmp_path):
+    from omega.service import MAX_BODY
+
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/v1/chat",
+        content=b"x" * (MAX_BODY + 1),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "PAYLOAD_TOO_LARGE"
+    assert response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_device_api_rejects_oversized_body_before_authentication(monkeypatch, tmp_path):
+    from omega.service import MAX_BODY
+
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/v1/device/command",
+        content=b"x" * (MAX_BODY + 1),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "PAYLOAD_TOO_LARGE"
