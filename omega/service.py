@@ -241,8 +241,14 @@ class OmegaService:
                 allowed_methods = ("GET",)
             elif re.fullmatch(r"/v1/tasks/[0-9a-f-]{36}", p):
                 allowed_methods = ("GET",)
-            elif p == "/v1/memory" or p.startswith("/v1/memory/"):
-                allowed_methods = ("GET", "POST", "PUT", "DELETE")
+            elif p == "/v1/memory":
+                allowed_methods = ("GET", "POST", "DELETE")
+            elif p == "/v1/memory/export":
+                allowed_methods = ("GET",)
+            elif re.fullmatch(r"/v1/memory/[0-9a-f-]{36}", p):
+                allowed_methods = ("PUT", "DELETE")
+            elif p.startswith("/v1/memory/"):
+                raise ApiError(404, "NOT_FOUND")
         if allowed_methods and method not in allowed_methods:
             raise ApiError(405, "METHOD_NOT_ALLOWED", allowed_methods)
         if method == "GET" and p == "/health/live":
