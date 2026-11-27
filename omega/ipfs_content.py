@@ -6,8 +6,8 @@ import ipaddress
 import re
 from urllib.parse import quote, urlsplit
 
-CID_V0 = re.compile(r"Qm[1-9A-HJ-NP-Za-km-z]{44}\\Z")
-CID_V1_BASE32 = re.compile(r"b[a-z2-7]{20,118}\\Z")
+CID_V0 = re.compile(r"Qm[1-9A-HJ-NP-Za-km-z]{44}\Z")
+CID_V1_BASE32 = re.compile(r"b[a-z2-7]{20,118}\Z")
 DEFAULT_API = "http://127.0.0.1:5001"
 MAX_CONTENT_BYTES = 2_000_000
 
