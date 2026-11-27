@@ -17,6 +17,7 @@ class AuditStatusTests(unittest.TestCase):
                     store.audit_status(),
                     {
                         "valid": True,
+                        "authenticated": True,
                         "event_count": 2,
                         "first_invalid_index": None,
                         "first_invalid_event_id": None,
