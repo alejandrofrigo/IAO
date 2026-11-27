@@ -283,3 +283,20 @@ def test_device_api_rejects_oversized_body_before_authentication(monkeypatch, tm
     )
     assert response.status_code == 413
     assert response.json()["error"] == "PAYLOAD_TOO_LARGE"
+
+
+def test_device_route_wrong_method_uses_shared_405_contract(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/v1/device/enroll")
+    assert response.status_code == 405
+    assert response.json()["error"] == "METHOD_NOT_ALLOWED"
+    assert response.json()["allowed_methods"] == ["POST"]
+    assert response.headers["allow"] == "POST"
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+
+
+def test_health_route_wrong_method_uses_shared_405_contract():
+    response = TestClient(main.app).post("/health/live")
+    assert response.status_code == 405
+    assert response.json()["error"] == "METHOD_NOT_ALLOWED"
+    assert response.headers["allow"] == "GET"
