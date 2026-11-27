@@ -4,7 +4,7 @@ import json
 import os
 import stat
 
-from omega import federation_transport
+from omega import federation_transport, onion_discovery
 from tools import iao_federation_autonomous as federation
 
 
@@ -27,7 +27,7 @@ def test_onion_feed_discovers_only_valid_v3_onion_endpoints(monkeypatch):
             {"peer_id": "S" * 40, "url": "https://example.org/"},
         ]}
 
-    monkeypatch.setattr(federation, "fetch_onion_json", fake_fetch)
+    monkeypatch.setattr(onion_discovery, "fetch_onion_json", fake_fetch)
     found = federation.discover_onion_feed(feed)
     assert len(found) == 2
     assert found[0]["service_url"] == valid
@@ -44,7 +44,7 @@ def test_onion_feed_discovers_only_valid_v3_onion_endpoints(monkeypatch):
 def test_onion_feed_failure_is_fail_closed(monkeypatch):
     def fail(*args, **kwargs):
         raise federation_transport.FederationTransportError("TOR_ONION_REQUEST_FAILED")
-    monkeypatch.setattr(federation, "fetch_onion_json", fail)
+    monkeypatch.setattr(onion_discovery, "fetch_onion_json", fail)
     assert federation.discover_onion_feed(
         f"http://{onion('d')}/directory.json"
     ) == []
