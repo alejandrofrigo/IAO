@@ -50,6 +50,7 @@ def test_readiness_reports_local_scope_without_claiming_production(monkeypatch):
         "external_network": "start_reported_unverified",
     }
     assert payload["checks"]["model_adapter"] == "configured_unverified"
+    assert payload["checks"]["task_worker"] == "heartbeat_unverified"
     assert payload["production_gates"]["independent_federation"] == "not_verified"
     assert len(calls) == 1
 
@@ -81,3 +82,44 @@ def test_readiness_hides_internal_runtime_exception(monkeypatch):
     assert isinstance(payload["correlation_id"], str)
     assert len(payload["correlation_id"]) == 32
     assert "private-runtime-detail" not in response.body.decode()
+
+
+def test_task_worker_readiness_requires_heartbeat_and_live_pid(monkeypatch, tmp_path):
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        api_main,
+        "read_heartbeat",
+        lambda *_args, **_kwargs: {"status": "HEALTHY", "pid": 4242},
+        raising=False,
+    )
+    monkeypatch.setattr(api_main.os, "kill", lambda pid, sig: None)
+    assert api_main._task_worker_health() == "healthy"
+
+    monkeypatch.setattr(
+        api_main,
+        "read_heartbeat",
+        lambda *_args, **_kwargs: {"status": "STALE", "pid": 4242},
+        raising=False,
+    )
+    assert api_main._task_worker_health() == "stale_heartbeat"
+
+    def missing(pid, sig):
+        raise ProcessLookupError
+    monkeypatch.setattr(api_main, "read_heartbeat", lambda *_a, **_k: {"status": "HEALTHY", "pid": 4242}, raising=False)
+    monkeypatch.setattr(api_main.os, "kill", missing)
+    assert api_main._task_worker_health() == "process_not_alive"
+
+
+def test_task_worker_readiness_rejects_pid_without_heartbeat(monkeypatch, tmp_path):
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        api_main,
+        "read_heartbeat",
+        lambda *_args, **_kwargs: {"status": "UNVERIFIED", "pid": 4242},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        api_main.os, "kill",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("PID must not be probed without heartbeat")),
+    )
+    assert api_main._task_worker_health() == "heartbeat_unverified"
