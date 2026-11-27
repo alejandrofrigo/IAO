@@ -424,7 +424,9 @@ async def _device_service_route(request: Request, path: str):
         return _service_response(status, payload)
     except RuntimeError:
         return JSONResponse(
-            status_code=503, content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE"}
+            status_code=503,
+            content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
         )
 
 
