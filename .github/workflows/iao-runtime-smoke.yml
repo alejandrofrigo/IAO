@@ -23,6 +23,8 @@ jobs:
     name: Ephemeral Tor + Kubo + IAO discovery
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      IAO_P2P_ALLOW_DIRECT: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
