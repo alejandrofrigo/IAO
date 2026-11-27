@@ -7,7 +7,7 @@ The Worker forwards a narrow set of requests to one operator-configured, fixed H
 ## What this phase does
 
 - Exposes liveness independently of readiness.
-- Forwards ordinary versioned /v1 API requests to the fixed IAO_API_ORIGIN.
+- Forwards only an explicit allowlist of public-chat, operator/device authentication, signed task submission/status, health and read-only agent challenge/status routes to the fixed IAO_API_ORIGIN. Unknown `/v1/*` paths are rejected by default.
 - Forwards only POST /v1/agent/challenge and GET /v1/agent/status for the signed, read-only Termux agent protocol.
 - Preserves the four signed agent headers: X-IAO-Agent-Id, X-IAO-Agent-Nonce, X-IAO-Agent-Timestamp and X-IAO-Agent-Signature.
 - Also preserves only the existing API headers required for ordinary authentication: Authorization, Content-Type, Idempotency-Key and X-IAO-Device-Proof.
@@ -15,6 +15,7 @@ The Worker forwards a narrow set of requests to one operator-configured, fixed H
 - Requires an HTTPS origin with no credentials, path, query or fragment; rejects localhost and IP-literal targets.
 - Caps request bodies at 64 KiB, allows only GET/POST, blocks redirects and never follows an upstream redirect.
 - Keeps agent task polling, claiming, completion and all other /v1/agent/* routes disabled.
+- Keeps unlisted sensitive API routes (including federation internet actions, audit reads, memory endpoints and unknown operator/device controls) blocked. The API remains responsible for authorization on every forwarded route.
 - Keeps privileged commands disabled. The Worker does not execute tasks.
 - Leaves the Durable Object broker disabled: IAO's existing Python SQLite task store remains the single queue and lease authority.
 
