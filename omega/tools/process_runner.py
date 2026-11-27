@@ -244,3 +244,24 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
             process.kill()
             process.join(timeout=1)
         process.close()
+
+
+def _sandbox_probe_run(payload: dict[str, Any]) -> dict[str, Any]:
+    return {"probe": payload.get("probe")}
+
+
+def _sandbox_probe_verify(output: dict[str, Any]) -> str:
+    return "PASS" if output == {"probe": "IAO_OS_SANDBOX_V1"} else "FAIL"
+
+
+def verify_os_sandbox() -> bool:
+    """Prove that the configured production sandbox can actually launch and isolate."""
+    output, verdict = run_tool_isolated(
+        _sandbox_probe_run,
+        _sandbox_probe_verify,
+        {"probe": "IAO_OS_SANDBOX_V1"},
+        5,
+    )
+    if verdict != "PASS" or output != {"probe": "IAO_OS_SANDBOX_V1"}:
+        raise ToolProcessError("OS_SANDBOX_PREFLIGHT_FAILED")
+    return True
