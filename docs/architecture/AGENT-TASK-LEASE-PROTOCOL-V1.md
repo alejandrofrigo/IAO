@@ -71,3 +71,22 @@ No production activation until all of the following are true:
 7. The operator explicitly approves any merge, deployment, tunnel or production configuration.
 
 Until then, the system must report the bridge as not enabled. A successful chat response is not evidence that a task was queued or executed.
+
+
+## Additional implementation audit finding
+
+The current browser device module already exposes `IAODeviceAuthority.submitQueuedTask(payload)`, which obtains a one-use device challenge, signs the exact POST method/path/timestamp/nonce/body digest, and sends the proof with the operator bearer session. The API's queued `POST /v1/tasks` handler verifies that proof, verifies the primary-device binding for the current operator session, checks the registered capability and read-only queued-tool allowlist, stores the authorization snapshot, and queues the task in the existing Store.
+
+However, the current operator login response is deliberately read-only and carries an empty capability-scope list. The task intake handler intersects requested capability authorization with the authenticated principal's scopes. Consequently, a valid device signature alone does not authorize a queued capability. The browser UI also does not yet expose a complete task-submission/status workflow.
+
+This is an intentional security boundary, not a reason to widen the operator token implicitly. Before enabling task creation, implement an explicit capability-grant step with all of these properties:
+
+- Capability grants are narrow, enumerated server-side and read-only for the initial release.
+- A grant is bound to the active operator root identity, primary-device binding version, exact capability, expiry and policy version.
+- The primary device explicitly signs the canonical grant; the server validates it and records the grant in the existing authority/policy state.
+- Operator sessions receive only the scopes actually granted; default login remains empty-scope and read-only.
+- Revocation, root-key rotation, primary-device replacement, expiry or policy-version change invalidates the grant and blocks new queued tasks.
+- Browser UI exposes submission only when the current session has the required scope and the primary-device proof succeeds. Guest and unbound sessions remain chat-only.
+- Tests prove that device proof without a capability grant is denied, a grant for one capability cannot authorize another, and revoked/expired grants cannot queue tasks.
+
+Do not solve this gap by assigning all registry capabilities to operator sessions or by adding an agent scope such as `agent.task.claim`. The initial worker continues to claim and execute tasks locally under the existing lease fencing.
