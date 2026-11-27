@@ -188,15 +188,17 @@ def status():
         HEARTBEAT, expected_component="PADGE_AUTONOMY",
     )
     lock_owner = read_lock_owner(LOCK)
-    active = lock_owner is not None
-    if not active:
+    lock_held = lock_owner is not None
+    active = lock_held and lock_owner == heartbeat.get("pid")
+    if not lock_held:
         state = "STOPPED"
     elif heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
         state = heartbeat["status"]
     else:
         state = "DEGRADED_UNVERIFIED"
     print("\nCOORDINATOR_STATUS=" + state)
-    print("COORDINATOR_LOCK_HELD=" + ("YES" if active else "NO"))
+    print("COORDINATOR_LOCK_HELD=" + ("YES" if lock_held else "NO"))
+    print("COORDINATOR_PROCESS_MATCH=" + ("YES" if active else "NO"))
     print("COORDINATOR_LOCK_OWNER_PID=" + (str(lock_owner) if lock_owner else "UNKNOWN"))
     print("COORDINATOR_HEARTBEAT=" + json.dumps(heartbeat, sort_keys=True))
     return 0 if state in {"HEALTHY", "CYCLE_IN_PROGRESS"} else 1
