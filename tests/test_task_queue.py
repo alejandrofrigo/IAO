@@ -195,6 +195,24 @@ class DurableTaskQueueTests(unittest.TestCase):
         finally:
             second.close()
 
+    def test_state_transition_uses_compare_and_swap(self) -> None:
+        self._queue_one()
+        self.assertTrue(self.store.transition_task_state(
+            "task-1", "CREATED", "AUTHENTICATED"
+        ))
+        self.assertFalse(self.store.transition_task_state(
+            "task-1", "CREATED", "AUTHENTICATED"
+        ))
+        row = self.store.get_task("task-1", "owner-a")
+        self.assertEqual(row["state"], "AUTHENTICATED")
+
+    def test_state_transition_rejects_illegal_edges(self) -> None:
+        self._queue_one()
+        with self.assertRaisesRegex(ValueError, "INVALID_TASK_STATE_TRANSITION"):
+            self.store.transition_task_state("task-1", "CREATED", "SUCCEEDED")
+        row = self.store.get_task("task-1", "owner-a")
+        self.assertEqual(row["state"], "CREATED")
+
     def test_existing_task_table_receives_additive_lease_migration(self) -> None:
         self.store.close()
         connection = sqlite3.connect(self.db_path)
