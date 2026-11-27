@@ -195,6 +195,29 @@ class DurableTaskQueueTests(unittest.TestCase):
         finally:
             second.close()
 
+    def test_stale_lease_generation_cannot_update_reclaimed_task(self) -> None:
+        self._queue_one()
+        first = self.store.claim_next_task("worker-a", lease_seconds=300)
+        self.assertIsNotNone(first)
+        first_generation = first["lease_generation"]
+        # Recovery is fail-closed; an explicit operator requeue is required.
+        self.store.recover_interrupted_tasks(now="2999-01-01T00:00:00+00:00")
+        with self.store.lock:
+            self.store.db.execute(
+                "UPDATE task SET state='QUEUED' WHERE id='task-1' AND state='FAILED'"
+            )
+        second = self.store.claim_next_task("worker-a", lease_seconds=300)
+        self.assertIsNotNone(second)
+        self.assertEqual(second["lease_generation"], first_generation + 1)
+        self.assertFalse(self.store.update_claimed_task(
+            "task-1", "worker-a", "SUCCEEDED", {"result": "stale"},
+            release=True, lease_generation=first_generation,
+        ))
+        self.assertTrue(self.store.update_claimed_task(
+            "task-1", "worker-a", "SUCCEEDED", {"result": "current"},
+            release=True, lease_generation=second["lease_generation"],
+        ))
+
     def test_state_transition_uses_compare_and_swap(self) -> None:
         self._queue_one()
         self.assertTrue(self.store.transition_task_state(
@@ -235,7 +258,7 @@ class DurableTaskQueueTests(unittest.TestCase):
                 for row in migrated.db.execute("PRAGMA table_info(task)").fetchall()
             }
             self.assertTrue(
-                {"lease_owner", "lease_until", "attempt_count"}.issubset(columns)
+                {"lease_owner", "lease_until", "attempt_count", "lease_generation"}.issubset(columns)
             )
         finally:
             migrated.close()
