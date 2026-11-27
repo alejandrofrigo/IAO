@@ -3,7 +3,7 @@
 Verified state lives in `artifacts/` (status.json, runtime-report.json, test-results.txt, build-manifest.json).
 
 ## Run (works offline, stdlib only)
-    export OMEGA_DEV_TOKEN_KEY=$(python3 -c "import os;print(os.urandom(16).hex())")
+    export OMEGA_DEV_TOKEN_KEY=$(python3 -c "import secrets;print(secrets.token_urlsafe(48))")
     python3 -m omega.supervisor              # supervised runtime on 127.0.0.1:8080
     python3 tools/run_runtime.py             # start + attack over HTTP + crash/recover + backup/restore
     python3 tools/verify.py                  # unit/security tests + hashed manifest + network probe
@@ -24,10 +24,19 @@ Consulta también el [contrato HTTP](docs/HTTP_API_CONTRACT.md) y la [guía oper
 
 ## Status honesty
 
-Dev bearer tokens are NOT OIDC (production start is refused). SQLite is the dev backend; PostgreSQL,
+Development bearer tokens are not production credentials. Production uses a separate
+`IAO_SESSION_SIGNING_KEY` and the internal dual-signature root/primary-device login;
+the HMAC token is only a short-lived envelope bound to the verified operator identity.
+The production worker requires a successful bubblewrap OS-sandbox preflight. SQLite is
+the current durable queue backend; PostgreSQL,
 FastAPI app (apps/api), pydantic contracts, Docker, CI, a real model adapter and all external
 infrastructure (Annex S) are NOT executed in this sandbox (no network / credentials).
 
 ## Project objectives and integration gaps
 
 See [IAO objectives, verified capabilities and integration gaps](docs/IAO_OBJECTIVES_GAP_ANALYSIS.md) for the repository-based inventory, current blockers, implementation order and acceptance criteria. This document distinguishes code presence from tested runtime capability.
+
+
+## Production deployment
+
+See [the self-hosted HTTPS deployment runbook](docs/PRODUCTION_DEPLOYMENT_RUNBOOK.md). It provisions private one-time secrets, uses Caddy for automatic TLS, and keeps the API private behind the reverse proxy. A public host, DNS and a kernel that supports bubblewrap namespaces are still required.

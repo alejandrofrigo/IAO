@@ -119,3 +119,167 @@ def test_provider_status_exposes_no_key_material(monkeypatch):
     assert result["configured"] == 1
     assert result["providers"][0]["id"] == "alpha"
     assert secret not in json.dumps(result)
+
+
+
+def test_route_filters_by_capability_modality_and_cost(monkeypatch):
+    cheap_text = {
+        **provider("cheap-text", 1),
+        "capabilities": ["chat.completion", "reasoning"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 0.2,
+    }
+    cheap_no_reasoning = {
+        **provider("cheap-basic", 0),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 0.01,
+    }
+    expensive_image = {
+        **provider("vision", 2),
+        "capabilities": ["chat.completion", "reasoning"],
+        "modalities": ["text", "image"],
+        "cost_per_1k_tokens": 0.8,
+    }
+    monkeypatch.setattr(router, "providers", lambda: [
+        expensive_image, cheap_no_reasoning, cheap_text
+    ])
+    monkeypatch.setattr(router, "health", lambda: {})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    calls = []
+
+    def request(candidate, messages, timeout):
+        calls.append(candidate["id"])
+        return "ok", candidate["model"]
+
+    monkeypatch.setattr(router, "_request", request)
+    result = router.chat_with_metadata(
+        [{"role": "user", "content": "test"}],
+        requirements={
+            "capabilities": ["reasoning"],
+            "modalities": ["text"],
+            "max_cost_per_1k_tokens": 0.5,
+        },
+    )
+    assert calls == ["cheap-text"]
+    assert result["model_identity"]["provider_id"] == "cheap-text"
+
+
+def test_route_rejects_unknown_or_invalid_requirements(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    with pytest.raises(ValueError, match="INVALID_ROUTE_REQUIREMENTS"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}],
+            requirements={"capabilities": ["reasoning"], "unexpected": True},
+        )
+    with pytest.raises(ValueError, match="INVALID_ROUTE_REQUIREMENTS"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}],
+            requirements={"max_cost_per_1k_tokens": float("nan")},
+        )
+
+
+def test_route_fails_closed_when_no_provider_meets_cost_or_capability(monkeypatch):
+    candidate = {
+        **provider("expensive"),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 2.0,
+    }
+    monkeypatch.setattr(router, "providers", lambda: [candidate])
+    with pytest.raises(RuntimeError, match="IAO_NO_COMPATIBLE_PROVIDERS"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}],
+            requirements={
+                "capabilities": ["reasoning"],
+                "max_cost_per_1k_tokens": 1.0,
+            },
+        )
+
+
+
+def test_route_orders_compatible_providers_by_configured_cost(monkeypatch):
+    expensive = {
+        **provider("expensive", 0),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 1.5,
+    }
+    cheap = {
+        **provider("cheap", 99),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 0.1,
+    }
+    monkeypatch.setattr(router, "providers", lambda: [expensive, cheap])
+    monkeypatch.setattr(router, "health", lambda: {})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    calls = []
+    monkeypatch.setattr(
+        router, "_request",
+        lambda candidate, messages, timeout: (
+            calls.append(candidate["id"]) or "ok", candidate["model"]
+        ),
+    )
+    router.chat_with_metadata([{"role": "user", "content": "test"}])
+    assert calls == ["cheap"]
+
+
+def test_malformed_health_state_does_not_break_provider_routing(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    monkeypatch.setattr(router, "health", lambda: {"alpha": "corrupt"})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    monkeypatch.setattr(router, "_request", lambda *args: ("ok", "alpha-model"))
+    result = router.chat_with_metadata([{"role": "user", "content": "test"}])
+    assert result["reply"] == "ok"
+
+
+def test_invalid_timeout_is_rejected_before_provider_calls(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    with pytest.raises(ValueError, match="INVALID_PROVIDER_TIMEOUT"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}], timeout=float("inf")
+        )
+
+
+
+def test_status_handles_corrupt_health_document_without_exposing_config_secrets(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    monkeypatch.setattr(router, "health", lambda: {"alpha": "corrupt"})
+    result = router.status()
+    assert result["providers"][0]["id"] == "alpha"
+    assert result["providers"][0]["failures"] == 0
+    assert result["providers"][0]["last_latency_ms"] is None
+
+
+
+def test_model_call_budget_caps_provider_attempts(monkeypatch):
+    candidates = [
+        {**provider("first", 0), "cost_per_1k_tokens": 0.1},
+        {**provider("second", 1), "cost_per_1k_tokens": 0.2},
+    ]
+    monkeypatch.setattr(router, "providers", lambda: candidates)
+    monkeypatch.setattr(router, "health", lambda: {})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    calls = []
+    monkeypatch.setattr(
+        router, "_request",
+        lambda candidate, messages, timeout: (
+            calls.append(candidate["id"]) or "ok", candidate["model"]
+        ),
+    )
+    router.chat_with_metadata(
+        [{"role": "user", "content": "test"}], max_model_calls=1
+    )
+    assert calls == ["first"]
+
+
+def test_invalid_model_call_budget_fails_before_provider_discovery(monkeypatch):
+    monkeypatch.setattr(
+        router, "providers",
+        lambda: (_ for _ in ()).throw(AssertionError("provider discovery must not run")),
+    )
+    with pytest.raises(ValueError, match="INVALID_MODEL_CALL_BUDGET"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}], max_model_calls=0
+        )

@@ -23,9 +23,23 @@ jobs:
         run: python -m compileall -q omega tools
       - name: Install declared runtime dependencies
         run: python -m pip install -e ".[dev]"
-      - name: Validate browser API configuration scripts
-        run: node --check web/api-config.js
-      - name: Test fail-closed browser API configuration
+      - name: Validate browser security scripts
+        run: |
+          node --check web/api-config.js
+          node --check web/device-authority.js
+          node --check web/operator-identity.js
+          node --check web/task-intake.js
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          source = Path("web/index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script>(.*?)</script>", source, re.S)
+          if len(scripts) != 1:
+              raise SystemExit("expected exactly one inline chat script")
+          Path("/tmp/iao-index-inline.js").write_text(scripts[0], encoding="utf-8")
+          PY
+          node --check /tmp/iao-index-inline.js
+      - name: Test fail-closed API origin configuration
         run: node --test web/api-config.test.js
       - name: Run standard-library tests
         run: python -m unittest discover -v

@@ -3,9 +3,22 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    env_file: ../.env
-    ports:
-      - "8080:8080"
+    env_file: ../.env.production
+    environment:
+      APP_ENV: production
+      IAO_STATE_DIR: /var/lib/iao
+      IAO_CORPUS_DIR: /app/knowledge
+      IAO_SESSION_SIGNING_KEY: ${IAO_SESSION_SIGNING_KEY:?set IAO_SESSION_SIGNING_KEY}
+      AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?set AUDIT_HMAC_KEY}
+      IAO_TASK_WORKER_ENABLED: ${IAO_TASK_WORKER_ENABLED:-true}
+      IAO_IDENTITY_ROLLBACK_DIR: /var/lib/iao/identity-trust
+      IAO_CORS_ORIGINS: ${IAO_CORS_ORIGINS:?set exact IAO_CORS_ORIGINS}
+      PUBLIC_BASE_URL: https://${IAO_DOMAIN:?set public IAO_DOMAIN}
+    expose:
+      - "8080"
+    volumes:
+      - iao_state:/var/lib/iao
+      - iao_identity_trust:/var/lib/iao/identity-trust
     read_only: true
     tmpfs:
       - /tmp
@@ -14,18 +27,26 @@ services:
     cap_drop:
       - ALL
     restart: unless-stopped
-  db:
-    image: postgres:17.2
+
+  caddy:
+    image: caddy:2-alpine
     environment:
-      POSTGRES_DB: omega
-      POSTGRES_USER: omega
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in environment}
+      IAO_DOMAIN: ${IAO_DOMAIN:?set public IAO_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U omega -d omega"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
-  postgres_data: {}
+  iao_state: {}
+  iao_identity_trust: {}
+  caddy_data: {}
+  caddy_config: {}

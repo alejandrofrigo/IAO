@@ -49,21 +49,23 @@ binding statement. The server verifies both proofs before consuming the
 one-time bootstrap capability, binds the root and enrolls the exact device key;
 bootstrap grants no operator bearer session or privileged scope. The bootstrap
 capability and offline recovery code are cleared from their inputs and are not
-persisted. This browser path has not yet passed target-mobile-browser E2E.
+persisted. The browser E2E harness exercises bootstrap, dual-signed operator login,
+session association and read-only identity status in Chromium. The latest
+revision still requires its CI result to pass, and physical Android browser
+validation remains outstanding.
 
-This is still not an end-to-end operator identity system. Trusted deployment
-provisioning, a usable non-guest authentication/session provider, browser
-end-to-end verification, worker-side identity revalidation and safe recovery
-remain unimplemented. Queued task acceptance now requires the exact bearer
-session previously associated with the active root, the active root's current
-PRIMARY device binding, and a fresh one-time device signature over the exact
-request body/method/path. The service checks the proof's device identifier
-against the root-bound primary device before persisting a queued task, and
-rechecks the same binding before returning an idempotent queued-task replay.
-This gate grants no new scopes and does not enable worker execution. The
-current public session remains guest-only and is rejected for queued tasks.
-No command authority may be claimed until the remaining integrations and
-their end-to-end tests pass.
+The internal non-guest authentication/session provider is now implemented:
+operator login challenges are signed independently by the root and primary
+device keys, the server issues a short-lived token, and its exact credential
+digest is bound to the durable root identity. Queued task acceptance requires
+that session, the current PRIMARY device binding, and a fresh one-time device
+signature over the exact request body/method/path. The worker independently
+revalidates the session digest, active device, active capability grant, policy,
+lease and READ_ONLY allowlist immediately before invoking the local tool.
+Guest sessions remain unprivileged and cannot enqueue tasks. Safe recovery,
+physical Android validation, production backup/restore, and target-host
+qualification remain release gates. No write or administrative command
+authority is enabled.
 
 ## Security objectives
 
@@ -180,9 +182,10 @@ same checks apply before an idempotent queued-task replay is returned.
 device-binding statement, verify this flow in the target mobile browser,
 provide a non-guest authentication/session provider, and revalidate identity
 and device state independently inside the worker immediately before
-execution. The public chat currently creates guest sessions only, which are
-intentionally rejected for queued tasks. This API gate does not confer
-privileged command authority or establish that the worker is safe to run.
+execution. The public chat may start with an unprivileged guest session; a separate
+root/device dual-signature login upgrades only that browser session to a
+short-lived operator session. Guest sessions remain rejected for queued tasks.
+This API gate does not confer write or administrative command authority.
 
 ## Authorization and task flow
 
@@ -235,9 +238,9 @@ the same leakage.
 
 Until every required test and lifecycle control is implemented and reviewed:
 
-- keep worker production startup blocked;
+- require the internal dual-signed root/primary-device login, persistent session key, and live OS-sandbox preflight before enabling the local read-only worker;
 - keep privileged scopes disabled;
-- keep the public chat guest-only;
+- keep guest sessions unprivileged and require the dual-signed root/device login for operator scopes;
 - keep the pull request in draft;
 - report identity as incomplete and readiness as degraded.
 

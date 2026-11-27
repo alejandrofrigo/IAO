@@ -2,13 +2,23 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
+import re
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from omega.provider_contract import (
+    MAX_RESPONSE_BYTES,
+    ProviderContractError,
+    parse_chat_response,
+    validate_chat_messages,
+    validate_provider_config,
+)
 
 CONFIG = Path.home() / ".config" / "iao" / "llm-providers.json"
 STATE = Path.home() / ".local" / "share" / "iao" / "llm-health.json"
@@ -57,17 +67,122 @@ def _write_json(path, data):
 
 
 def providers():
-    """Read configured gateways. Secrets are environment-variable references."""
+    """Read configured HTTPS gateways; never load secret values into provider metadata."""
     data = _read_json(CONFIG, {"providers": []})
-    return [
-        p for p in data.get("providers", [])
-        if isinstance(p, dict)
-        and p.get("enabled", True)
-        and isinstance(p.get("url"), str)
-        and p["url"].startswith("https://")
-        and isinstance(p.get("model"), str)
-        and p["model"].strip()
+    configured = data.get("providers", []) if isinstance(data, dict) else []
+    result = []
+    for provider in configured:
+        if not isinstance(provider, dict) or provider.get("enabled", True) is not True:
+            continue
+        try:
+            result.append(validate_provider_config(provider))
+        except ProviderContractError:
+            continue
+    return result
+
+
+def _route_requirements(value):
+    """Validate caller constraints; missing provider metadata never satisfies a constraint."""
+    if value is None:
+        return {"capabilities": [], "modalities": [], "max_cost_per_1k_tokens": None}
+    if not isinstance(value, dict) or set(value) - {
+        "capabilities", "modalities", "max_cost_per_1k_tokens"
+    }:
+        raise ValueError("INVALID_ROUTE_REQUIREMENTS")
+    normalized = {}
+    for field in ("capabilities", "modalities"):
+        items = value.get(field, [])
+        if (
+            not isinstance(items, list)
+            or any(not isinstance(item, str) or not re.fullmatch(
+                r"[a-z][a-z0-9_.-]{0,63}", item
+            ) for item in items)
+            or len(items) != len(set(items))
+        ):
+            raise ValueError("INVALID_ROUTE_REQUIREMENTS")
+        normalized[field] = items
+    ceiling = value.get("max_cost_per_1k_tokens")
+    if ceiling is not None and (
+        isinstance(ceiling, bool)
+        or not isinstance(ceiling, (int, float))
+        or not math.isfinite(float(ceiling))
+        or ceiling < 0
+    ):
+        raise ValueError("INVALID_ROUTE_REQUIREMENTS")
+    normalized["max_cost_per_1k_tokens"] = (
+        float(ceiling) if ceiling is not None else None
+    )
+    return normalized
+
+
+def _compatible(provider, requirements):
+    capabilities = provider.get("capabilities", ["chat.completion"])
+    modalities = provider.get("modalities", ["text"])
+    if (
+        not isinstance(capabilities, list)
+        or not all(isinstance(item, str) for item in capabilities)
+        or not isinstance(modalities, list)
+        or not all(isinstance(item, str) for item in modalities)
+        or not set(requirements["capabilities"]).issubset(capabilities)
+        or not set(requirements["modalities"]).issubset(modalities)
+    ):
+        return False
+    ceiling = requirements["max_cost_per_1k_tokens"]
+    if ceiling is not None:
+        cost = provider.get("cost_per_1k_tokens")
+        if (
+            isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+            or not math.isfinite(float(cost))
+            or cost < 0
+            or float(cost) > ceiling
+        ):
+            return False
+    return True
+
+
+def _finite_number(value, default):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        return default
+    return float(value)
+
+
+def _health_entry(states, ident):
+    entry = states.get(ident, {})
+    return entry if isinstance(entry, dict) else {}
+
+
+def _ordered_candidates(configured, states, requirements, now):
+    compatible = [p for p in configured if _compatible(p, requirements)]
+    if not compatible:
+        raise RuntimeError("IAO_NO_COMPATIBLE_PROVIDERS")
+    ready = [
+        p for p in compatible
+        if _finite_number(_health_entry(states, p["id"]).get("retry_after"), 0.0) <= now
     ]
+    candidates = ready or compatible
+
+    def order(provider):
+        state = _health_entry(states, provider["id"])
+        if not ready:
+            retry_after = _finite_number(state.get("retry_after"), 0.0)
+            failures = max(0, min(1000, int(_finite_number(state.get("failures"), 0))))
+            return retry_after, failures, provider["id"]
+        failures = max(0, min(1000, int(_finite_number(state.get("failures"), 0))))
+        cost = _finite_number(provider.get("cost_per_1k_tokens"), float("inf"))
+        if cost < 0:
+            cost = float("inf")
+        latency = _finite_number(state.get("latency_ewma_ms"), float("inf"))
+        if latency < 0:
+            latency = float("inf")
+        priority = _finite_number(provider.get("priority"), 100)
+        return failures, cost, latency, priority, provider["id"]
+
+    return sorted(candidates, key=order)
 
 
 def health():
@@ -75,6 +190,8 @@ def health():
 
 
 def _request(provider, messages, timeout):
+    provider = validate_provider_config(provider)
+    messages = validate_chat_messages(messages)
     url = provider["url"].rstrip("/") + "/chat/completions"
     key_env = provider.get("key_env", "")
     key = _secret_value(key_env) if key_env else ""
@@ -92,61 +209,73 @@ def _request(provider, messages, timeout):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        data = json.loads(response.read(2_000_000).decode("utf-8"))
-    answer = data["choices"][0]["message"]["content"]
-    if not isinstance(answer, str) or not answer.strip():
-        raise ValueError("empty response")
-    upstream_model = data.get("model")
-    if not isinstance(upstream_model, str) or not upstream_model.strip():
-        upstream_model = None
-    else:
-        upstream_model = upstream_model.strip()[:120]
-    return answer.strip(), upstream_model
+    with urllib.request.urlopen(req, timeout=min(float(timeout), 120.0)) as response:
+        raw = response.read(MAX_RESPONSE_BYTES + 1)
+    return parse_chat_response(raw)
 
 
-def chat_with_metadata(messages, timeout=25):
-    """Return generated text and non-secret technical provider metadata."""
-    candidates = providers()
-    if not candidates:
+def chat_with_metadata(messages, timeout=25, requirements=None, max_model_calls=3):
+    """Route by declared constraints and a hard per-request provider-call budget."""
+    if (
+        isinstance(max_model_calls, bool)
+        or not isinstance(max_model_calls, int)
+        or not 1 <= max_model_calls <= 8
+    ):
+        raise ValueError("INVALID_MODEL_CALL_BUDGET")
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(float(timeout))
+        or timeout <= 0
+    ):
+        raise ValueError("INVALID_PROVIDER_TIMEOUT")
+    configured = providers()
+    if not configured:
         raise RuntimeError(
             "IAO_NO_PROVIDERS: configure HTTPS OpenAI-compatible gateways "
             "in ~/.config/iao/llm-providers.json"
         )
-
+    route = _route_requirements(requirements)
     states = health()
-    now = time.time()
-
-    # Do not call providers that are still in cooldown when another is ready.
-    candidates.sort(key=lambda p: (
-        states.get(p.get("id", ""), {}).get("failures", 0),
-        p.get("priority", 100),
-    ))
-    ready = [
-        p for p in candidates
-        if float(states.get(p.get("id", ""), {}).get("retry_after", 0) or 0) <= now
-    ]
-    if ready:
-        candidates = ready
-    else:
-        # Probe every cooling provider in recovery order. A failed probe
-        # must not prevent trying the next configured provider.
-        candidates.sort(key=lambda p: (
-            float(states.get(p.get("id", ""), {}).get("retry_after", 0) or 0),
-            states.get(p.get("id", ""), {}).get("failures", 0),
-            p.get("priority", 100),
-        ))
+    if not isinstance(states, dict):
+        states = {}
+    candidates = _ordered_candidates(configured, states, route, time.time())
+    candidates = candidates[:max_model_calls]
 
     errors = []
     for p in candidates:
-        ident = p.get("id", p["url"])
+        ident = p["id"]
+        started = time.monotonic()
+        configured_timeout = p.get("timeout_seconds")
+        provider_timeout = timeout if configured_timeout is None else configured_timeout
+        if (
+            isinstance(provider_timeout, bool)
+            or not isinstance(provider_timeout, (int, float))
+            or not math.isfinite(float(provider_timeout))
+            or provider_timeout <= 0
+        ):
+            errors.append(f"{ident}:InvalidTimeout")
+            continue
+        effective_timeout = min(float(timeout), float(provider_timeout))
         try:
-            answer, upstream_model = _request(p, messages, timeout)
+            answer, upstream_model = _request(p, messages, effective_timeout)
+            latency_ms = max(0.0, (time.monotonic() - started) * 1000.0)
             with LOCK:
                 states = health()
+                if not isinstance(states, dict):
+                    states = {}
+                previous = _health_entry(states, ident)
+                old_latency = previous.get("latency_ewma_ms")
+                latency_ewma = (
+                    latency_ms if not isinstance(old_latency, (int, float))
+                    or isinstance(old_latency, bool)
+                    else (0.7 * float(old_latency) + 0.3 * latency_ms)
+                )
                 states[ident] = {
                     "failures": 0,
                     "last_success": int(time.time()),
+                    "last_latency_ms": round(latency_ms, 2),
+                    "latency_ewma_ms": round(latency_ewma, 2),
                     "retry_after": 0,
                 }
                 _write_json(STATE, states)
@@ -165,14 +294,25 @@ def chat_with_metadata(messages, timeout=25):
         except Exception as exc:
             # Record only a generic error class; never save keys or request text.
             errors.append(f"{ident}:{type(exc).__name__}")
+            latency_ms = max(0.0, (time.monotonic() - started) * 1000.0)
             with LOCK:
                 states = health()
-                previous = states.get(ident, {})
-                failures = min(int(previous.get("failures", 0)) + 1, 12)
+                if not isinstance(states, dict):
+                    states = {}
+                previous = _health_entry(states, ident)
+                failures = min(max(0, int(_finite_number(previous.get("failures"), 0))) + 1, 12)
                 delay = min(90 * (2 ** min(failures - 1, 5)), 3600)
+                old_latency = previous.get("latency_ewma_ms")
+                latency_ewma = (
+                    latency_ms if not isinstance(old_latency, (int, float))
+                    or isinstance(old_latency, bool)
+                    else (0.7 * float(old_latency) + 0.3 * latency_ms)
+                )
                 states[ident] = {
                     "failures": failures,
                     "last_error": type(exc).__name__,
+                    "last_latency_ms": round(latency_ms, 2),
+                    "latency_ewma_ms": round(latency_ewma, 2),
                     "retry_after": int(time.time() + delay + random.randint(0, 15)),
                 }
                 _write_json(STATE, states)
@@ -180,26 +320,29 @@ def chat_with_metadata(messages, timeout=25):
     raise RuntimeError("IAO_ALL_PROVIDERS_FAILED: " + ", ".join(errors))
 
 
-def chat(messages, timeout=25):
-    """Backward-compatible text-only router interface."""
-    return chat_with_metadata(messages, timeout)["reply"]
+def chat(messages, timeout=25, requirements=None, max_model_calls=3):
+    """Backward-compatible text-only interface with route and call-budget constraints."""
+    return chat_with_metadata(
+        messages, timeout, requirements, max_model_calls
+    )["reply"]
 
 
 def status():
     configured = providers()
     states = health()
-    return {
-        "configured": len(configured),
-        "providers": [
-            {
-                "id": p.get("id", "unnamed"),
-                "model": p["model"],
-                "failures": states.get(p.get("id", ""), {}).get("failures", 0),
-                "last_success": states.get(p.get("id", ""), {}).get("last_success"),
-            }
-            for p in configured
-        ],
-    }
+    if not isinstance(states, dict):
+        states = {}
+    summaries = []
+    for provider in configured:
+        state = _health_entry(states, provider["id"])
+        summaries.append({
+            "id": provider["id"],
+            "model": provider["model"],
+            "failures": max(0, min(1000, int(_finite_number(state.get("failures"), 0)))),
+            "last_success": state.get("last_success"),
+            "last_latency_ms": _finite_number(state.get("last_latency_ms"), None),
+        })
+    return {"configured": len(configured), "providers": summaries}
 
 
 class RouterModelAdapter:
@@ -223,12 +366,15 @@ class RouterModelAdapter:
         """Backward-compatible text-only adapter interface."""
         return self.chat_with_metadata(messages)["reply"]
 
-    def chat_with_metadata(self, messages):
+    def chat_with_metadata(self, messages, requirements=None, max_model_calls=3):
         from omega.adapters.model import ModelError
 
         prepared = self._prepare(messages)
         try:
-            return chat_with_metadata(prepared)
+            return chat_with_metadata(
+                prepared, requirements=requirements,
+                max_model_calls=max_model_calls,
+            )
         except Exception:
             # Never pass provider response bodies, credentials, or prompts
             # into service errors or audit records.

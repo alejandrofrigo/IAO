@@ -7,6 +7,8 @@ from apps.api import main
 
 
 def configured_client(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "test-token-key-" + "x" * 40)
     monkeypatch.setenv("AUDIT_HMAC_KEY", "test-audit-key-" + "y" * 48)
     monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
@@ -43,12 +45,13 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert body["status"] == "degraded"
     assert body["production_gates"]["device_identity_verification"] == "integrated_read_only"
     assert body["production_gates"]["privileged_device_commands"] == "disabled"
-    assert body["production_gates"]["identity_provider"] == "dev_hmac_not_oidc"
+    assert body["production_gates"]["identity_provider"] == "internal_root_and_primary_device_signatures"
     assert body["production_gates"]["independent_federation"] == "not_verified"
     assert body["production_gates"]["model_provider"] == "not_configured"
 
 
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
     main._service = None

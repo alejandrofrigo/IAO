@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from omega.policy import authorize
+from omega.effect_policy import authorize_effect
 from omega.server import build_service
 from omega.env_loader import load_env_files
-from omega.config import load_settings
+from omega.config import load_settings, session_signing_key
 from omega.service import POLICY_VERSION, _digest
 from omega.store import Store
 from omega.tools.registry import QUEUED_TOOL_ALLOWLIST, ToolRegistry
@@ -87,6 +88,7 @@ class TaskWorker:
 
         task_id = task["id"]
         owner = task["owner"]
+        self._active_lease_generation = task.get("lease_generation")
         try:
             intent = json.loads(task["intent_json"])
             capability = (intent.get("allowed_capabilities") or [None])[0]
@@ -127,7 +129,10 @@ class TaskWorker:
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "AUTHORIZATION_REVALIDATION_FAILED"},
                 )
-            if spec.effect_class != "READ_ONLY":
+            effect_decision = authorize_effect(
+                spec.effect_class, approved_effects={"READ_ONLY"}
+            )
+            if not effect_decision.allowed:
                 return self._finish(
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "WORKER_READ_ONLY_ONLY"},
@@ -169,6 +174,11 @@ class TaskWorker:
                 self.operator_identity_authority.verify_primary_device_for_session_digest(
                     owner, session_digest, device_id,
                 )
+                active_capabilities = self.operator_identity_authority.active_capabilities_for_session_digest(
+                    owner, session_digest, device_id, policy_version=POLICY_VERSION,
+                )
+                if capability not in active_capabilities:
+                    raise PermissionError("TASK_CAPABILITY_GRANT_REVOKED")
             except Exception:
                 self.store.audit(
                     owner, "TASK_WORKER_OPERATOR_AUTHORITY_DENIED", task_id,
@@ -179,12 +189,50 @@ class TaskWorker:
                     {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_REVOKED"},
                 )
 
+            if self._cancel_requested(task_id):
+                return self._finish(
+                    task_id, owner, "CANCELLED",
+                    {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                )
+
             started = datetime.now(timezone.utc).isoformat()
             digest_in = _digest(clean)
+            budget = intent.get("budget", {})
             timeout = min(
                 float(spec.timeout_seconds),
-                float(intent.get("budget", {}).get("timeout_seconds", 20)),
+                float(budget.get("timeout_seconds", 20)),
             )
+            input_size = len(json.dumps(
+                clean, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8"))
+            generation = self._active_lease_generation
+            if (
+                input_size > int(budget.get("max_input_bytes", 65_536))
+                or not self.store.consume_task_budget(
+                    task_id, self.worker_id, generation, "input_bytes", input_size,
+                )
+                or not self.store.consume_task_budget(
+                    task_id, self.worker_id, generation, "tool_calls", 1,
+                )
+            ):
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "TASK_BUDGET_EXCEEDED"},
+                )
+            generation = self._active_lease_generation
+            required_lease = max(self.lease_seconds, math.ceil(timeout) + 10)
+            if not self.store.renew_task_lease(
+                task_id, self.worker_id, generation, required_lease,
+            ):
+                if self._cancel_requested(task_id):
+                    return self._finish(
+                        task_id, owner, "CANCELLED",
+                        {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                    )
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "TASK_LEASE_RENEWAL_FAILED"},
+                )
             try:
                 output, verdict = self.tool_executor(
                     spec.run, spec.verify, clean, timeout
@@ -210,14 +258,51 @@ class TaskWorker:
                     {"decision": "ALLOW", "error": "TOOL_ERROR"},
                 )
 
+            if self._cancel_requested(task_id):
+                return self._finish(
+                    task_id, owner, "CANCELLED",
+                    {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                )
+            try:
+                output_size = len(json.dumps(
+                    output, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+                ).encode("utf-8"))
+            except (TypeError, ValueError, UnicodeEncodeError):
+                output_size = int(budget.get("max_output_bytes", 1_048_576)) + 1
+            if (
+                output_size > int(budget.get("max_output_bytes", 1_048_576))
+                or not self.store.consume_task_budget(
+                    task_id, self.worker_id, generation, "output_bytes", output_size,
+                )
+            ):
+                self.store.add_tool_execution(
+                    task_id, spec.name, spec.version, "FAILED",
+                    digest_in, None, "TASK_BUDGET_EXCEEDED", started,
+                    datetime.now(timezone.utc).isoformat(),
+                )
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "TASK_BUDGET_EXCEEDED"},
+                )
             self.store.add_tool_execution(
                 task_id, spec.name, spec.version, "SUCCEEDED",
                 digest_in, _digest(output), None, started,
                 datetime.now(timezone.utc).isoformat(),
             )
+            if self._cancel_requested(task_id):
+                return self._finish(
+                    task_id, owner, "CANCELLED",
+                    {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                )
             if not self.store.update_claimed_task(
-                task_id, self.worker_id, "VERIFYING"
+                task_id, self.worker_id, "VERIFYING",
+                lease_generation=self._active_lease_generation,
             ):
+                if self._cancel_requested(task_id):
+                    return self._finish(
+                        task_id, owner, "CANCELLED",
+                        {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                    )
                 self.store.audit(
                     "system", "TASK_WORKER_STALE_CLAIM", task_id,
                     worker=self.worker_id, decision="REJECT",
@@ -252,12 +337,34 @@ class TaskWorker:
             )
             return True
 
+    def _cancel_requested(self, task_id: str) -> bool:
+        checker = getattr(self.store, "task_cancel_requested", None)
+        if not callable(checker):
+            return False
+        return bool(checker(
+            task_id, self.worker_id,
+            getattr(self, "_active_lease_generation", None),
+        ))
+
     def _finish(
         self, task_id: str, owner: str, state: str, result: dict[str, Any]
     ) -> bool:
-        if not self.store.update_claimed_task(
-            task_id, self.worker_id, state, result, release=True
-        ):
+        generation = getattr(self, "_active_lease_generation", None)
+        if state != "CANCELLED" and self._cancel_requested(task_id):
+            state = "CANCELLED"
+            result = {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"}
+        updated = self.store.update_claimed_task(
+            task_id, self.worker_id, state, result, release=True,
+            lease_generation=generation,
+        )
+        if not updated and state != "CANCELLED" and self._cancel_requested(task_id):
+            state = "CANCELLED"
+            result = {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"}
+            updated = self.store.update_claimed_task(
+                task_id, self.worker_id, state, result, release=True,
+                lease_generation=generation,
+            )
+        if not updated:
             self.store.audit(
                 "system", "TASK_WORKER_STALE_COMPLETION", task_id,
                 worker=self.worker_id, attempted_state=state,
@@ -314,16 +421,19 @@ def main() -> None:
     root = Path(__file__).resolve().parent.parent
     load_env_files((root / ".env", Path.home() / ".iao-runtime.env"))
     settings = load_settings()
+    token_key = session_signing_key()
+    if len(token_key) < 32:
+        raise RuntimeError("PERSISTENT_SESSION_SIGNING_KEY_REQUIRED")
     if settings.app_env == "production":
-        raise RuntimeError("BLOCKED_EXTERNAL: configure production identity before worker startup")
-    token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
-    if len(token_key) < 16:
-        raise RuntimeError("OMEGA_DEV_TOKEN_KEY is required")
+        from omega.tools.process_runner import verify_os_sandbox
+
+        verify_os_sandbox()
     state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
     service = build_service(
         state_dir,
         token_key,
         Path(os.environ.get("OMEGA_CORPUS_DIR", "docs/corpus")),
+        identity_rollback_anchor_enabled=settings.app_env == "production",
     )
     worker = TaskWorker(
         service.store,

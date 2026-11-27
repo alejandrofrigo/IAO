@@ -1,4 +1,4 @@
-"""Stdlib HTTP runtime for IAO. Refuses to start in production with dev auth."""
+"""Stdlib HTTP runtime for IAO with persistent root/device-bound operator sessions."""
 import hashlib
 import json
 import os
@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from omega.env_loader import load_env_files
-from omega.config import load_settings, validate_persistent_keys
+from omega.config import load_settings, session_signing_key, validate_persistent_keys
 from omega.service import MAX_BODY, OmegaService
 from omega.device_authority import DeviceAuthority
 from omega.operator_identity import OperatorIdentityAuthority
@@ -47,8 +47,20 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     store = Store(state_dir / "omega.db", audit_key=audit_key_bytes)
     corpus = KnowledgeCorpus(corpus_dir)
     reg = ToolRegistry()
-    reg.register(ToolSpec("knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
-                          corpus.validate_input, corpus.run, corpus.verify))
+    reg.register(ToolSpec(
+        "knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
+        corpus.validate_input, corpus.run, corpus.verify,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 2, "maxLength": 500},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        provenance="built-in:local-corpus",
+    ))
     allow = {h.strip().lower() for h in os.environ.get("OMEGA_EGRESS_ALLOWLIST", "").split(",") if h.strip()}
     if allow:  # F3: web.fetch exists only when an explicit allowlist is configured (deny-by-default)
         from omega.egress import EgressPolicy
@@ -535,9 +547,7 @@ def main() -> None:
     runtime_env = Path.home() / '.iao-runtime.env'
     load_env_files((project_env, runtime_env))
     s = load_settings()
-    if s.app_env == "production":
-        sys.exit("BLOCKED_EXTERNAL: dev token auth is not allowed in production; configure OIDC")
-    key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+    key = session_signing_key()
     try:
         validate_persistent_keys(key, _load_persistent_audit_key())
     except (RuntimeError, ValueError):

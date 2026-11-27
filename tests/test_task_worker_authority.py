@@ -14,24 +14,41 @@ class _ClaimedTaskStore:
     def __init__(self, intent: dict) -> None:
         self.task = {
             "id": "queued-task-1",
+            "lease_generation": 1,
             "owner": "operator:test-owner",
             "intent_json": json.dumps(intent),
         }
         self.final_state = None
         self.final_result = None
+        self.cancel_requested = False
+        self.active_task = None
         self.executions = []
         self.events = []
 
     def claim_next_task(self, worker_id: str, *, lease_seconds: int = 60):
         task, self.task = self.task, None
+        self.active_task = task
         return task
 
     def update_claimed_task(
-        self, task_id, worker_id, state, result=None, *, release=False
+        self, task_id, worker_id, state, result=None, *, release=False, lease_generation=None
     ):
         self.final_state = state
         self.final_result = result
         return True
+
+    def task_cancel_requested(self, task_id, worker_id, lease_generation):
+        return self.cancel_requested
+
+    def consume_task_budget(self, task_id, worker_id, lease_generation, budget_kind, amount):
+        return amount >= 1
+
+    def renew_task_lease(self, task_id, worker_id, lease_generation, lease_seconds):
+        return (
+            not self.cancel_requested
+            and self.active_task is not None
+            and lease_generation == self.active_task["lease_generation"]
+        )
 
     def audit(self, *args, **kwargs):
         self.events.append((args, kwargs))
@@ -72,7 +89,13 @@ def _worker(authority):
         "input": {"query": "safe test"},
         "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
         "policy_version": POLICY_VERSION,
-        "budget": {"timeout_seconds": 2},
+        "budget": {
+            "max_model_calls": 0,
+            "max_tool_calls": 1,
+            "max_input_bytes": 65_536,
+            "max_output_bytes": 1_048_576,
+            "timeout_seconds": 2,
+        },
         "operator_session_digest": "a" * 64,
         "operator_device_id": "b" * 64,
     }
@@ -129,6 +152,9 @@ def test_interruption_after_tool_invocation_is_not_replayed(tmp_path, monkeypatc
     class ActiveAuthority:
         def verify_primary_device_for_session_digest(self, *_args):
             return True
+
+        def active_capabilities_for_session_digest(self, *_args, **_kwargs):
+            return frozenset({"knowledge.search"})
 
     worker = TaskWorker(
         store, registry, worker_id="fault-injection-worker",
@@ -210,3 +236,57 @@ def test_worker_fails_closed_when_primary_device_or_session_was_revoked():
     assert denied[0][1]["decision"] == "FAIL_CLOSED"
     assert "session_digest" not in denied[0][1]
     assert "device_id" not in denied[0][1]
+
+
+
+def test_worker_honors_cancel_requested_during_read_only_tool_execution():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True,
+        "active_capabilities_for_session_digest": lambda self, *_args, **_kwargs: frozenset({"knowledge.search"}),
+    })())
+
+    def cancel_during_execution(run, verify, payload, _timeout):
+        output = run(payload)
+        store.cancel_requested = True
+        return output, verify(output)
+
+    worker.tool_executor = cancel_during_execution
+    assert worker.run_once() is True
+    assert calls == [{"query": "safe test"}]
+    assert store.final_state == "CANCELLED"
+    assert store.final_result == {
+        "decision": "CANCELLED",
+        "reason": "COOPERATIVE_CANCELLATION",
+    }
+
+
+def test_worker_fails_closed_when_tool_call_budget_is_exhausted():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True,
+        "active_capabilities_for_session_digest": lambda self, *_args, **_kwargs: frozenset({"knowledge.search"}),
+    })())
+    store.consume_task_budget = lambda *_args: False
+
+    assert worker.run_once() is True
+
+    assert calls == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "TASK_BUDGET_EXCEEDED"
+
+
+def test_worker_does_not_persist_output_when_output_budget_is_exhausted():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True,
+        "active_capabilities_for_session_digest": lambda self, *_args, **_kwargs: frozenset({"knowledge.search"}),
+    })())
+
+    def consume(_task_id, _worker_id, _generation, kind, _amount):
+        return kind != "output_bytes"
+
+    store.consume_task_budget = consume
+    assert worker.run_once() is True
+
+    assert calls == [{"query": "safe test"}]
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "TASK_BUDGET_EXCEEDED"
+    assert store.executions[-1][0][3] == "FAILED"

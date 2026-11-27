@@ -56,6 +56,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
         shutil.copytree(ROOT / "web", web_root)
         (web_root / "api-config.js").write_text(
             "window.IAO_API_BASE = " + repr(api_origin) + ";\n"
+            "window.IAO_API_CONFIG_STATUS = 'configured';\n"
             "window.iaoApiUrl = path => new URL(String(path).replace(/^\\/+/, ''), "
             "window.IAO_API_BASE + '/').toString();\n",
             encoding="utf-8",
@@ -127,6 +128,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                     "Conectado como visitante. Solo chat; sin mando ni tareas en cola.",
                     exact=False,
                 ).wait_for(timeout=15000)
+                assert page.locator("#iao-task-submit").is_disabled()
                 panel = page.locator("#iao-operator-identity-panel")
                 associate = panel.get_by_role("button", name="Asociar sesión autenticada")
                 bind = panel.get_by_role("button", name="Vincular dispositivo primario")
@@ -203,7 +205,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 )
                 assert "SESIÓN DE OPERADOR AUTENTICADA" in output.inner_text(), output.inner_text()
                 page.get_by_text(
-                    "Sesión de operador autenticada. Solo lectura; sin permisos de mando.",
+                    "Permisos: ninguno (solo lectura)",
                     exact=False,
                 ).wait_for(timeout=15000)
                 bind.wait_for(state="visible")
@@ -211,6 +213,48 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 bind.click()
                 page.get_by_text("DISPOSITIVO VINCULADO", exact=False).wait_for(timeout=15000)
 
+                page.on("dialog", lambda dialog: dialog.accept())
+                grant = panel.get_by_role(
+                    "button", name="Autorizar búsqueda local de solo lectura (15 min)"
+                )
+                assert not grant.is_disabled()
+                grant.click()
+                page.get_by_text("CAPACIDAD CONCEDIDA", exact=False).wait_for(timeout=15000)
+
+                task_panel = page.locator("#iao-task-intake-panel")
+                page.wait_for_function(
+                    "() => !document.querySelector('#iao-task-submit').disabled",
+                    timeout=10000,
+                )
+                page.locator("#iao-task-query").fill("verificar evidencia de auditoría local")
+                page.get_by_role(
+                    "button", name="Enviar búsqueda a la cola de IAO"
+                ).click()
+                page.wait_for_function(
+                    """() => {
+                      const result = document.querySelector('#iao-task-result');
+                      return result && result.textContent.includes('"state": "QUEUED"');
+                    }""",
+                    timeout=15000,
+                )
+                queued = page.locator("#iao-task-result").inner_text()
+                assert '"capability": "knowledge.search"' in queued, queued
+                task_panel.get_by_role(
+                    "button", name="Consultar estado de la última tarea"
+                ).click()
+                page.get_by_text("Estado consultado: QUEUED.", exact=True).wait_for(timeout=15000)
+                task_panel.get_by_role("button", name="Cancelar última tarea").click()
+                page.get_by_text("Cancelación: CANCELLED. Estado: CANCELLED.", exact=True).wait_for(timeout=15000)
+
+                revoke_grant = panel.get_by_role(
+                    "button", name="Revocar autorización de búsqueda"
+                )
+                revoke_grant.click()
+                page.get_by_text("CAPACIDAD REVOCADA", exact=False).wait_for(timeout=15000)
+                page.wait_for_function(
+                    "() => document.querySelector('#iao-task-submit').disabled",
+                    timeout=10000,
+                )
                 session = page.evaluate(
                     """async () => {
                       const token = window.iaoGetSessionToken();
@@ -234,6 +278,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                     "Conectado como visitante. Solo chat; sin mando ni tareas en cola.",
                     exact=False,
                 ).wait_for(timeout=15000)
+                assert page.locator("#iao-task-submit").is_disabled()
                 after_reload = page.evaluate(
                     """async () => {
                       const rootDb = await new Promise((resolve, reject) => {

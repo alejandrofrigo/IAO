@@ -79,8 +79,14 @@ jobs:
 
       - name: Install and start Kubo
         run: |
-          curl -fsSL https://dist.ipfs.tech/kubo/v0.42.0/kubo_v0.42.0_linux-amd64.tar.gz -o "$RUNNER_TEMP/kubo.tar.gz"
-          tar -xzf "$RUNNER_TEMP/kubo.tar.gz" -C "$RUNNER_TEMP"
+          release="https://github.com/ipfs/kubo/releases/download/v0.42.0"
+          archive="kubo_v0.42.0_linux-amd64.tar.gz"
+          curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 --retry-all-errors \
+            "$release/$archive" -o "$RUNNER_TEMP/$archive"
+          curl -fsSL --connect-timeout 15 --max-time 45 --retry 2 --retry-all-errors \
+            "$release/$archive.sha512" -o "$RUNNER_TEMP/$archive.sha512"
+          (cd "$RUNNER_TEMP" && sha512sum -c "$archive.sha512")
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
           sudo "$RUNNER_TEMP/kubo/install.sh"
           export IPFS_PATH="$RUNNER_TEMP/ipfs"
           ipfs init

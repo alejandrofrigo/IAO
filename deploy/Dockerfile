@@ -1,12 +1,41 @@
-FROM python:3.12.8-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOST=0.0.0.0
+# Production image aligned with the canonical API container and worker sandbox.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOST=0.0.0.0 \
+    PORT=8080 \
+    APP_ENV=production \
+    IAO_TASK_WORKER_ENABLED=true \
+    IAO_IDENTITY_ROLLBACK_DIR=/var/lib/iao/identity-trust \
+    IAO_STATE_DIR=/var/lib/iao \
+    IAO_CORPUS_DIR=/app/knowledge
+
 WORKDIR /app
+
 COPY pyproject.toml README.md ./
 COPY apps ./apps
 COPY omega ./omega
 COPY web ./web
-COPY docs/corpus ./docs/corpus
-RUN pip install --no-cache-dir .
-USER 10001:10001
+COPY docs/corpus ./knowledge
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 bubblewrap \
+    && apt-mark manual libgmp10 \
+    && python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir '.[p2p]' \
+    && apt-get purge -y --auto-remove build-essential libgmp-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system iao \
+    && useradd --system --gid iao --home-dir /home/iao --create-home iao \
+    && mkdir -p /var/lib/iao/identity-trust /app/knowledge \
+    && chown -R iao:iao /var/lib/iao /app
+
+VOLUME ["/var/lib/iao"]
+USER iao:iao
+
 EXPOSE 8080
-CMD ["python", "-m", "omega.server"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/live', timeout=3).read()"]
+
+CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]

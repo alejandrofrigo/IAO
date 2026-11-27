@@ -18,7 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from omega.config import validate_persistent_keys
+from omega.config import session_signing_key, validate_persistent_keys
 from omega.service import MAX_BODY
 
 class _PersistentRuntimeUnavailable(RuntimeError):
@@ -27,16 +27,17 @@ class _PersistentRuntimeUnavailable(RuntimeError):
 
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # The task worker is a separate explicit opt-in. Missing persistent keys
-    # keep liveness available but block worker startup and readiness.
+    # The task worker is enabled only by explicit runtime configuration.
+    # Missing persistent keys keep liveness available but block readiness.
+    signing_key = session_signing_key()
     if not _task_worker_requested():
         _set_task_worker_state("disabled_by_default")
     elif (
-        len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) < 32
+        len(signing_key) < 32
         or len(os.environ.get("AUDIT_HMAC_KEY", "")) < 32
     ):
         _set_task_worker_state("blocked", "PERSISTENT_KEYS_UNAVAILABLE")
-    if os.environ.get("OMEGA_DEV_TOKEN_KEY") or os.environ.get("AUDIT_HMAC_KEY"):
+    if signing_key or os.environ.get("AUDIT_HMAC_KEY"):
         try:
             service = _get_service()
             if _task_worker_requested():
@@ -47,6 +48,11 @@ async def _runtime_lifespan(_app):
                 "PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED",
                 "TASK_WORKER_SETTINGS_INVALID",
                 "TASK_WORKER_SETTINGS_OUT_OF_RANGE",
+                "OS_SANDBOX_UNAVAILABLE",
+                "OS_SANDBOX_LAUNCH_FAILED",
+                "OS_SANDBOX_EXECUTION_FAILED",
+                "OS_SANDBOX_PREFLIGHT_FAILED",
+                "OS_SANDBOX_REQUIRED",
             }:
                 reason = "WORKER_START_FAILED"
             if _task_worker_requested():
@@ -148,6 +154,10 @@ def _start_task_worker(service) -> bool:
         state_dir = Path(os.environ.get(
             "IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")
         ))
+        if os.environ.get("APP_ENV", "development").lower() == "production":
+            from omega.tools.process_runner import verify_os_sandbox
+
+            verify_os_sandbox()
         worker = TaskWorker(
             service.store,
             service.registry,
@@ -399,10 +409,14 @@ def _get_federation_node():
 def _get_service():
     """Create the persistent service and activate federation discovery in this API process."""
     global _service
+    if os.environ.get("APP_ENV", "development").lower() == "production":
+        from omega.config import load_settings
+
+        load_settings()
     if _service is None:
         with _service_lock:
             if _service is None:
-                token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+                token_key = session_signing_key()
                 audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
                 try:
                     validate_persistent_keys(token_key, audit_key)
@@ -412,7 +426,14 @@ def _get_service():
 
                 state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
                 corpus_dir = Path(os.environ.get("IAO_CORPUS_DIR", "/app/knowledge"))
-                _service = build_service(state_dir, token_key, corpus_dir)
+                _service = build_service(
+                    state_dir,
+                    token_key,
+                    corpus_dir,
+                    identity_rollback_anchor_enabled=(
+                        os.environ.get("APP_ENV", "development").lower() == "production"
+                    ),
+                )
     service = _service
     try:
         _ensure_federation(service)
@@ -663,11 +684,11 @@ def ready(request: Request):
         "task_worker_reason": _task_worker_readiness()["reason"],
     }
     payload["production_gates"] = {
-        "device_identity_verification": "integrated_read_only",
-        "operator_session_association": "api_available_read_only",
-        "operator_root_bootstrap": "out_of_band_configurable_not_verified",
+        "device_identity_verification": "root_and_primary_device_dual_signature",
+        "operator_session_association": "short_lived_token_bound_to_signed_identity",
+        "operator_root_bootstrap": "one_time_bootstrap_code_configurable_not_bootstrapped",
         "privileged_device_commands": "disabled",
-        "identity_provider": "dev_hmac_not_oidc",
+        "identity_provider": "internal_root_and_primary_device_signatures",
         "independent_federation": "not_verified",
         "model_provider": model_state,
     }

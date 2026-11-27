@@ -7,7 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOST=0.0.0.0 \
     PORT=8080 \
     IAO_STATE_DIR=/var/lib/iao \
-    IAO_CORPUS_DIR=/app/knowledge
+    IAO_CORPUS_DIR=/app/knowledge \
+    APP_ENV=production \
+    IAO_TASK_WORKER_ENABLED=true \
+    IAO_IDENTITY_ROLLBACK_DIR=/var/lib/iao/identity-trust
 
 WORKDIR /app
 
@@ -17,7 +20,7 @@ COPY omega ./omega
 COPY docs/corpus ./knowledge
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 \
+    && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 bubblewrap \
     && apt-mark manual libgmp10 \
     && python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir '.[p2p]' \
@@ -25,7 +28,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system iao \
     && useradd --system --gid iao --home-dir /home/iao --create-home iao \
-    && mkdir -p /var/lib/iao /app/knowledge \
+    && mkdir -p /var/lib/iao/identity-trust /app/knowledge \
     && chown -R iao:iao /var/lib/iao /app
 
 VOLUME ["/var/lib/iao"]

@@ -50,10 +50,18 @@ def test_onion_candidate_merge_is_idempotent(monkeypatch, tmp_path):
         "id": "peer-a",
         "source": "onion_feed",
     }
-    assert federation.merge_onion_candidates([candidate]) == 1
-    assert federation.merge_onion_candidates([candidate]) == 0
+    first = federation.merge_onion_candidates([candidate])
+    second = federation.merge_onion_candidates([candidate])
     data = json.loads((tmp_path / "iao-onion-candidates.json").read_text())
-    assert len(data["candidates"]) == 1
+    assert first == {"new": 1, "observed": 1, "total": 1}
+    assert second == {"new": 0, "observed": 1, "total": 1}
+    assert len(data["services"]) == 1
+    record = next(iter(data["services"].values()))
+    assert record["identity_state"] == "UNVERIFIED"
+    assert record["participation_state"] == "CANDIDATE_ONLY"
+    assert record["granted_capabilities"] == []
+    assert record["remote_code_execution"] is False
+    assert record["control_authority"] is False
 
 
 def test_onion_url_validator_rejects_non_v3_and_unsafe_urls():

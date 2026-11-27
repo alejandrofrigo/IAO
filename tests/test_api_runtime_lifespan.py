@@ -5,6 +5,8 @@ import apps.api.main as api_main
 
 
 def test_configured_startup_failure_is_logged_without_exception_message(monkeypatch, caplog):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "a" * 32)
     monkeypatch.setenv("AUDIT_HMAC_KEY", "b" * 32)
 
@@ -26,6 +28,7 @@ def test_configured_startup_failure_is_logged_without_exception_message(monkeypa
 
 
 def test_liveness_only_startup_does_not_require_persistent_keys(monkeypatch):
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
     called = []
@@ -40,6 +43,8 @@ def test_liveness_only_startup_does_not_require_persistent_keys(monkeypatch):
 
 
 def test_partial_runtime_credentials_are_reported_as_startup_failure(monkeypatch, caplog):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "short")
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
 
@@ -93,6 +98,8 @@ def test_concurrent_service_access_constructs_one_service(monkeypatch):
 
     import omega.server
 
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "a" * 40)
     monkeypatch.setenv("AUDIT_HMAC_KEY", "b" * 40)
     monkeypatch.setattr(api_main, "_service", None)

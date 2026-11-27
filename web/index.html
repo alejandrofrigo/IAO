@@ -11,7 +11,7 @@ body{margin:0;background:#10141d;color:#edf2fa}
 main{max-width:760px;margin:auto;padding:20px}
 .panel{background:#1b2330;border:1px solid #354154;border-radius:14px;padding:14px;margin:14px 0}
 small,.muted{color:#aab6c8}
-textarea,button{box-sizing:border-box;width:100%;padding:12px;margin:5px 0;border-radius:9px;border:1px solid #46546a;background:#111824;color:#fff;font:inherit}
+textarea,input,button{box-sizing:border-box;width:100%;padding:12px;margin:5px 0;border-radius:9px;border:1px solid #46546a;background:#111824;color:#fff;font:inherit}
 button{background:#315caa;border:0;font-weight:650}
 button:disabled{opacity:.5}
 #messages{display:flex;flex-direction:column;gap:10px}
@@ -38,6 +38,21 @@ button:disabled{opacity:.5}
 <button id="send" disabled>Enviar mensaje</button>
 <small>No compartas contraseñas, claves privadas ni datos sensibles.</small>
 </section>
+
+<section id="iao-task-intake-panel" class="panel" aria-labelledby="iao-task-intake-title">
+<h2 id="iao-task-intake-title">Tareas de solo lectura</h2>
+<p>Solo permite buscar en el corpus de IAO con <code>knowledge.search</code>. Requiere sesión autenticada, dispositivo primario vinculado y autorización explícita temporal con doble firma. No ejecuta comandos remotos.</p>
+<p>La consulta queda registrada en la tarea. No introduzcas contraseñas, claves privadas ni datos personales sensibles.</p>
+<label for="iao-task-query">Consulta para el corpus de IAO</label>
+<textarea id="iao-task-query" rows="3" maxlength="500" placeholder="Escribe qué información quieres buscar..." disabled></textarea>
+<button id="iao-task-submit" type="button" disabled>Enviar búsqueda a la cola de IAO</button>
+<button id="iao-task-refresh" type="button" disabled>Consultar estado de la última tarea</button>
+<button id="iao-task-cancel" type="button" disabled>Cancelar última tarea</button>
+<div id="iao-task-auth-status" class="status">Verificando autorización...</div>
+<div id="iao-task-status" class="status" role="status">Sin tareas enviadas.</div>
+<pre id="iao-task-result" aria-live="polite"></pre>
+</section>
+
 </main>
 <script src="./api-config.js"></script>
 <script>
@@ -93,7 +108,7 @@ button:disabled{opacity:.5}
       messagesEl.replaceChildren();
       messageEl.disabled = false;
       sendBtn.disabled = false;
-      status("Sesión de operador autenticada. Solo lectura; sin permisos de mando. Caduca en 15 minutos.");
+      status("Sesión de operador autenticada. Solo lectura; sin permisos de mando hasta conceder una capacidad temporal con doble firma. Caduca en 15 minutos.");
       messageEl.focus();
     } catch (error) {
       token = null;
@@ -172,6 +187,7 @@ button:disabled{opacity:.5}
     }
   });
 
+
   async function sendMessage() {
     const message = messageEl.value.trim();
     if (!apiConfigured || !message || !conversationId || busy) return;
@@ -213,5 +229,6 @@ button:disabled{opacity:.5}
 </script>
 <script src="./device-authority.js" defer></script>
 <script src="./operator-identity.js" defer></script>
+<script src="./task-intake.js" defer></script>
 </body>
 </html>

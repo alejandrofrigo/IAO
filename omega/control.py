@@ -7,7 +7,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "AUTHORIZED": frozenset({"QUEUED", "RUNNING", "CANCELLED", "EXPIRED"}),
     "QUEUED": frozenset({"RUNNING", "CANCELLED", "EXPIRED"}),
     "RUNNING": frozenset({"VERIFYING", "FAILED", "CANCELLED", "EXPIRED"}),
-    "VERIFYING": frozenset({"SUCCEEDED", "FAILED"}),
+    "VERIFYING": frozenset({"SUCCEEDED", "FAILED", "CANCELLED"}),
     "SUCCEEDED": frozenset(), "FAILED": frozenset(), "DENIED": frozenset(),
     "NEEDS_CLARIFICATION": frozenset(), "CANCELLED": frozenset(), "EXPIRED": frozenset(),
 }

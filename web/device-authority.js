@@ -413,11 +413,19 @@
     };
   }
 
-  async function submitQueuedTask(payload) {
+  async function submitQueuedTask(payload, idempotencyKey) {
     const identity = await dbGet();
     if (!identity) throw new Error("DEVICE_NOT_ENROLLED");
+    if (
+      idempotencyKey !== undefined &&
+      (typeof idempotencyKey !== "string" ||
+       !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey))
+    ) {
+      throw new Error("INVALID_IDEMPOTENCY_KEY");
+    }
     const proofHeaders = await signedTaskHeaders(payload);
     const headers = { "Content-Type": "application/json", ...proofHeaders };
+    if (idempotencyKey !== undefined) headers["Idempotency-Key"] = idempotencyKey;
     if (typeof window.iaoGetSessionToken === "function") {
       const token = window.iaoGetSessionToken();
       if (token) headers.Authorization = "Bearer " + token;
@@ -425,6 +433,62 @@
     const response = await fetch(apiUrl("/v1/tasks"), {
       method: "POST", mode: "cors", credentials: "omit", cache: "no-store",
       headers, body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "HTTP_" + response.status);
+    return data;
+  }
+
+  async function signedCancelHeaders(taskId) {
+    const identity = await dbGet();
+    if (!identity || !identity.privateKey || !identity.deviceId) {
+      throw new Error("DEVICE_NOT_ENROLLED");
+    }
+    if (typeof taskId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)) {
+      throw new Error("INVALID_TASK_ID");
+    }
+    const path = "/v1/tasks/" + taskId + "/cancel";
+    const challenge = await post("/v1/device/challenge", {
+      device_id: identity.deviceId
+    });
+    const timestamp = Math.floor(Date.now() / 1000);
+    const bodyText = "";
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", encoder.encode(bodyText))
+    );
+    const hexDigest = Array.from(
+      digest, b => b.toString(16).padStart(2, "0")
+    ).join("");
+    const signedText = [
+      "POST", path, String(timestamp), challenge.nonce, hexDigest
+    ].join("\n");
+    const rawSignature = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      identity.privateKey,
+      encoder.encode(signedText)
+    ));
+    return {
+      "X-IAO-Device-Proof": JSON.stringify({
+        device_id: identity.deviceId,
+        nonce: challenge.nonce,
+        timestamp,
+        request_digest: hexDigest,
+        signature: b64url(rawEcdsaToDer(rawSignature))
+      })
+    };
+  }
+
+  async function cancelQueuedTask(taskId) {
+    const path = "/v1/tasks/" + taskId + "/cancel";
+    const headers = { ...await signedCancelHeaders(taskId) };
+    if (typeof window.iaoGetSessionToken === "function") {
+      const token = window.iaoGetSessionToken();
+      if (token) headers.Authorization = "Bearer " + token;
+    }
+    const response = await fetch(apiUrl(path), {
+      method: "POST", mode: "cors", credentials: "omit", cache: "no-store",
+      headers, body: ""
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "HTTP_" + response.status);
@@ -613,7 +677,9 @@
     signOperatorLoginPayload,
     signedStatus,
     signedTaskHeaders,
-    submitQueuedTask
+    submitQueuedTask,
+    signedCancelHeaders,
+    cancelQueuedTask
   });
 
   if (document.readyState === "loading") {

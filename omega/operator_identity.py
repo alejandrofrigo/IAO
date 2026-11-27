@@ -146,6 +146,32 @@ class OperatorIdentityAuthority:
                     key_version INTEGER NOT NULL CHECK(key_version >= 1),
                     bound_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS operator_capability_challenges (
+                    challenge_digest TEXT PRIMARY KEY,
+                    identity_id TEXT NOT NULL REFERENCES operator_identities(identity_id),
+                    subject_digest TEXT NOT NULL, session_digest TEXT NOT NULL,
+                    device_id TEXT NOT NULL, capability TEXT NOT NULL,
+                    policy_version TEXT NOT NULL, purpose TEXT NOT NULL,
+                    grant_id TEXT, signing_payload BLOB NOT NULL,
+                    key_version INTEGER NOT NULL, expires_at REAL NOT NULL,
+                    consumed_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS operator_capability_challenge_expiry
+                    ON operator_capability_challenges(expires_at);
+                CREATE TABLE IF NOT EXISTS operator_capability_grants (
+                    grant_id TEXT PRIMARY KEY,
+                    identity_id TEXT NOT NULL REFERENCES operator_identities(identity_id),
+                    subject_digest TEXT NOT NULL, session_digest TEXT NOT NULL,
+                    device_id TEXT NOT NULL, capability TEXT NOT NULL,
+                    policy_version TEXT NOT NULL, key_version INTEGER NOT NULL,
+                    created_at REAL NOT NULL, expires_at REAL NOT NULL,
+                    revoked_at REAL, challenge_digest TEXT NOT NULL UNIQUE
+                );
+                CREATE INDEX IF NOT EXISTS operator_capability_grants_active
+                    ON operator_capability_grants(identity_id, session_digest, revoked_at, expires_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS one_active_operator_capability_grant
+                    ON operator_capability_grants(identity_id, session_digest, capability)
+                    WHERE revoked_at IS NULL;
                 """
             )
             recovery_columns = {
@@ -1304,3 +1330,386 @@ class OperatorIdentityAuthority:
             and isinstance(row["session_digest"], str)
             and hmac.compare_digest(row["session_digest"], session_digest)
         )
+
+    # ---- explicit operator capability grants ----
+    def create_capability_challenge(
+        self, subject: Any, session_token: Any, device_id: Any,
+        capability: Any, policy_version: Any, *, purpose: str = "GRANT",
+        grant_id: Any = None, ttl_seconds: int = 90,
+        grant_ttl_seconds: int = 900,
+    ) -> dict[str, Any]:
+        grantable = {"knowledge.search"}
+        if purpose not in {"GRANT", "REVOKE"}:
+            raise OperatorIdentityError("INVALID_CAPABILITY_PURPOSE")
+        if not isinstance(capability, str) or capability not in grantable:
+            raise OperatorIdentityError("CAPABILITY_NOT_GRANTABLE", 403)
+        if not isinstance(policy_version, str) or not 1 <= len(policy_version) <= 128:
+            raise OperatorIdentityError("INVALID_POLICY_VERSION")
+        if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{64}", device_id):
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 30 <= ttl_seconds <= 120:
+            raise OperatorIdentityError("INVALID_CAPABILITY_CHALLENGE_TTL")
+        if purpose == "REVOKE" and (
+            not isinstance(grant_id, str) or not re.fullmatch(r"[0-9a-f]{32}", grant_id)
+        ):
+            raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_ID")
+        if purpose == "GRANT" and grant_id is not None:
+            raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_ID")
+        subject_digest = self._session_subject_digest(subject)
+        session_digest = self._session_credential_digest(session_token)
+        if not self.verify_authenticated_session(subject, session_token):
+            raise OperatorIdentityError("OPERATOR_SESSION_NOT_BOUND", 403)
+        self.verify_primary_device_for_session(subject, session_token, device_id)
+        now = time.time()
+        expires_at = int(now + ttl_seconds)
+        handle, nonce = secrets.token_urlsafe(32), secrets.token_hex(32)
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                root = db.execute(
+                    """SELECT i.identity_id,i.key_version,i.status,
+                    p.device_id,p.key_version AS device_key_version,
+                    s.subject_digest,s.session_digest
+                    FROM operator_identities i
+                    JOIN primary_device_bindings p ON p.identity_id=i.identity_id
+                    JOIN operator_session_bindings s ON s.identity_id=i.identity_id
+                    WHERE i.status='ACTIVE'"""
+                ).fetchone()
+                if (
+                    root is None or root["key_version"] != root["device_key_version"]
+                    or not hmac.compare_digest(root["device_id"], device_id)
+                    or not hmac.compare_digest(root["subject_digest"], subject_digest)
+                    or not isinstance(root["session_digest"], str)
+                    or not hmac.compare_digest(root["session_digest"], session_digest)
+                ):
+                    raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                if purpose == "GRANT":
+                    db.execute(
+                        """UPDATE operator_capability_grants SET revoked_at=?
+                        WHERE identity_id=? AND session_digest=? AND capability=?
+                        AND revoked_at IS NULL
+                        AND (expires_at<=? OR policy_version<>?)""",
+                        (
+                            now, root["identity_id"], session_digest,
+                            capability, now, policy_version,
+                        ),
+                    )
+                    existing = db.execute(
+                        """SELECT 1 FROM operator_capability_grants
+                        WHERE identity_id=? AND subject_digest=? AND session_digest=?
+                        AND device_id=? AND capability=? AND policy_version=?
+                        AND revoked_at IS NULL AND expires_at>?""",
+                        (
+                            root["identity_id"], subject_digest, session_digest,
+                            device_id, capability, policy_version, now,
+                        ),
+                    ).fetchone()
+                    if existing is not None:
+                        raise OperatorIdentityError("CAPABILITY_ALREADY_GRANTED", 409)
+                if purpose == "REVOKE":
+                    grant = db.execute(
+                        """SELECT capability,policy_version FROM operator_capability_grants
+                        WHERE grant_id=? AND identity_id=? AND subject_digest=?
+                        AND session_digest=? AND device_id=? AND revoked_at IS NULL
+                        AND expires_at>?""",
+                        (grant_id, root["identity_id"], subject_digest, session_digest, device_id, now),
+                    ).fetchone()
+                    if (
+                        grant is None or grant["capability"] != capability
+                        or grant["policy_version"] != policy_version
+                    ):
+                        raise OperatorIdentityError("CAPABILITY_GRANT_NOT_ACTIVE", 404)
+                db.execute(
+                    "DELETE FROM operator_capability_challenges WHERE expires_at<=?",
+                    (now,),
+                )
+                active = db.execute(
+                    """SELECT COUNT(*) FROM operator_capability_challenges
+                    WHERE identity_id=? AND consumed_at IS NULL AND expires_at>?""",
+                    (root["identity_id"], now),
+                ).fetchone()[0]
+                if active >= 5:
+                    raise OperatorIdentityError("CAPABILITY_CHALLENGE_LIMIT", 429)
+                payload_obj = {
+                    "capability": capability,
+                    "device_id": device_id,
+                    "expires_at": expires_at,
+                    "grant_expires_at": int(now + grant_ttl_seconds) if purpose == "GRANT" else None,
+                    "grant_id": grant_id,
+                    "identity_tag": hashlib.sha256(root["identity_id"].encode("ascii")).hexdigest(),
+                    "key_version": root["key_version"],
+                    "nonce": nonce,
+                    "policy_version": policy_version,
+                    "protocol": "IAO-OPERATOR-CAPABILITY-GRANT-V1",
+                    "purpose": purpose,
+                    "session_digest": session_digest,
+                    "subject_digest": subject_digest,
+                }
+                payload = json.dumps(
+                    payload_obj, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("ascii")
+                db.execute(
+                    """INSERT INTO operator_capability_challenges
+                    (challenge_digest,identity_id,subject_digest,session_digest,device_id,
+                     capability,policy_version,purpose,grant_id,signing_payload,key_version,expires_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        self._digest(handle), root["identity_id"], subject_digest,
+                        session_digest, device_id, capability, policy_version,
+                        purpose, grant_id, payload, root["key_version"], expires_at,
+                    ),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        return {
+            "challenge": handle,
+            "signing_payload": base64.urlsafe_b64encode(payload).decode("ascii").rstrip("="),
+            "expires_at": expires_at,
+            "grant_expires_at": payload_obj["grant_expires_at"],
+            "key_version": root["key_version"],
+            "capability": capability,
+            "purpose": purpose,
+            "policy_version": policy_version,
+            "protocol": "IAO-OPERATOR-CAPABILITY-GRANT-V1",
+        }
+
+    def complete_capability_challenge(
+        self, subject: Any, session_token: Any, challenge: Any,
+        root_signature: bytes, device_signature: bytes, *,
+        policy_version: str,
+    ) -> dict[str, Any]:
+        if not isinstance(challenge, str) or not 32 <= len(challenge) <= 128:
+            raise OperatorIdentityError("INVALID_CAPABILITY_CHALLENGE")
+        if (
+            not isinstance(root_signature, bytes) or not 64 <= len(root_signature) <= 80
+            or not isinstance(device_signature, bytes) or not 64 <= len(device_signature) <= 80
+        ):
+            raise OperatorIdentityError("INVALID_CAPABILITY_SIGNATURE", 401)
+        if not isinstance(policy_version, str) or not 1 <= len(policy_version) <= 128:
+            raise OperatorIdentityError("INVALID_POLICY_VERSION")
+        subject_digest = self._session_subject_digest(subject)
+        session_digest = self._session_credential_digest(session_token)
+        now = time.time()
+        new_grant_id = uuid.uuid4().hex
+        with self.lock, self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    """SELECT c.*,i.root_public_key_pem,i.key_version AS active_key_version,
+                    i.status,p.device_public_key_pem,p.device_id AS active_device_id,
+                    p.key_version AS device_key_version,s.subject_digest AS active_subject_digest,
+                    s.session_digest AS active_session_digest
+                    FROM operator_capability_challenges c
+                    JOIN operator_identities i ON i.identity_id=c.identity_id
+                    JOIN primary_device_bindings p ON p.identity_id=i.identity_id
+                    JOIN operator_session_bindings s ON s.identity_id=i.identity_id
+                    WHERE c.challenge_digest=?""",
+                    (self._digest(challenge),),
+                ).fetchone()
+                if row is None or row["consumed_at"] is not None:
+                    raise OperatorIdentityError("INVALID_CAPABILITY_CHALLENGE", 404)
+                if row["expires_at"] <= now:
+                    raise OperatorIdentityError("CAPABILITY_CHALLENGE_EXPIRED", 401)
+                if (
+                    row["status"] != "ACTIVE"
+                    or row["key_version"] != row["active_key_version"]
+                    or row["key_version"] != row["device_key_version"]
+                    or row["policy_version"] != policy_version
+                    or not hmac.compare_digest(row["device_id"], row["active_device_id"])
+                    or not hmac.compare_digest(row["subject_digest"], subject_digest)
+                    or not hmac.compare_digest(row["session_digest"], session_digest)
+                    or not hmac.compare_digest(row["active_subject_digest"], subject_digest)
+                    or not isinstance(row["active_session_digest"], str)
+                    or not hmac.compare_digest(row["active_session_digest"], session_digest)
+                ):
+                    raise OperatorIdentityError("CAPABILITY_AUTHORITY_CHANGED", 409)
+                payload = bytes(row["signing_payload"])
+                obj = json.loads(payload.decode("ascii"))
+                if (
+                    obj.get("protocol") != "IAO-OPERATOR-CAPABILITY-GRANT-V1"
+                    or not isinstance(obj.get("nonce"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", obj.get("nonce", ""))
+                    or obj.get("capability") != row["capability"]
+                    or obj.get("device_id") != row["device_id"]
+                    or obj.get("expires_at") != int(row["expires_at"])
+                    or obj.get("grant_id") != row["grant_id"]
+                    or obj.get("key_version") != row["key_version"]
+                    or obj.get("policy_version") != row["policy_version"]
+                    or obj.get("purpose") != row["purpose"]
+                    or obj.get("session_digest") != session_digest
+                    or obj.get("subject_digest") != subject_digest
+                    or obj.get("identity_tag") != hashlib.sha256(row["identity_id"].encode("ascii")).hexdigest()
+                ):
+                    raise OperatorIdentityError("CAPABILITY_PAYLOAD_MISMATCH", 409)
+                root_key = serialization.load_pem_public_key(row["root_public_key_pem"].encode("ascii"))
+                device_key = serialization.load_pem_public_key(row["device_public_key_pem"].encode("ascii"))
+                device_der = device_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                if not hmac.compare_digest(
+                    hashlib.sha256(device_der).hexdigest(), row["device_id"],
+                ):
+                    raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                if row["purpose"] == "REVOKE" and obj.get("grant_expires_at") is not None:
+                    raise OperatorIdentityError("CAPABILITY_PAYLOAD_MISMATCH", 409)
+                try:
+                    root_key.verify(root_signature, ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256()))
+                    device_key.verify(
+                        device_signature,
+                        b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + payload,
+                        ec.ECDSA(hashes.SHA256()),
+                    )
+                except (InvalidSignature, ValueError, TypeError):
+                    raise OperatorIdentityError("INVALID_CAPABILITY_SIGNATURE", 401) from None
+                changed = db.execute(
+                    """UPDATE operator_capability_challenges SET consumed_at=?
+                    WHERE challenge_digest=? AND consumed_at IS NULL AND expires_at>?""",
+                    (now, self._digest(challenge), now),
+                ).rowcount
+                if changed != 1:
+                    raise OperatorIdentityError("CAPABILITY_CHALLENGE_REPLAYED", 409)
+                if row["purpose"] == "GRANT":
+                    existing = db.execute(
+                        """SELECT 1 FROM operator_capability_grants
+                        WHERE identity_id=? AND session_digest=? AND capability=?
+                        AND revoked_at IS NULL AND expires_at>?""",
+                        (row["identity_id"], session_digest, row["capability"], now),
+                    ).fetchone()
+                    if existing is not None:
+                        raise OperatorIdentityError("CAPABILITY_ALREADY_GRANTED", 409)
+                    grant_expires = obj.get("grant_expires_at")
+                    if (
+                        isinstance(grant_expires, bool) or not isinstance(grant_expires, int)
+                        or not now < grant_expires <= now + 900
+                    ):
+                        raise OperatorIdentityError("INVALID_CAPABILITY_GRANT_EXPIRY")
+                    db.execute(
+                        """INSERT INTO operator_capability_grants
+                        (grant_id,identity_id,subject_digest,session_digest,device_id,
+                         capability,policy_version,key_version,created_at,expires_at,
+                         revoked_at,challenge_digest)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?)""",
+                        (
+                            new_grant_id, row["identity_id"], subject_digest, session_digest,
+                            row["device_id"], row["capability"], row["policy_version"],
+                            row["key_version"], now, grant_expires, self._digest(challenge),
+                        ),
+                    )
+                elif row["purpose"] == "REVOKE":
+                    changed = db.execute(
+                        """UPDATE operator_capability_grants SET revoked_at=?
+                        WHERE grant_id=? AND identity_id=? AND session_digest=?
+                        AND subject_digest=? AND device_id=? AND capability=?
+                        AND key_version=? AND policy_version=? AND revoked_at IS NULL
+                        AND expires_at>?""",
+                        (
+                            now, row["grant_id"], row["identity_id"],
+                            row["session_digest"], row["subject_digest"],
+                            row["device_id"], row["capability"], row["key_version"],
+                            row["policy_version"], now,
+                        ),
+                    ).rowcount
+                    if changed != 1:
+                        raise OperatorIdentityError("CAPABILITY_GRANT_NOT_ACTIVE", 409)
+                else:
+                    raise OperatorIdentityError("INVALID_CAPABILITY_PURPOSE")
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        if row["purpose"] == "REVOKE":
+            return {
+                "authority": "OPERATOR_CAPABILITY_REVOKED",
+                "capability": row["capability"],
+                "revoked": True,
+            }
+        return {
+            "authority": "OPERATOR_CAPABILITY_GRANTED",
+            "capability": row["capability"],
+            "expires_at": grant_expires,
+            "grant_id": new_grant_id,
+            "key_version": row["key_version"],
+        }
+
+    def active_capabilities_for_session(
+        self, subject: Any, session_token: Any, *, policy_version: str,
+    ) -> frozenset[str]:
+        subject_digest = self._session_subject_digest(subject)
+        session_digest = self._session_credential_digest(session_token)
+        if not self.verify_authenticated_session(subject, session_token):
+            return frozenset()
+        with self._database() as db:
+            rows = db.execute(
+                """SELECT g.capability FROM operator_capability_grants g
+                JOIN operator_identities i ON i.identity_id=g.identity_id
+                JOIN primary_device_bindings p ON p.identity_id=i.identity_id
+                JOIN operator_session_bindings s ON s.identity_id=i.identity_id
+                WHERE i.status='ACTIVE' AND g.subject_digest=? AND g.session_digest=?
+                AND g.device_id=p.device_id AND g.key_version=i.key_version
+                AND p.key_version=i.key_version AND s.subject_digest=?
+                AND s.session_digest=? AND g.policy_version=? AND g.revoked_at IS NULL
+                AND g.expires_at>?""",
+                (subject_digest, session_digest, subject_digest, session_digest,
+                 policy_version, time.time()),
+            ).fetchall()
+        return frozenset(row["capability"] for row in rows)
+
+    def active_capabilities_for_session_digest(
+        self, subject: Any, session_digest: Any, device_id: Any, *,
+        policy_version: str,
+    ) -> frozenset[str]:
+        subject_digest = self._session_subject_digest(subject)
+        if (
+            not isinstance(session_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", session_digest)
+            or not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{64}", device_id)
+        ):
+            return frozenset()
+        with self._database() as db:
+            rows = db.execute(
+                """SELECT g.capability FROM operator_capability_grants g
+                JOIN operator_identities i ON i.identity_id=g.identity_id
+                JOIN primary_device_bindings p ON p.identity_id=i.identity_id
+                JOIN operator_session_bindings s ON s.identity_id=i.identity_id
+                WHERE i.status='ACTIVE' AND g.subject_digest=? AND g.session_digest=?
+                AND s.subject_digest=? AND s.session_digest=?
+                AND g.device_id=? AND p.device_id=? AND g.key_version=i.key_version
+                AND p.key_version=i.key_version AND g.policy_version=?
+                AND g.revoked_at IS NULL AND g.expires_at>?""",
+                (subject_digest, session_digest, subject_digest, session_digest,
+                 device_id, device_id, policy_version, time.time()),
+            ).fetchall()
+        return frozenset(row["capability"] for row in rows)
+
+    def list_capability_grants_for_session(
+        self, subject: Any, session_token: Any, *, policy_version: str,
+    ) -> list[dict[str, Any]]:
+        subject_digest = self._session_subject_digest(subject)
+        session_digest = self._session_credential_digest(session_token)
+        active_capabilities = self.active_capabilities_for_session(
+            subject, session_token, policy_version=policy_version,
+        )
+        with self._database() as db:
+            rows = db.execute(
+                """SELECT grant_id,capability,created_at,expires_at,revoked_at
+                FROM operator_capability_grants WHERE subject_digest=?
+                AND session_digest=? AND policy_version=? ORDER BY created_at DESC LIMIT 20""",
+                (subject_digest, session_digest, policy_version),
+            ).fetchall()
+        return [
+            {
+                "grant_id": row["grant_id"], "capability": row["capability"],
+                "created_at": int(row["created_at"]), "expires_at": int(row["expires_at"]),
+                "revoked": row["revoked_at"] is not None,
+                "active": row["revoked_at"] is None
+                    and row["expires_at"] > time.time()
+                    and row["capability"] in active_capabilities,
+            }
+            for row in rows
+        ]
+
