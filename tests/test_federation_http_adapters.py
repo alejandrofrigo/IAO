@@ -85,6 +85,18 @@ def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tm
         )
         assert challenge_response.status_code == 400
         assert challenge_response.json()["error"] == "INVALID_CHALLENGE"
+        method_response = client.post("/fed/v1/identity")
+        method_payload = method_response.json()
+        assert method_response.status_code == 405
+        assert method_payload["error"] == "METHOD_NOT_ALLOWED"
+        assert method_response.headers["allow"] == "GET"
+        assert method_response.headers["x-correlation-id"] == method_payload["correlation_id"]
+        assert len(method_payload["correlation_id"]) == 32
+        assert method_response.headers["cache-control"] == "no-store"
+        unknown_response = client.get("/fed/v1/not-a-route")
+        assert unknown_response.status_code == 404
+        assert unknown_response.json()["error"] == "NOT_FOUND"
+        assert len(unknown_response.json()["correlation_id"]) == 32
         assert any(
             event["event_type"] == "FED_REQUEST"
             and event["details"].get("reason") == "BAD_SIGNATURE"
@@ -152,6 +164,32 @@ def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path, monkey
             payload = json.loads(response.read())
             assert response.code == 400
             assert payload["error"] == "INVALID_CHALLENGE"
+        method_request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/identity",
+            data=b"", method="POST",
+        )
+        try:
+            urllib.request.urlopen(method_request, timeout=3)
+            raise AssertionError("invalid federation method was accepted")
+        except urllib.error.HTTPError as response:
+            payload = json.loads(response.read())
+            assert response.code == 405
+            assert payload["error"] == "METHOD_NOT_ALLOWED"
+            assert response.headers["Allow"] == "GET"
+            assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
+            assert response.headers["Cache-Control"] == "no-store"
+        unknown_request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/not-a-route",
+            method="GET",
+        )
+        try:
+            urllib.request.urlopen(unknown_request, timeout=3)
+            raise AssertionError("unknown federation route was accepted")
+        except urllib.error.HTTPError as response:
+            payload = json.loads(response.read())
+            assert response.code == 404
+            assert payload["error"] == "NOT_FOUND"
+            assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
         assert any(
             event["event_type"] == "FED_REQUEST"
             and event["details"].get("reason") == "BAD_SIGNATURE"
