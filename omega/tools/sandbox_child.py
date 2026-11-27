@@ -6,6 +6,7 @@ import json
 import os
 import pickle
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from typing import Any
 
 MAX_INPUT_BYTES = 65_536 + 262_144
@@ -23,6 +24,14 @@ def _limits(timeout: float) -> None:
     resource.setrlimit(resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE))
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESULT_BYTES, MAX_RESULT_BYTES))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+    if hasattr(resource, "RLIMIT_NPROC"):
+        _soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        process_limit = min(32, hard)
+        resource.setrlimit(resource.RLIMIT_NPROC, (process_limit, process_limit))
+    if hasattr(resource, "RLIMIT_STACK"):
+        _soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+        stack_limit = min(16 * 1024 * 1024, hard)
+        resource.setrlimit(resource.RLIMIT_STACK, (stack_limit, stack_limit))
     if hasattr(resource, "RLIMIT_CORE"):
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
