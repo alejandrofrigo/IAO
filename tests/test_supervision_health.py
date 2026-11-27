@@ -113,6 +113,18 @@ def test_coordinator_status_requires_lock_and_fresh_heartbeat(tmp_path, monkeypa
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
+def test_coordinator_lock_is_private_and_records_its_owner(tmp_path, monkeypatch):
+    state = tmp_path / "private-state"
+    monkeypatch.setattr(coordinator, "STATE", state)
+    monkeypatch.setattr(coordinator, "LOCK", state / "coordinator.lock")
+
+    with coordinator.acquire_lock() as stream:
+        assert stream.readable()
+        assert stat.S_IMODE(state.stat().st_mode) == 0o700
+        assert stat.S_IMODE(coordinator.LOCK.stat().st_mode) == 0o600
+        assert coordinator.LOCK.read_text(encoding="utf-8") == str(os.getpid())
+
+
 def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(supervisor, "ROOT", tmp_path)
     monkeypatch.setattr(
