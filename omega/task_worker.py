@@ -197,10 +197,28 @@ class TaskWorker:
 
             started = datetime.now(timezone.utc).isoformat()
             digest_in = _digest(clean)
+            budget = intent.get("budget", {})
             timeout = min(
                 float(spec.timeout_seconds),
-                float(intent.get("budget", {}).get("timeout_seconds", 20)),
+                float(budget.get("timeout_seconds", 20)),
             )
+            input_size = len(json.dumps(
+                clean, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8"))
+            generation = self._active_lease_generation
+            if (
+                input_size > int(budget.get("max_input_bytes", 65_536))
+                or not self.store.consume_task_budget(
+                    task_id, self.worker_id, generation, "input_bytes", input_size,
+                )
+                or not self.store.consume_task_budget(
+                    task_id, self.worker_id, generation, "tool_calls", 1,
+                )
+            ):
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "TASK_BUDGET_EXCEEDED"},
+                )
             generation = self._active_lease_generation
             required_lease = max(self.lease_seconds, math.ceil(timeout) + 10)
             if not self.store.renew_task_lease(
@@ -240,6 +258,32 @@ class TaskWorker:
                     {"decision": "ALLOW", "error": "TOOL_ERROR"},
                 )
 
+            if self._cancel_requested(task_id):
+                return self._finish(
+                    task_id, owner, "CANCELLED",
+                    {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                )
+            try:
+                output_size = len(json.dumps(
+                    output, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+                ).encode("utf-8"))
+            except (TypeError, ValueError, UnicodeEncodeError):
+                output_size = int(budget.get("max_output_bytes", 1_048_576)) + 1
+            if (
+                output_size > int(budget.get("max_output_bytes", 1_048_576))
+                or not self.store.consume_task_budget(
+                    task_id, self.worker_id, generation, "output_bytes", output_size,
+                )
+            ):
+                self.store.add_tool_execution(
+                    task_id, spec.name, spec.version, "FAILED",
+                    digest_in, None, "TASK_BUDGET_EXCEEDED", started,
+                    datetime.now(timezone.utc).isoformat(),
+                )
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "TASK_BUDGET_EXCEEDED"},
+                )
             self.store.add_tool_execution(
                 task_id, spec.name, spec.version, "SUCCEEDED",
                 digest_in, _digest(output), None, started,
