@@ -107,6 +107,11 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
     monkeypatch.setattr(supervisor, "ROOT", tmp_path)
     monkeypatch.setattr(
         supervisor,
+        "COORDINATOR_LOCK",
+        tmp_path / ".state" / "iao-autonomy" / "coordinator.lock",
+    )
+    monkeypatch.setattr(
+        supervisor,
         "read_children",
         lambda: {
             "PADGE": {"pid": os.getpid()},
