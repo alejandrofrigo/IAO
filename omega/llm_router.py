@@ -235,7 +235,8 @@ def chat_with_metadata(messages, timeout=25, requirements=None):
     for p in candidates:
         ident = p["id"]
         started = time.monotonic()
-        provider_timeout = p.get("timeout_seconds", timeout)
+        configured_timeout = p.get("timeout_seconds")
+        provider_timeout = timeout if configured_timeout is None else configured_timeout
         if (
             isinstance(provider_timeout, bool)
             or not isinstance(provider_timeout, (int, float))
@@ -316,18 +317,19 @@ def chat(messages, timeout=25, requirements=None):
 def status():
     configured = providers()
     states = health()
-    return {
-        "configured": len(configured),
-        "providers": [
-            {
-                "id": p.get("id", "unnamed"),
-                "model": p["model"],
-                "failures": states.get(p.get("id", ""), {}).get("failures", 0),
-                "last_success": states.get(p.get("id", ""), {}).get("last_success"),
-            }
-            for p in configured
-        ],
-    }
+    if not isinstance(states, dict):
+        states = {}
+    summaries = []
+    for provider in configured:
+        state = _health_entry(states, provider["id"])
+        summaries.append({
+            "id": provider["id"],
+            "model": provider["model"],
+            "failures": max(0, min(1000, int(_finite_number(state.get("failures"), 0)))),
+            "last_success": state.get("last_success"),
+            "last_latency_ms": _finite_number(state.get("last_latency_ms"), None),
+        })
+    return {"configured": len(configured), "providers": summaries}
 
 
 class RouterModelAdapter:
