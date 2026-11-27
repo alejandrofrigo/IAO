@@ -871,7 +871,7 @@ class AuthTests(Base):
 
     def test_bad_and_expired_tokens(self) -> None:
         self.assertEqual(self.call("GET", "/v1/me", {"authorization": "Bearer x.y"})[0], 401)
-        old = issue_token(KEY, "a", [], ttl=-10)
+        old = issue_token(KEY, "a", [], ttl=10, now=0)
         self.assertEqual(self.call("GET", "/v1/me", {"authorization": "Bearer " + old})[0], 401)
         forged = issue_token("other-key-0123456789", "a", ["audit.admin"])
         self.assertEqual(self.call("GET", "/v1/me", {"authorization": "Bearer " + forged})[0], 401)
