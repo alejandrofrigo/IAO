@@ -96,6 +96,7 @@ def test_stdlib_api_rejects_invalid_and_oversized_content_length():
     thread.start()
     cases = (
         ("Content-Length: -1", 400, "INVALID_CONTENT_LENGTH"),
+        ("Content-Length: +1", 400, "INVALID_CONTENT_LENGTH"),
         ("Content-Length: not-a-number", 400, "INVALID_CONTENT_LENGTH"),
         ("Content-Length: 65537", 413, "PAYLOAD_TOO_LARGE"),
         ("Transfer-Encoding: chunked", 400, "INVALID_TRANSFER_ENCODING"),
