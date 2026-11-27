@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Autonomous, outbound-only IAO libp2p Kademlia discovery supervisor.
-
-The worker records public DHT peers as unverified inventory. It does not
-enroll peers, grant capabilities, execute remote code, or expose a listener.
-"""
+"""Autonomous, outbound-only IAO libp2p discovery and quarantined assimilation."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from omega import libp2p_discovery  # noqa: E402
+from omega.p2p_assimilation import assimilate_discovered_peers  # noqa: E402
 
 MIN_INTERVAL = 60
 MAX_INTERVAL = 86400
@@ -45,7 +42,7 @@ def _atomic_report(path: Path, payload: dict) -> None:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
-            stream.write("\n")
+            stream.write("\\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
@@ -72,6 +69,9 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
         if any(isinstance(x, bool) or not isinstance(x, int) or x < 0
                for x in (peers, added)):
             raise RuntimeError("DISCOVERY_COUNTS_INVALID")
+        assimilation = assimilate_discovered_peers(
+            result.get("peers", []), state_dir=state_dir()
+        )
         report = {
             "schema": 1,
             "started_at": started,
@@ -80,6 +80,11 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
             "connected_bootstrappers": int(result.get("connected_bootstrappers", 0)),
             "routing_peers_discovered": peers,
             "persisted_new_peers": added,
+            "auto_assimilation": "QUARANTINED_INVENTORY_ONLY",
+            "auto_assimilated_new_peers": assimilation["new"],
+            "auto_assimilated_observations": assimilation["observed"],
+            "assimilated_registry_total": assimilation["total"],
+            "identity_verification": "NOT_PERFORMED",
             "enrollment_performed": False,
             "capabilities_granted": [],
             "remote_code_executed": False,
@@ -92,6 +97,7 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
             "completed_at": utc(),
             "status": "DISCOVERY_ERROR",
             "error_class": type(exc).__name__,
+            "auto_assimilation": "NOT_COMPLETED",
             "enrollment_performed": False,
             "capabilities_granted": [],
             "remote_code_executed": False,
@@ -117,6 +123,7 @@ def status() -> int:
     print("MODE=OUTBOUND_KADEMLIA_CLIENT")
     print("INTERVAL_SECONDS=" + str(read_interval()))
     print("REPORT_PRESENT=" + str(report_path.is_file()).lower())
+    print("AUTO_ASSIMILATION=QUARANTINED_INVENTORY_ONLY")
     print("AUTO_ENROLLMENT=DISABLED")
     print("REMOTE_CODE_EXECUTION=DISABLED")
     print("INBOUND_LISTENER=DISABLED")
@@ -125,6 +132,7 @@ def status() -> int:
             report = json.loads(report_path.read_text(encoding="utf-8"))
             print("LAST_STATUS=" + str(report.get("status", "UNKNOWN"))[:80])
             print("LAST_DISCOVERED=" + str(report.get("routing_peers_discovered", 0)))
+            print("LAST_AUTO_ASSIMILATED=" + str(report.get("assimilated_registry_total", 0)))
         except Exception:
             print("LAST_STATUS=REPORT_INVALID")
     return 0
@@ -150,7 +158,7 @@ def run_loop() -> int:
                 print(
                     "CYCLE_STATUS=" + report["status"]
                     + " DISCOVERED=" + str(report.get("routing_peers_discovered", 0))
-                    + " NEW=" + str(report.get("persisted_new_peers", 0)),
+                    + " ASSIMILATED=" + str(report.get("auto_assimilated_new_peers", 0)),
                     flush=True,
                 )
                 time.sleep(read_interval())
