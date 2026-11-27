@@ -26,6 +26,7 @@ from omega.device_authority import DeviceAuthority, DeviceAuthorityError
 from omega.operator_identity import OperatorIdentityAuthority, OperatorIdentityError
 from omega.policy import authorize
 from omega.store import Store
+from omega.task_contract import validate_task_intent_v1
 from omega.tools.registry import QUEUED_TOOL_ALLOWLIST, ToolRegistry
 
 POLICY_VERSION = "policy-v1:" + hashlib.sha256((Path(__file__).parent / "policy.py").read_bytes()).hexdigest()[:12]
@@ -1198,6 +1199,7 @@ class OmegaService:
             "policy_version": POLICY_VERSION,
             "expires_at": expires,
         }
+        intent = validate_task_intent_v1(intent)
         tid = str(uuid.uuid4())
         row, created = self.store.create_task(tid, pr.subject, intent, idem)
         if not created:
