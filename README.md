@@ -35,3 +35,8 @@ infrastructure (Annex S) are NOT executed in this sandbox (no network / credenti
 ## Project objectives and integration gaps
 
 See [IAO objectives, verified capabilities and integration gaps](docs/IAO_OBJECTIVES_GAP_ANALYSIS.md) for the repository-based inventory, current blockers, implementation order and acceptance criteria. This document distinguishes code presence from tested runtime capability.
+
+
+## Production deployment
+
+See [the self-hosted HTTPS deployment runbook](docs/PRODUCTION_DEPLOYMENT_RUNBOOK.md). It provisions private one-time secrets, uses Caddy for automatic TLS, and keeps the API private behind the reverse proxy. A public host, DNS and a kernel that supports bubblewrap namespaces are still required.
