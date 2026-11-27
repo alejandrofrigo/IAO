@@ -403,6 +403,10 @@ def _get_federation_node():
 def _get_service():
     """Create the persistent service and activate federation discovery in this API process."""
     global _service
+    if os.environ.get("APP_ENV", "development").lower() == "production":
+        from omega.config import load_settings
+
+        load_settings()
     if _service is None:
         with _service_lock:
             if _service is None:
