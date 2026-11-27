@@ -2,9 +2,10 @@
   const queryEl = document.querySelector("#iao-task-query");
   const submitButton = document.querySelector("#iao-task-submit");
   const refreshButton = document.querySelector("#iao-task-refresh");
+  const authStatusEl = document.querySelector("#iao-task-auth-status");
   const statusEl = document.querySelector("#iao-task-status");
   const resultEl = document.querySelector("#iao-task-result");
-  if (!queryEl || !submitButton || !refreshButton || !statusEl || !resultEl) return;
+  if (!queryEl || !submitButton || !refreshButton || !authStatusEl || !statusEl || !resultEl) return;
 
   let latestTaskId = null;
   let busy = false;
@@ -17,6 +18,10 @@
 
   function setStatus(value) {
     statusEl.textContent = value;
+  }
+
+  function setAuthStatus(value) {
+    authStatusEl.textContent = value;
   }
 
   function newIdempotencyKey() {
@@ -42,7 +47,7 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = !latestTaskId;
-      setStatus("La autoridad de capacidades no está disponible.");
+      setAuthStatus("La autoridad de capacidades no está disponible.");
       return false;
     }
     try {
@@ -52,7 +57,7 @@
       queryEl.disabled = !active || busy;
       submitButton.disabled = !active || busy;
       refreshButton.disabled = !latestTaskId || busy;
-      setStatus(active
+      setAuthStatus(active
         ? "Autorización activa: knowledge.search (solo lectura, local)."
         : "Sin autorización activa. Concede knowledge.search desde el panel de identidad.");
       return active;
@@ -60,7 +65,7 @@
       queryEl.disabled = true;
       submitButton.disabled = true;
       refreshButton.disabled = !latestTaskId || busy;
-      setStatus("No se pudo verificar la autorización: " + String(error.message || error));
+      setAuthStatus("No se pudo verificar la autorización: " + String(error.message || error));
       return false;
     }
   }
