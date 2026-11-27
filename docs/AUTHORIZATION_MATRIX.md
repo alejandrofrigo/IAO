@@ -53,7 +53,7 @@ La siguiente tabla refleja los controles observados en `OmegaService._route`, `h
 | `GET /v1/tasks/{uuid}` | Bearer + propiedad de tarea | Lee solo la tarea propia. |
 | `GET /v1/memory`, `GET /v1/memory/export` | Bearer + `memory.read` | Lee/exporta memoria propia. |
 | `POST /v1/memory` | Bearer + `memory.write` + `consent=true` | Crea memoria explícitamente consentida; auditoría conserva digest, no contenido. |
-| `PUT /v1/memory/{uuid}`, `DELETE /v1/memory[/{uuid}]` | Bearer + `memory.write` | Actualiza/elimina memoria propia. |
+| `PUT /v1/memory/{uuid}`, `DELETE /v1/memory`, `DELETE /v1/memory/{uuid}` | Bearer + `memory.write` | Actualiza/elimina memoria propia. Colección, export y recurso tienen allowlists de métodos distintas. |
 | `GET /v1/audit/events` | Bearer; `audit.admin` para vista global | Sin scope admin, devuelve solo eventos del propio sujeto. |
 
 Las rutas exactas tienen métodos allowlist y devuelven 405 con `Allow` cuando el método no está permitido. Las rutas de memoria, conversación y tarea validan ownership; las rutas privilegiadas de operador están además cubiertas por el rollback anchor cuando está configurado. Esta tabla es una revisión estática; los tests de integración exhaustivos para cada fila y ambos adaptadores siguen pendientes.
