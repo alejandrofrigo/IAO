@@ -892,6 +892,8 @@ class OmegaService:
             raise ApiError(404, "NOT_FOUND")
 
         if method == "POST" and p == "/v1/device/challenge":
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
             data = self._json(body)
