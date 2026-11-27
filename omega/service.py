@@ -1352,6 +1352,23 @@ class OmegaService:
             }
             self.store.set_task_state(tid, st, result)
             return 403, {"task_id": tid, "state": st, **result}
+        if execution_mode == "queued":
+            try:
+                live_capabilities = self.operator_identity_authority.active_capabilities_for_session(
+                    pr.subject, self._verified_bearer_token(headers),
+                    policy_version=POLICY_VERSION,
+                )
+            except OperatorIdentityError:
+                live_capabilities = frozenset()
+            if cap not in live_capabilities:
+                self.store.audit(
+                    pr.subject, "TASK_CAPABILITY_REVALIDATION_DENIED", "task_submission",
+                    decision="DENY", capability=cap,
+                )
+                to("DENIED", reason="CAPABILITY_NOT_GRANTED")
+                result = {"decision": "DENY", "reason": "CAPABILITY_NOT_GRANTED"}
+                self.store.set_task_state(tid, st, result)
+                return 403, {"task_id": tid, "state": st, **result}
         to("AUTHORIZED")
         if execution_mode == "queued":
             if self.ttl <= 0:
