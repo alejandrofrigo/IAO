@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import os
 import subprocess
 import sys
 import time
@@ -15,6 +16,7 @@ STATE = ROOT / ".state" / "iao-autonomy"
 REPORTS = ROOT / ".state" / "padge" / "reports"
 EVENTS = STATE / "coordinator-events.jsonl"
 LOCK = STATE / "coordinator.lock"
+HEARTBEAT = STATE / "coordinator-heartbeat.json"
 
 INTERVAL = 300
 
@@ -135,6 +137,45 @@ def report_status(report):
     }
 
 
+def coordinator_lock_held():
+    """Probe the advisory lock without treating a PID file as process health."""
+    if not LOCK.is_file():
+        return False
+    try:
+        with LOCK.open("r+", encoding="utf-8") as stream:
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            return False
+    except OSError:
+        return False
+
+
+def write_coordinator_heartbeat(phase, interval, last_result=None):
+    try:
+        previous = json.loads(HEARTBEAT.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    completed_at = previous.get("last_cycle_completed_at")
+    previous_result = previous.get("last_cycle_result")
+    if phase == "cycle_completed":
+        previous_result = last_result
+    from omega.supervision import write_heartbeat
+
+    return write_heartbeat(
+        HEARTBEAT,
+        component="PADGE_AUTONOMY",
+        pid=os.getpid(),
+        phase=phase,
+        interval_seconds=interval,
+        stale_after_seconds=max(1800, interval * 2 + 900),
+        last_cycle_completed_at=completed_at,
+        last_cycle_result=previous_result,
+    )
+
+
 def status():
     print("\nIAO — ESTADO DEL COORDINADOR")
     print("==========================================")
@@ -151,10 +192,22 @@ def status():
     print("\nULTIMO RESULTADO PADGE:")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-    print("\nCOORDINATOR_STATUS=READY")
-    print("Nota: DISCOVERED no significa que un motor esté activo.")
+    from omega.supervision import read_heartbeat
 
-
+    heartbeat = read_heartbeat(
+        HEARTBEAT, expected_component="PADGE_AUTONOMY",
+    )
+    active = coordinator_lock_held()
+    if not active:
+        state = "STOPPED"
+    elif heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
+        state = heartbeat["status"]
+    else:
+        state = "DEGRADED_UNVERIFIED"
+    print("\nCOORDINATOR_STATUS=" + state)
+    print("COORDINATOR_LOCK_HELD=" + ("YES" if active else "NO"))
+    print("COORDINATOR_HEARTBEAT=" + json.dumps(heartbeat, sort_keys=True))
+    return 0 if state in {"HEALTHY", "CYCLE_IN_PROGRESS"} else 1
 
 
 def run_expansion_once():
@@ -325,9 +378,15 @@ def main():
             return 0 if run_once() else 1
 
         log("COORDINATOR_LOOP_STARTED", interval=args.interval)
+        write_coordinator_heartbeat("starting", args.interval)
 
         while True:
+            write_coordinator_heartbeat("cycle_running", args.interval)
             padge_promoted = run_once()
+            write_coordinator_heartbeat(
+                "cycle_completed", args.interval,
+                last_result=padge_promoted,
+            )
             log(
                 "NEXT_CYCLE",
                 seconds=args.interval,
