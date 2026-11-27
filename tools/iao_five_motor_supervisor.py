@@ -169,6 +169,31 @@ def managed_process_group(pid):
         return False
 
 
+
+def task_worker_status():
+    """Read TaskWorker functional health from its process-bound heartbeat."""
+    from omega.supervision import read_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get("OMEGA_STATE_DIR", "/var/lib/iao"),
+        )
+    )
+    heartbeat = read_heartbeat(
+        state_dir / "task-worker-heartbeat.json",
+        expected_component="TASK_WORKER",
+    )
+    return {
+        "HEALTHY": "HEALTHY",
+        "CYCLE_IN_PROGRESS": "CYCLE_IN_PROGRESS",
+        "DEGRADED": "DEGRADED",
+        "STALE": "STALE_HEARTBEAT",
+        "STARTING": "STARTING",
+        "UNVERIFIED": "UNVERIFIED",
+    }.get(heartbeat.get("status"), "UNVERIFIED")
+
+
 def status():
     children = read_children()
     configured = adapters()
