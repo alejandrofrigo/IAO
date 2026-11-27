@@ -147,6 +147,8 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
         lambda: {
             "PADGE": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())},
             "GUARDIAN": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())},
+            "NODE_NETWORK": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())},
+            "DISTRIBUTED_INTELLIGENCE": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())},
         },
     )
     monkeypatch.setattr(
@@ -155,6 +157,8 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
         lambda: {
             "PADGE": {"enabled": True, "command": ["python", "coordinator.py"]},
             "GUARDIAN": {"enabled": True, "command": ["python", "guardian.py"]},
+            "NODE_NETWORK": {"enabled": True, "command": ["python", "nodes.py"]},
+            "DISTRIBUTED_INTELLIGENCE": {"enabled": True, "command": ["python", "distributed.py"]},
         },
     )
     heartbeat_path = tmp_path / ".state" / "iao-autonomy" / "coordinator-heartbeat.json"
@@ -177,7 +181,11 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
         output = capsys.readouterr().out
         assert "PADGE: HEALTHY" in output
         assert "GUARDIAN: PROCESS_ALIVE_UNVERIFIED" in output
+        assert "NODE_NETWORK: PROCESS_ALIVE_UNVERIFIED" in output
+        assert "DISTRIBUTED_INTELLIGENCE: PROCESS_ALIVE_UNVERIFIED" in output
         assert "GUARDIAN: RUNNING" not in output
+        assert "NODE_NETWORK: RUNNING" not in output
+        assert "DISTRIBUTED_INTELLIGENCE: RUNNING" not in output
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 def test_heartbeat_and_lock_readers_reject_symlink_paths(tmp_path):
