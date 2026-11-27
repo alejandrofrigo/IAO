@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import math
+import time
 import signal
 import threading
 import uuid
@@ -35,6 +37,8 @@ class TaskWorker:
         poll_seconds: float = 1.0,
         operator_identity_authority: Any = None,
         tool_executor: Any = None,
+        heartbeat_path: Path | None = None,
+        heartbeat_stale_after_seconds: int | None = None,
     ) -> None:
         self.store = store
         self.registry = registry
@@ -44,7 +48,14 @@ class TaskWorker:
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
         self._stop = threading.Event()
-
+        self.heartbeat_path = Path(heartbeat_path) if heartbeat_path is not None else None
+        self._heartbeat_interval = max(1, math.ceil(float(poll_seconds)))
+        self._heartbeat_stale_after = max(
+            self._heartbeat_interval * 3,
+            int(heartbeat_stale_after_seconds or max(60, lease_seconds * 2)),
+        )
+        self._last_cycle_completed_at: float | None = None
+        self._last_cycle_result: bool | None = None
     def stop(self) -> None:
         self._stop.set()
 
@@ -241,9 +252,38 @@ class TaskWorker:
         )
         return True
 
+    def _heartbeat(self, phase: str, *, cycle_result: bool | None = None) -> None:
+        if self.heartbeat_path is None:
+            return
+        from omega.supervision import write_heartbeat
+
+        write_heartbeat(
+            self.heartbeat_path,
+            component="TASK_WORKER",
+            pid=os.getpid(),
+            phase=phase,
+            interval_seconds=self._heartbeat_interval,
+            stale_after_seconds=self._heartbeat_stale_after,
+            last_cycle_completed_at=self._last_cycle_completed_at,
+            last_cycle_result=(
+                cycle_result if phase == "cycle_completed" else self._last_cycle_result
+            ),
+        )
+        if phase == "cycle_completed":
+            self._last_cycle_completed_at = time.time()
+            self._last_cycle_result = cycle_result
+
     def run_forever(self) -> None:
+        self._heartbeat("starting")
         while not self._stop.is_set():
-            if not self.run_once():
+            self._heartbeat("cycle_running")
+            try:
+                self.run_once()
+            except Exception:
+                self._heartbeat("cycle_completed", cycle_result=False)
+                raise
+            self._heartbeat("cycle_completed", cycle_result=True)
+            if not self._stop.is_set():
                 self._stop.wait(self.poll_seconds)
 
 
@@ -269,6 +309,7 @@ def main() -> None:
         lease_seconds=int(os.environ.get("IAO_WORKER_LEASE_SECONDS", "60")),
         poll_seconds=float(os.environ.get("IAO_WORKER_POLL_SECONDS", "1")),
         operator_identity_authority=service.operator_identity_authority,
+        heartbeat_path=state_dir / "task-worker-heartbeat.json",
     )
     # Startup reconciliation is fail-closed: expired RUNNING and VERIFYING
     # leases are marked FAILED and are never automatically re-enqueued.
