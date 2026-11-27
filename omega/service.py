@@ -1247,7 +1247,19 @@ class OmegaService:
     # ---------- tasks ----------
     def _view(self, t: dict[str, Any]) -> dict[str, Any]:
         r = json.loads(t["result_json"]) if t.get("result_json") else {}
-        return {"task_id": t["id"], "state": t["state"], "capability": (json.loads(t["intent_json"]).get("allowed_capabilities") or [None])[0], **r}
+        budget = self.store.task_budget_status(t["id"], t["owner"])
+        if budget is not None:
+            budget.pop("task_id", None)
+            budget.pop("updated_at", None)
+        return {
+            "task_id": t["id"],
+            "state": t["state"],
+            "capability": (
+                json.loads(t["intent_json"]).get("allowed_capabilities") or [None]
+            )[0],
+            "budget_usage": budget,
+            **r,
+        }
 
 
     def _cancel_task(
