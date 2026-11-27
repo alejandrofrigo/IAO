@@ -196,6 +196,20 @@ class TaskWorker:
                 float(spec.timeout_seconds),
                 float(intent.get("budget", {}).get("timeout_seconds", 20)),
             )
+            generation = self._active_lease_generation
+            required_lease = max(self.lease_seconds, math.ceil(timeout) + 10)
+            if not self.store.renew_task_lease(
+                task_id, self.worker_id, generation, required_lease,
+            ):
+                if self._cancel_requested(task_id):
+                    return self._finish(
+                        task_id, owner, "CANCELLED",
+                        {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                    )
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "TASK_LEASE_RENEWAL_FAILED"},
+                )
             try:
                 output, verdict = self.tool_executor(
                     spec.run, spec.verify, clean, timeout
