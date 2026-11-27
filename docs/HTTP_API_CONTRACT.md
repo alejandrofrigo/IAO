@@ -8,7 +8,7 @@
 
 - Los dos adaptadores delegan las rutas de aplicación en el mismo `OmegaService`; no deben redefinir autenticación, autorización ni códigos de dominio.
 - El cuerpo máximo de las rutas de aplicación es **65.536 bytes** (`omega.service.MAX_BODY`). La API ASGI lee por fragmentos y rechaza antes de acumular más del límite. El adaptador stdlib no consume cuerpos declarados por encima del límite y cierra esa conexión.
-- `Content-Length` no numérico o negativo produce `400 INVALID_CONTENT_LENGTH`; longitud declarada distinta del cuerpo recibido produce `400 INCOMPLETE_BODY`; tamaño superior al límite produce `413 PAYLOAD_TOO_LARGE`.
+- Los cuerpos con `Transfer-Encoding` se rechazan con `400 INVALID_TRANSFER_ENCODING` para mantener un encuadre HTTP inequívoco en ambos adaptadores.\n- `Content-Length` no numérico o negativo produce `400 INVALID_CONTENT_LENGTH`; longitud declarada distinta del cuerpo recibido produce `400 INCOMPLETE_BODY`; tamaño superior al límite produce `413 PAYLOAD_TOO_LARGE`.
 - Las rutas JSON de aplicación esperan un objeto JSON. JSON inválido o un valor JSON de tipo distinto de objeto produce `400 INVALID_JSON` cuando la ruta lo procesa.
 - Los errores de método para rutas conocidas producen `405 METHOD_NOT_ALLOWED`, incluyen `allowed_methods` en el JSON y la cabecera HTTP `Allow`. Una ruta desconocida produce `404 NOT_FOUND`.
 - La envoltura de servicio incluye `correlation_id` en respuestas de aplicación y los adaptadores lo reflejan en `X-Correlation-ID`. No se incluye el texto de excepciones internas en respuestas públicas.
