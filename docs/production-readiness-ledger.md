@@ -55,3 +55,14 @@ Commit `367b96785cd283b1781866c02fea9570330e5872`:
 
 - The deterministic gate now explicitly includes `tests/test_federation.py`, exercising two independently generated node identities and a real local HTTP round-trip. It does not include the separate mocked external auto-enrollment suite as a live-network test.
 - Current correction commit for the router test fixture: `ab19cc1eb2ab2d9e6275b21fa222dc7e3468e149`. Do not mark router acceptance green until the exact commit's CI run passes.
+
+## Latest validated router and federation gate (commit `7c4781cd9f5291b87deea23cebe938c4bd92e8d0`)
+
+- IAO Production Gates run #23: **success** on Python 3.12 and 3.13; 128 deterministic API/identity/queue/federation/router tests passed per matrix job and Ruff passed on the production gate surface.
+- IAO CI run #1608: **success** on Python 3.12 and 3.13; full suite reported 449 passed, 1 skipped on each version.
+- IAO quality gate run #1608: **success**.
+- IAO container qualification run #1267: **success**, API contract tests and container build/liveness qualification passed; no image published.
+- Mobile Chromium integration run #651: **success**.
+- The repository-wide legacy lint report still identifies 178 pre-existing lint findings in `tools/test_nostr_bridge.py`; the dedicated production integration lint and production-gate lint both pass. This legacy lint debt is not silently treated as clean.
+- Federation evidence is a two-node local integration with separately generated Ed25519 identities, signed handshake and messages, READ_ONLY grants, replay/revocation checks and partition/recovery. A genuinely independent public node remains unverified and blocked by absence of a verified peer endpoint and trusted public transport/enrollment prerequisites.
+- Router evidence is entirely mocked. No live provider credentials, connectivity or inference have been tested. The actual operator runtime inventory under `~/.config/iao/llm-providers.json` is not available to GitHub Actions and remains unverified here.
