@@ -79,7 +79,54 @@ def test_shutdown_stops_all_owned_discovery_workers(monkeypatch):
     api_main._stop_background_workers()
 
     assert calls == [
-        ("autojoin", 5.0),
-        ("discovery", 5.0),
-        ("external_network", 5.0),
+        ("autojoin", 15.0),
+        ("discovery", 15.0),
+        ("external_network", 15.0),
     ]
+
+
+
+def test_concurrent_service_access_constructs_one_service(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Lock
+    from types import SimpleNamespace
+
+    import omega.server
+
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "a" * 40)
+    monkeypatch.setenv("AUDIT_HMAC_KEY", "b" * 40)
+    monkeypatch.setattr(api_main, "_service", None)
+    monkeypatch.setattr(api_main, "_ensure_federation", lambda service: None)
+
+    calls = []
+    calls_lock = Lock()
+    service = SimpleNamespace(device_authority=object())
+
+    def build_once(*_args, **_kwargs):
+        with calls_lock:
+            calls.append(True)
+        return service
+
+    monkeypatch.setattr(omega.server, "build_service", build_once)
+    barrier = Barrier(16)
+
+    def access_service(_index):
+        barrier.wait(timeout=5)
+        return api_main._get_service()
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        instances = list(pool.map(access_service, range(16)))
+
+    assert len(calls) == 1
+    assert all(instance is service for instance in instances)
+
+
+def test_device_authority_accessor_reuses_service_authority(monkeypatch):
+    from types import SimpleNamespace
+
+    authority = object()
+    monkeypatch.setattr(
+        api_main, "_get_service",
+        lambda: SimpleNamespace(device_authority=authority),
+    )
+    assert api_main._get_device_authority() is authority
