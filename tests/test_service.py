@@ -1091,6 +1091,27 @@ class QueuedTaskApiTests(Base):
         identity.bind_primary_device_for_session(
             "queued-user", self.operator_token, public_pem, device_signature,
         )
+        grant_challenge = identity.create_capability_challenge(
+            "queued-user", self.operator_token, self.device_id,
+            "knowledge.search", POLICY_VERSION,
+        )
+        grant_payload = base64.urlsafe_b64decode(
+            grant_challenge["signing_payload"]
+            + "=" * (-len(grant_challenge["signing_payload"]) % 4)
+        )
+        grant_root_signature = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + grant_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        grant_device_signature = self.device_private_key.sign(
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + grant_payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        identity.complete_capability_challenge(
+            "queued-user", self.operator_token, grant_challenge["challenge"],
+            grant_root_signature, grant_device_signature,
+            policy_version=POLICY_VERSION,
+        )
 
     def queued_headers(self, payload: dict) -> dict[str, str]:
         body = json.dumps(payload).encode()
@@ -1114,6 +1135,90 @@ class QueuedTaskApiTests(Base):
             "authorization": "Bearer " + self.operator_token,
             "x-iao-device-proof": json.dumps(proof, separators=(",", ":")),
         }
+
+    def test_capability_grant_api_requires_dual_signatures_and_supports_revocation(self) -> None:
+        headers = {"authorization": "Bearer " + self.operator_token}
+        status, current = self.call(
+            "GET", "/v1/operator/capability-grant/status", headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("knowledge.search", current["active_capabilities"])
+        grant_id = next(
+            item["grant_id"] for item in current["grants"]
+            if item["capability"] == "knowledge.search" and item["active"]
+        )
+
+        revoke_status, revoke_challenge = self.call(
+            "POST", "/v1/operator/capability-grant/revoke/challenge",
+            headers,
+            {
+                "device_id": self.device_id,
+                "capability": "knowledge.search",
+                "grant_id": grant_id,
+            },
+        )
+        self.assertEqual(revoke_status, 200)
+        payload = base64.urlsafe_b64decode(
+            revoke_challenge["signing_payload"]
+            + "=" * (-len(revoke_challenge["signing_payload"]) % 4)
+        )
+        root_sig = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+        )
+        device_sig = self.device_private_key.sign(
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        revoke_status, revoked = self.call(
+            "POST", "/v1/operator/capability-grant/revoke/complete",
+            headers,
+            {
+                "challenge": revoke_challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(root_sig).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(device_sig).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(revoke_status, 200)
+        self.assertEqual(revoked["authority"], "OPERATOR_CAPABILITY_REVOKED")
+        status, current = self.call(
+            "GET", "/v1/operator/capability-grant/status", headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(current["active_capabilities"], [])
+
+        grant_status, grant_challenge = self.call(
+            "POST", "/v1/operator/capability-grant/challenge",
+            headers,
+            {"device_id": self.device_id, "capability": "knowledge.search"},
+        )
+        self.assertEqual(grant_status, 200)
+        payload = base64.urlsafe_b64decode(
+            grant_challenge["signing_payload"]
+            + "=" * (-len(grant_challenge["signing_payload"]) % 4)
+        )
+        root_sig = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+        )
+        device_sig = self.device_private_key.sign(
+            b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + payload,
+            ec.ECDSA(hashes.SHA256()),
+        )
+        grant_status, granted = self.call(
+            "POST", "/v1/operator/capability-grant/complete",
+            headers,
+            {
+                "challenge": grant_challenge["challenge"],
+                "root_signature": base64.urlsafe_b64encode(root_sig).decode().rstrip("="),
+                "device_signature": base64.urlsafe_b64encode(device_sig).decode().rstrip("="),
+            },
+        )
+        self.assertEqual(grant_status, 200)
+        self.assertEqual(granted["authority"], "OPERATOR_CAPABILITY_GRANTED")
+        status, current = self.call(
+            "GET", "/v1/operator/capability-grant/status", headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("knowledge.search", current["active_capabilities"])
 
     def test_queued_task_returns_202_and_worker_completes_it(self) -> None:
         payload = {
@@ -1227,7 +1332,12 @@ class QueuedTaskApiTests(Base):
             "execution_mode": "queued",
         }
         headers = self.queued_headers(payload)
-        status, response = self.call("POST", "/v1/tasks", headers, payload)
+        with patch.object(
+            self.svc.operator_identity_authority,
+            "active_capabilities_for_session",
+            return_value=frozenset({"test.write"}),
+        ):
+            status, response = self.call("POST", "/v1/tasks", headers, payload)
         self.assertEqual(status, 403)
         self.assertEqual(response["state"], "DENIED")
         self.assertEqual(
@@ -1253,9 +1363,14 @@ class QueuedTaskApiTests(Base):
             "input": {"value": "x"},
             "execution_mode": "queued",
         }
-        status, response = self.call(
-            "POST", "/v1/tasks", self.queued_headers(payload), payload
-        )
+        with patch.object(
+            self.svc.operator_identity_authority,
+            "active_capabilities_for_session",
+            return_value=frozenset({"test.remote_read"}),
+        ):
+            status, response = self.call(
+                "POST", "/v1/tasks", self.queued_headers(payload), payload
+            )
         self.assertEqual(status, 403)
         self.assertEqual(
             response["reason"], "QUEUED_TASK_CAPABILITY_NOT_ALLOWLISTED"
@@ -1503,6 +1618,59 @@ class QueuedTaskApiTests(Base):
         )
         self.assertEqual((status, payload["error"]), (400, "INVALID_EXECUTION_MODE"))
 
+
+    def test_queued_task_is_denied_after_capability_grant_revocation(self) -> None:
+        with self.svc.operator_identity_authority._database() as db:
+            db.execute(
+                "UPDATE operator_capability_grants SET revoked_at=?",
+                (time.time(),),
+            )
+        payload = {
+            "goal": "search after grant revocation",
+            "capability": "knowledge.search",
+            "input": {"query": "audit"},
+            "execution_mode": "queued",
+        }
+        status, denied = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(denied["reason"], "CAPABILITY_NOT_GRANTED")
+        self.assertEqual(denied["state"], "DENIED")
+        self.assertEqual(
+            self.svc.store.count_tasks_since("queued-user", "0000"),
+            1,
+        )
+
+    def test_worker_rechecks_capability_grant_after_queue_acceptance(self) -> None:
+        payload = {
+            "goal": "search before revocation",
+            "capability": "knowledge.search",
+            "input": {"query": "audit hash chain"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload,
+        )
+        self.assertEqual(status, 202)
+        with self.svc.operator_identity_authority._database() as db:
+            db.execute(
+                "UPDATE operator_capability_grants SET revoked_at=?",
+                (time.time(),),
+            )
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="revoked-capability-worker", lease_seconds=30,
+            operator_identity_authority=self.svc.operator_identity_authority,
+        )
+        self.assertTrue(worker.run_once())
+        failed = self.svc.store.get_task(accepted["task_id"], "queued-user")
+        self.assertEqual(failed["state"], "FAILED")
+        self.assertEqual(
+            json.loads(failed["result_json"])["error"],
+            "WORKER_OPERATOR_AUTHORITY_REVOKED",
+        )
+        self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
 
 class LimitsAndIntegrityTests(Base):
     def test_COST01_quota_and_rate_limit_cut_with_audit_event(self) -> None:

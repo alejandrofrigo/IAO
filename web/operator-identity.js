@@ -421,6 +421,119 @@
     await window.iaoActivateOperatorSession(result.access_token);
     return result;
   }
+  async function currentPrimaryDeviceId() {
+    if (!window.IAODeviceAuthority ||
+        typeof window.IAODeviceAuthority.publicKeyPem !== "function") {
+      throw new Error("DEVICE_AUTHORITY_NOT_AVAILABLE");
+    }
+    const publicKeyPem = await window.IAODeviceAuthority.publicKeyPem();
+    if (typeof publicKeyPem !== "string" || !publicKeyPem) {
+      throw new Error("PRIMARY_DEVICE_NOT_ENROLLED");
+    }
+    const encoded = publicKeyPem.replace(
+      /-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\s/g, ""
+    );
+    const der = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", der));
+    return Array.from(digest, value => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function signCapabilityPayload(identity, challenge, purpose, grantId) {
+    if (challenge.protocol !== "IAO-OPERATOR-CAPABILITY-GRANT-V1" ||
+        challenge.purpose !== purpose ||
+        challenge.capability !== "knowledge.search" ||
+        typeof challenge.challenge !== "string" ||
+        typeof challenge.signing_payload !== "string" ||
+        challenge.key_version !== identity.keyVersion) {
+      throw new Error("INVALID_CAPABILITY_GRANT_CHALLENGE");
+    }
+    const encoded = challenge.signing_payload.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = Uint8Array.from(
+      atob(encoded + "=".repeat((4 - encoded.length % 4) % 4)),
+      c => c.charCodeAt(0)
+    );
+    const parsed = JSON.parse(new TextDecoder().decode(payload));
+    const deviceId = await currentPrimaryDeviceId();
+    if (parsed.protocol !== "IAO-OPERATOR-CAPABILITY-GRANT-V1" ||
+        parsed.purpose !== purpose || parsed.capability !== "knowledge.search" ||
+        parsed.device_id !== deviceId || parsed.key_version !== identity.keyVersion ||
+        (purpose === "REVOKE" && parsed.grant_id !== grantId) ||
+        (purpose === "GRANT" && !Number.isInteger(parsed.grant_expires_at))) {
+      throw new Error("CAPABILITY_GRANT_PAYLOAD_MISMATCH");
+    }
+    const rootMessage = new Uint8Array(ROOT_DOMAIN.length + payload.length);
+    rootMessage.set(ROOT_DOMAIN);
+    rootMessage.set(payload, ROOT_DOMAIN.length);
+    const rootRaw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, identity.privateKey, rootMessage
+    ));
+    if (typeof window.IAODeviceAuthority.signOperatorCapabilityGrantPayload !== "function") {
+      throw new Error("DEVICE_CAPABILITY_SIGNER_UNAVAILABLE");
+    }
+    const deviceSignature = await window.IAODeviceAuthority.signOperatorCapabilityGrantPayload(
+      challenge.signing_payload
+    );
+    return {
+      root_signature: b64url(rawEcdsaToDer(rootRaw)),
+      device_signature: deviceSignature,
+    };
+  }
+
+  async function grantReadOnlyKnowledgeSearch() {
+    if (!crypto.subtle || !window.indexedDB) throw new Error("BROWSER_CRYPTO_OR_STORAGE_UNAVAILABLE");
+    const identity = await readIdentity();
+    if (!identity || !identity.privateKey || !identity.keyVersion) {
+      throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
+    }
+    const challenge = await request(
+      "/v1/operator/capability-grant/challenge", "POST",
+      { device_id: await currentPrimaryDeviceId(), capability: "knowledge.search" }
+    );
+    const signatures = await signCapabilityPayload(identity, challenge, "GRANT");
+    const result = await request(
+      "/v1/operator/capability-grant/complete", "POST",
+      { challenge: challenge.challenge, ...signatures }
+    );
+    if (result.authority !== "OPERATOR_CAPABILITY_GRANTED" ||
+        result.capability !== "knowledge.search" || !Number.isInteger(result.expires_at)) {
+      throw new Error("INVALID_CAPABILITY_GRANT_RESPONSE");
+    }
+    window.dispatchEvent(new Event("iao-capabilities-changed"));
+    return result;
+  }
+
+  async function revokeCapabilityGrant(grantId) {
+    const identity = await readIdentity();
+    if (!identity || !identity.privateKey || !identity.keyVersion) {
+      throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
+    }
+    if (typeof grantId !== "string" || !/^[0-9a-f]{32}$/.test(grantId)) {
+      throw new Error("INVALID_CAPABILITY_GRANT_ID");
+    }
+    const challenge = await request(
+      "/v1/operator/capability-grant/revoke/challenge", "POST",
+      {
+        device_id: await currentPrimaryDeviceId(),
+        capability: "knowledge.search",
+        grant_id: grantId,
+      }
+    );
+    const signatures = await signCapabilityPayload(identity, challenge, "REVOKE", grantId);
+    const result = await request(
+      "/v1/operator/capability-grant/revoke/complete", "POST",
+      { challenge: challenge.challenge, ...signatures }
+    );
+    if (result.authority !== "OPERATOR_CAPABILITY_REVOKED" || result.revoked !== true) {
+      throw new Error("INVALID_CAPABILITY_REVOCATION_RESPONSE");
+    }
+    window.dispatchEvent(new Event("iao-capabilities-changed"));
+    return result;
+  }
+
+  async function capabilityGrantStatus() {
+    return request("/v1/operator/capability-grant/status", "GET");
+  }
+
   async function bindPrimaryDevice(publicKeyPem) {
     const identity = await readIdentity();
     if (!identity || !identity.privateKey || !identity.keyVersion) throw new Error("ROOT_IDENTITY_NOT_ENROLLED");
@@ -490,6 +603,12 @@
     revokeButton.type = "button"; revokeButton.textContent = "Revocar identidad y dispositivo";
     const bindDeviceButton = document.createElement("button");
     bindDeviceButton.type = "button"; bindDeviceButton.textContent = "Vincular dispositivo primario";
+    const grantCapabilityButton = document.createElement("button");
+    grantCapabilityButton.type = "button";
+    grantCapabilityButton.textContent = "Autorizar búsqueda local de solo lectura (15 min)";
+    const revokeCapabilityButton = document.createElement("button");
+    revokeCapabilityButton.type = "button";
+    revokeCapabilityButton.textContent = "Revocar autorización de búsqueda";
     const output = document.createElement("pre");
     output.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;";
     let sessionAuthority = "UNAVAILABLE";
@@ -499,6 +618,8 @@
         Boolean(window.iaoGetSessionToken());
       associateButton.disabled = !hasToken || sessionAuthority !== "UNBOUND_READ_ONLY";
       bindDeviceButton.disabled = !hasToken || sessionAuthority !== "IDENTITY_BOUND_READ_ONLY";
+      grantCapabilityButton.disabled = !hasToken || sessionAuthority !== "IDENTITY_BOUND_READ_ONLY";
+      revokeCapabilityButton.disabled = !hasToken || sessionAuthority !== "IDENTITY_BOUND_READ_ONLY";
     }
     async function refreshSessionGates() {
       sessionAuthority = "UNAVAILABLE";
@@ -571,9 +692,35 @@
       if (!window.IAODeviceAuthority || typeof window.IAODeviceAuthority.publicKeyPem !== "function") {
         throw new Error("DEVICE_AUTHORITY_NOT_AVAILABLE");
       }
-      return bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
+      const result = await bindPrimaryDevice(await window.IAODeviceAuthority.publicKeyPem());
+      await refreshSessionGates();
+      return result;
     }, result => "DISPOSITIVO VINCULADO\nAutoridad: " + result.authority + "\nVersión: " + result.key_version));
-    section.append(title, description, code, bootstrapRecoveryCode, generateBootstrapRecoveryButton, bootstrapButton, recoveryCode, newRecoveryCode, generateNewRecoveryButton, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, revokeButton, output);
+    grantCapabilityButton.addEventListener("click", () => {
+      if (!window.confirm(
+        "Autorizar únicamente knowledge.search, herramienta local de solo lectura, durante 15 minutos. Se requieren ambas firmas. ¿Continuar?"
+      )) return;
+      run(grantCapabilityButton, grantReadOnlyKnowledgeSearch, result =>
+        "CAPACIDAD CONCEDIDA\n" + result.capability +
+        "\nExpira: " + new Date(result.expires_at * 1000).toISOString()
+      );
+    });
+    revokeCapabilityButton.addEventListener("click", () => run(
+      revokeCapabilityButton,
+      async () => {
+        const current = await capabilityGrantStatus();
+        const grant = (current.grants || []).find(
+          item => item.capability === "knowledge.search" && item.active
+        );
+        if (!grant) throw new Error("NO_ACTIVE_CAPABILITY_GRANT");
+        if (!window.confirm("Revocar la autorización activa de knowledge.search. ¿Continuar?")) {
+          throw new Error("CAPABILITY_REVOCATION_CANCELLED");
+        }
+        return revokeCapabilityGrant(grant.grant_id);
+      },
+      result => "CAPACIDAD REVOCADA\n" + result.capability
+    ));
+    section.append(title, description, code, bootstrapRecoveryCode, generateBootstrapRecoveryButton, bootstrapButton, recoveryCode, newRecoveryCode, generateNewRecoveryButton, recoveryButton, loginButton, associateButton, statusButton, bindDeviceButton, grantCapabilityButton, revokeCapabilityButton, revokeButton, output);
     document.body.appendChild(section);
     window.addEventListener("iao-session-changed", refreshSessionGates);
     refreshSessionGates();
@@ -581,7 +728,10 @@
       identity ? (identity.bootstrapPending ? "Clave raíz local conservada; confirma el bootstrap o consulta su estado." : "Clave raíz local disponible en este navegador.") : "No hay identidad raíz registrada en este navegador.", false
     )).catch(error => show("Almacenamiento no disponible: " + error.message, true));
   }
-  window.IAOOperatorIdentity = Object.freeze({ login, associateSession, bindPrimaryDevice, recoverIdentity, revokeIdentity, status });
+  window.IAOOperatorIdentity = Object.freeze({
+    login, associateSession, bindPrimaryDevice, recoverIdentity, revokeIdentity,
+    status, grantReadOnlyKnowledgeSearch, revokeCapabilityGrant, capabilityGrantStatus
+  });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", panel, { once: true });
   else panel();
 })();

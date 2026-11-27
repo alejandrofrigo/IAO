@@ -130,6 +130,9 @@ def test_interruption_after_tool_invocation_is_not_replayed(tmp_path, monkeypatc
         def verify_primary_device_for_session_digest(self, *_args):
             return True
 
+        def active_capabilities_for_session_digest(self, *_args, **_kwargs):
+            return frozenset({"knowledge.search"})
+
     worker = TaskWorker(
         store, registry, worker_id="fault-injection-worker",
         operator_identity_authority=ActiveAuthority(),
