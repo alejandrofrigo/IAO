@@ -40,9 +40,9 @@ ROUTE_METHODS = [
     ("/v1/device/enroll", ("POST",)),
     ("/v1/device/challenge", ("POST",)),
     ("/v1/device/command", ("POST",)),
-    ("/v1/memory", ("GET", "POST", "PUT", "DELETE")),
-    ("/v1/memory/export", ("GET", "POST", "PUT", "DELETE")),
-    ("/v1/memory/00000000-0000-0000-0000-000000000003", ("GET", "POST", "PUT", "DELETE")),
+    ("/v1/memory", ("GET", "POST", "DELETE")),
+    ("/v1/memory/export", ("GET",)),
+    ("/v1/memory/00000000-0000-0000-0000-000000000003", ("PUT", "DELETE")),
 ]
 
 
