@@ -51,17 +51,11 @@ def _request_json(url, timeout=12):
 
 
 def _append(state, event):
-    state.mkdir(parents=True, exist_ok=True)
-    path = state / "federation-discovery.jsonl"
+    from omega.operational_log import append_private_jsonl
+
     record = dict(event)
     record["timestamp"] = _now()
-    data = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n").encode()
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    append_private_jsonl(Path(state) / "federation-discovery.jsonl", record)
 
 
 def _valid_manifest(obj):
@@ -200,9 +194,11 @@ def discover_once(state_dir):
 def run_forever(state_dir, stop_event=None):
     stop_event = stop_event or _STOP_EVENT
     state = Path(state_dir)
-    state.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(state, 0o700)
     lock_path = state / "federation-discovery.lock"
     lock_file = open(lock_path, "a")
+    os.fchmod(lock_file.fileno(), 0o600)
 
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
