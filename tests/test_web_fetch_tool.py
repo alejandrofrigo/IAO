@@ -32,6 +32,23 @@ class WebFetchToolTests(Base):
         s, p = self.fetch("/json")
         self.assertEqual((p["state"], p["verification"], p["result"]["untrusted"]), ("SUCCEEDED", "PASS", True))
 
+    def test_hash_verification_uses_original_bytes_even_with_invalid_utf8(self) -> None:
+        spec = make_web_fetch(EgressPolicy(
+            allow_hosts=frozenset({"localhost"}), allow_http=True,
+            allowed_ports=frozenset({self.port}), allow_private=True, total_timeout=2,
+        ))
+        status, payload = self.fetch("/invalid-utf8")
+        result = payload["result"]
+        self.assertEqual((status, payload["verification"]), (200, "PASS"))
+        self.assertIn("\\ufffd", result["body"])
+        self.assertEqual(spec.verify(result), "PASS")
+        tampered = dict(result)
+        tampered["sha256"] = "sha256:" + "0" * 64
+        self.assertEqual(spec.verify(tampered), "FAIL")
+        missing_bytes = dict(result)
+        missing_bytes.pop("body_base64")
+        self.assertEqual(spec.verify(missing_bytes), "FAIL")
+
     def test_denied_without_scope(self) -> None:
         self.assertEqual(self.fetch("/ok", ["knowledge.search"])[0], 403)
 
