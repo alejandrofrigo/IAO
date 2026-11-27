@@ -929,6 +929,26 @@ class AuthTests(Base):
         )
         self.assertEqual((status, payload["error"]), (401, "OPERATOR_SESSION_REVOKED"))
 
+    def test_all_privileged_operator_and_device_routes_require_bound_session(self) -> None:
+        token = issue_token(KEY, "operator:" + "b" * 32, ["memory.read", "knowledge.search"])
+        headers = {"authorization": "Bearer " + token}
+        routes = (
+            ("POST", "/v1/operator/identity/revoke", {}),
+            ("POST", "/v1/operator/device/bind", {}),
+            ("POST", "/v1/operator/session/challenge", {}),
+            ("POST", "/v1/operator/session/bind", {}),
+            ("GET", "/v1/operator/session/status", None),
+            ("POST", "/v1/device/enroll", {}),
+            ("POST", "/v1/device/challenge", {}),
+            ("POST", "/v1/device/command", {}),
+        )
+        for method, path, body in routes:
+            status, payload = self.call(method, path, headers, body)
+            self.assertEqual(
+                (status, payload["error"]),
+                (401, "OPERATOR_SESSION_REVOKED"),
+                (method, path),
+            )
     def test_AUTH02_cross_user_isolation(self) -> None:
         a, b = self.tok("alice"), self.tok("bob")
         cid = self.call("POST", "/v1/conversations", a, {"title": "x"})[1]["conversation_id"]
