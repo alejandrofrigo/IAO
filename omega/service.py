@@ -1212,8 +1212,11 @@ class OmegaService:
 
         def to(new: str, **ev: Any) -> None:
             nonlocal st
-            st = transition(st, new)
-            self.store.set_task_state(tid, st)
+            expected = st
+            transition(expected, new)
+            if not self.store.transition_task_state(tid, expected, new):
+                raise ApiError(409, "TASK_STATE_CONFLICT")
+            st = new
             self.store.audit(pr.subject, "TASK_STATE", tid, to=st, **ev)
 
         to("AUTHENTICATED")
