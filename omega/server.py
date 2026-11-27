@@ -141,7 +141,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 x.strip().rstrip("/")
                 for x in os.environ.get(
                     "IAO_CORS_ORIGINS",
-                    "https://alejandrofrigo.github.io"
+                    ""
                 ).split(",") if x.strip()
             }
             if origin and origin.rstrip("/") in allowed:
@@ -295,7 +295,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     x.strip().rstrip("/")
                     for x in os.environ.get(
                         "IAO_CORS_ORIGINS",
-                        "https://alejandrofrigo.github.io"
+                        ""
                     ).split(",") if x.strip()
                 }
                 if (
