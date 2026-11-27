@@ -109,7 +109,12 @@ def process_alive(pid):
     try:
         os.kill(int(pid), 0)
         return True
-    except (ProcessLookupError, PermissionError, ValueError):
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists, but the current user cannot signal it.
+        return True
+    except (TypeError, ValueError, OverflowError):
         return False
 
 
