@@ -17,10 +17,6 @@ def write_production_secrets(path: Path, *, now: int | None = None) -> Path:
     if target.exists() or target.is_symlink():
         raise FileExistsError("PRODUCTION_ENV_ALREADY_EXISTS")
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        os.chmod(target.parent, 0o700)
-    except OSError:
-        pass
     timestamp = int(time.time() if now is None else now)
     values = {
         "APP_ENV": "production",
