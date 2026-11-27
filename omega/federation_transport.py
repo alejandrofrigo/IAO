@@ -19,6 +19,16 @@ from urllib.parse import urlsplit
 MAX_DISCOVERY_BYTES = 1_000_000
 
 
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject duplicate JSON members rather than silently accepting last-wins."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("DUPLICATE_JSON_MEMBER")
+        result[key] = value
+    return result
+
+
 class FederationTransportError(RuntimeError):
     """Safe transport failure with a stable machine-readable reason."""
 
@@ -289,8 +299,8 @@ def _request_json(
             if len(raw) > max_bytes:
                 raise FederationTransportError("RESPONSE_TOO_LARGE")
             try:
-                decoded = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
+            except (UnicodeDecodeError, ValueError) as exc:
                 raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
             return response.status, decoded
         except FederationTransportError:
@@ -398,7 +408,7 @@ def fetch_onion_json(
         if len(raw) > max_bytes:
             raise FederationTransportError("RESPONSE_TOO_LARGE")
         try:
-            return json.loads(raw.decode("utf-8"))
+            return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
     except FederationTransportError:
