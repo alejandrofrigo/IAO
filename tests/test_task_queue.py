@@ -307,3 +307,22 @@ class DurableTaskQueueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_live_lease_renewal_is_generation_fenced_and_stops_on_cancel(self) -> None:
+        self._queue_one()
+        claimed = self.store.claim_next_task("worker-a", lease_seconds=30)
+        self.assertIsNotNone(claimed)
+        before = self.store.get_task("task-1", "owner-a")["lease_until"]
+        self.assertTrue(self.store.renew_task_lease(
+            "task-1", "worker-a", claimed["lease_generation"], 120
+        ))
+        after = self.store.get_task("task-1", "owner-a")["lease_until"]
+        self.assertGreater(after, before)
+        self.assertFalse(self.store.renew_task_lease(
+            "task-1", "worker-a", claimed["lease_generation"] + 1, 120
+        ))
+        self.assertEqual(self.store.request_task_cancel("task-1", "owner-a"), "REQUESTED")
+        self.assertFalse(self.store.renew_task_lease(
+            "task-1", "worker-a", claimed["lease_generation"], 120
+        ))
