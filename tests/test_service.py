@@ -1319,6 +1319,232 @@ class QueuedTaskApiTests(Base):
         )
 
  
+class QueuedTaskApiTests(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.device_private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = self.device_private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        self.svc.device_authority.enrollment_code = (
+            "unit-test-device-enrollment-secret-long-enough"
+        )
+        enrolled = self.svc.device_authority.enroll(
+            self.svc.device_authority.enrollment_code, public_pem,
+            owner_subject="operator:queued-user",
+        )
+        self.device_id = enrolled["device_id"]
+        bootstrap = "queued-root-bootstrap-" + "r" * 40
+        identity = OperatorIdentityAuthority(
+            self.state / "queued-root-identity.sqlite3", bootstrap,
+            bootstrap_expires_at=time.time() + 600,
+            subject_digest_key=hashlib.sha256(b"queued-root-session-test-key").digest(),
+        )
+        self.svc.operator_identity_authority = identity
+        self.root_private_key = ec.generate_private_key(ec.SECP256R1())
+        root_pem = self.root_private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        identity.bootstrap(bootstrap, root_pem)
+        self.operator_token = issue_token(KEY, "operator:queued-user", ["knowledge.search", "test.write", "test.remote_read"])
+        session_challenge = identity.create_session_challenge("operator:queued-user", self.operator_token)
+        session_payload = base64.urlsafe_b64decode(
+            session_challenge["signing_payload"]
+            + "=" * (-len(session_challenge["signing_payload"]) % 4)
+        )
+        session_signature = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + session_payload, ec.ECDSA(hashes.SHA256())
+        )
+        identity.bind_authenticated_session(
+            session_challenge["challenge"], "operator:queued-user", self.operator_token,
+            session_signature,
+        )
+        _, device_payload = OperatorIdentityAuthority.device_binding_payload(
+            public_pem, key_version=1,
+        )
+        device_signature = self.root_private_key.sign(
+            ROOT_SIGNATURE_DOMAIN + device_payload, ec.ECDSA(hashes.SHA256())
+        )
+        identity.bind_primary_device_for_session(
+            "operator:queued-user", self.operator_token, public_pem, device_signature,
+        )
+
+    def queued_headers(self, payload: dict) -> dict[str, str]:
+        body = json.dumps(payload).encode()
+        challenge = self.svc.device_authority.challenge(self.device_id, owner_subject="operator:queued-user")
+        timestamp = int(time.time())
+        digest = hashlib.sha256(body).hexdigest()
+        signed = "\n".join(
+            ["POST", "/v1/tasks", str(timestamp), challenge["nonce"], digest]
+        ).encode()
+        signature = self.device_private_key.sign(
+            signed, ec.ECDSA(hashes.SHA256())
+        )
+        proof = {
+            "device_id": self.device_id,
+            "nonce": challenge["nonce"],
+            "timestamp": timestamp,
+            "request_digest": digest,
+            "signature": base64.urlsafe_b64encode(signature).decode().rstrip("="),
+        }
+        return {
+            "authorization": "Bearer " + self.operator_token,
+            "x-iao-device-proof": json.dumps(proof, separators=(",", ":")),
+        }
+
+    def test_queued_task_returns_202_and_worker_completes_it(self) -> None:
+        payload = {
+            "goal": "search the local knowledge corpus",
+            "capability": "knowledge.search",
+            "input": {"query": "audit hash chain"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(
+            status, 202,
+            msg=str([
+                event for event in self.svc.store._all_events()
+                if event["event_type"] == "API_INTERNAL_ERROR"
+            ][-1:]),
+        )
+        self.assertEqual(accepted["state"], "QUEUED")
+        self.assertTrue(accepted["status_url"].endswith(accepted["task_id"]))
+        queued = self.svc.store.get_task(accepted["task_id"], "operator:queued-user")
+        intent = json.loads(queued["intent_json"])
+        self.assertEqual(intent["input"], {"query": "audit hash chain"})
+        self.assertIn("knowledge.search", intent["authorized_scopes"])
+
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="test-worker", lease_seconds=30,
+            operator_identity_authority=self.svc.operator_identity_authority,
+        )
+        self.assertTrue(worker.run_once())
+        completed = self.svc.store.get_task(accepted["task_id"], "operator:queued-user")
+        self.assertEqual(completed["state"], "SUCCEEDED")
+        self.assertIsNone(completed["lease_owner"])
+        self.assertEqual(
+            [item["status"] for item in self.svc.store.tool_executions(accepted["task_id"])],
+            ["SUCCEEDED"],
+        )
+        self.assertFalse(worker.run_once())
+
+    def test_worker_rechecks_primary_device_binding_before_execution(self) -> None:
+        payload = {
+            "goal": "search the local knowledge corpus",
+            "capability": "knowledge.search",
+            "input": {"query": "audit hash chain"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(status, 202)
+        task = self.svc.store.get_task(accepted["task_id"], "operator:queued-user")
+        intent = json.loads(task["intent_json"])
+        self.assertNotIn(self.operator_token, json.dumps(intent))
+        self.assertRegex(intent["operator_session_digest"], r"^[0-9a-f]{64}$")
+        self.assertEqual(intent["operator_device_id"], self.device_id)
+
+        # Simulate revocation after API acceptance but before the worker claims it.
+        with self.svc.operator_identity_authority._database() as db:
+            db.execute("DELETE FROM primary_device_bindings")
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="revocation-check-worker", lease_seconds=30,
+            operator_identity_authority=self.svc.operator_identity_authority,
+        )
+        self.assertTrue(worker.run_once())
+        failed = self.svc.store.get_task(accepted["task_id"], "operator:queued-user")
+        self.assertEqual(failed["state"], "FAILED")
+        self.assertEqual(
+            json.loads(failed["result_json"])["error"],
+            "WORKER_OPERATOR_AUTHORITY_REVOKED",
+        )
+        self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
+
+    def test_worker_fails_closed_without_operator_identity_authority(self) -> None:
+        payload = {
+            "goal": "search the local knowledge corpus",
+            "capability": "knowledge.search",
+            "input": {"query": "audit hash chain"},
+            "execution_mode": "queued",
+        }
+        status, accepted = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(status, 202)
+        worker = TaskWorker(
+            self.svc.store, self.svc.registry,
+            worker_id="unbound-worker", lease_seconds=30,
+        )
+        self.assertTrue(worker.run_once())
+        failed = self.svc.store.get_task(accepted["task_id"], "operator:queued-user")
+        self.assertEqual(failed["state"], "FAILED")
+        self.assertEqual(
+            json.loads(failed["result_json"])["error"],
+            "WORKER_OPERATOR_AUTHORITY_UNAVAILABLE",
+        )
+        self.assertEqual(self.svc.store.tool_executions(accepted["task_id"]), [])
+
+    def test_queued_mode_rejects_non_read_only_capability(self) -> None:
+        self.svc.registry.register(
+            ToolSpec(
+                "test.write", "1", "test.write", "WRITE",
+                1.0, lambda value: value, lambda value: value,
+                lambda output: "PASS",
+            )
+        )
+        payload = {
+            "goal": "attempt queued write",
+            "capability": "test.write",
+            "input": {"value": "x"},
+            "execution_mode": "queued",
+        }
+        headers = self.queued_headers(payload)
+        status, response = self.call("POST", "/v1/tasks", headers, payload)
+        self.assertEqual(status, 403)
+        self.assertEqual(response["state"], "DENIED")
+        self.assertEqual(
+            response["reason"], "QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY"
+        )
+        self.assertEqual(
+            self.svc.store.get_task(response["task_id"], "operator:queued-user")["state"],
+            "DENIED",
+        )
+
+
+    def test_queued_mode_rejects_unreviewed_read_only_tool(self) -> None:
+        self.svc.registry.register(
+            ToolSpec(
+                "test.remote_read", "1", "test.remote_read", "READ_ONLY",
+                1.0, lambda value: value, lambda value: value,
+                lambda output: "PASS",
+            )
+        )
+        payload = {
+            "goal": "attempt unreviewed read-only tool",
+            "capability": "test.remote_read",
+            "input": {"value": "x"},
+            "execution_mode": "queued",
+        }
+        status, response = self.call(
+            "POST", "/v1/tasks", self.queued_headers(payload), payload
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(
+            response["reason"], "QUEUED_TASK_CAPABILITY_NOT_ALLOWLISTED"
+        )
+        self.assertEqual(
+            self.svc.store.get_task(response["task_id"], "operator:queued-user")["state"],
+            "DENIED",
+        )
+
+ 
     def test_device_enrollment_and_status_api_are_gated_and_read_only(self) -> None:
         code = "one-time-api-enrollment-secret-long-enough"
         self.svc.device_authority = DeviceAuthority(
@@ -1494,14 +1720,14 @@ class QueuedTaskApiTests(Base):
             "execution_mode": "queued",
         }
         status, response = self.call(
-            "POST", "/v1/tasks", self.tok("queued-user"), payload
+            "POST", "/v1/tasks", self.tok("operator:queued-user"), payload
         )
         self.assertEqual((status, response["error"]), (401, "DEVICE_PROOF_REQUIRED"))
-        self.assertEqual(self.svc.store.count_tasks_since("queued-user", "0000"), 0)
+        self.assertEqual(self.svc.store.count_tasks_since("operator:queued-user", "0000"), 0)
 
     def test_device_challenge_endpoint_and_proof_replay_rejected(self) -> None:
         status, challenge = self.call(
-            "POST", "/v1/device/challenge", self.tok("queued-user"),
+            "POST", "/v1/device/challenge", self.tok("operator:queued-user"),
             {"device_id": self.device_id},
         )
         self.assertEqual(status, 200)
@@ -1526,10 +1752,10 @@ class QueuedTaskApiTests(Base):
             "execution_mode": "queued",
         }
         headers = self.queued_headers(payload)
-        headers["authorization"] = self.tok("queued-user")["authorization"]
+        headers["authorization"] = self.tok("operator:queued-user")["authorization"]
         status, response = self.call("POST", "/v1/tasks", headers, payload)
         self.assertEqual((status, response["error"]), (403, "PRIMARY_DEVICE_NOT_AUTHORIZED"))
-        self.assertEqual(self.svc.store.count_tasks_since("queued-user", "0000"), 0)
+        self.assertEqual(self.svc.store.count_tasks_since("operator:queued-user", "0000"), 0)
 
     def test_queued_proof_cannot_be_reused_for_modified_body(self) -> None:
         payload = {
@@ -1542,7 +1768,7 @@ class QueuedTaskApiTests(Base):
         changed = {**payload, "goal": "different request"}
         status, response = self.call("POST", "/v1/tasks", headers, changed)
         self.assertEqual((status, response["error"]), (400, "INVALID_REQUEST"))
-        self.assertEqual(self.svc.store.count_tasks_since("queued-user", "0000"), 0)
+        self.assertEqual(self.svc.store.count_tasks_since("operator:queued-user", "0000"), 0)
 
     def test_worker_independently_rejects_persisted_write_task(self) -> None:
         self.svc.registry.register(
@@ -1565,7 +1791,7 @@ class QueuedTaskApiTests(Base):
             "budget": {"timeout_seconds": 5},
         }
         task, created = self.svc.store.create_task(
-            "persisted-write-task", "queued-user", intent, None
+            "persisted-write-task", "operator:queued-user", intent, None
         )
         self.assertTrue(created)
         self.svc.store.set_task_state(task["id"], "AUTHORIZED")
@@ -1576,7 +1802,7 @@ class QueuedTaskApiTests(Base):
             worker_id="defensive-worker", lease_seconds=30,
         )
         self.assertTrue(worker.run_once())
-        result = self.svc.store.get_task(task["id"], "queued-user")
+        result = self.svc.store.get_task(task["id"], "operator:queued-user")
         self.assertEqual(result["state"], "FAILED")
         self.assertEqual(
             json.loads(result["result_json"])["error"],
@@ -1586,7 +1812,7 @@ class QueuedTaskApiTests(Base):
 
     def test_queued_mode_rejects_non_string_mode(self) -> None:
         status, payload = self.call(
-            "POST", "/v1/tasks", self.tok("queued-user"),
+            "POST", "/v1/tasks", self.tok("operator:queued-user"),
             {
                 "goal": "x",
                 "capability": "knowledge.search",
