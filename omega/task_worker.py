@@ -73,6 +73,8 @@ class TaskWorker:
         self._heartbeat_stale_after = configured_stale_after
         self._last_cycle_completed_at: float | None = None
         self._last_cycle_result: bool | None = None
+        self._last_run_succeeded = True
+
     def stop(self) -> None:
         self._stop.set()
 
@@ -243,6 +245,7 @@ class TaskWorker:
         except Exception:
             # No automatic retry: an unexpected worker failure leaves the lease
             # to expire, after which startup recovery marks it FAILED.
+            self._last_run_succeeded = False
             self.store.audit(
                 owner, "TASK_WORKER_ERROR", task_id,
                 worker=self.worker_id, decision="FAIL_CLOSED",
@@ -294,12 +297,15 @@ class TaskWorker:
         self._heartbeat("starting")
         while not self._stop.is_set():
             self._heartbeat("cycle_running")
+            self._last_run_succeeded = True
             try:
                 self.run_once()
             except Exception:
                 self._heartbeat("cycle_completed", cycle_result=False)
                 raise
-            self._heartbeat("cycle_completed", cycle_result=True)
+            self._heartbeat(
+                "cycle_completed", cycle_result=self._last_run_succeeded,
+            )
             if not self._stop.is_set():
                 self._stop.wait(self.poll_seconds)
 
