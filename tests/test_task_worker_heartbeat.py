@@ -70,3 +70,29 @@ def test_task_worker_rejects_invalid_poll_and_heartbeat_bounds():
             assert str(exc) == expected
         else:
             raise AssertionError("invalid worker timing accepted")
+
+class MalformedIntentStore:
+    def claim_next_task(self, *_args, **_kwargs):
+        return {"id": "opaque-task", "owner": "opaque-owner", "intent_json": "{"}
+
+    def audit(self, *_args, **_kwargs):
+        return None
+
+
+class FailClosedCycleWorker(TaskWorker):
+    def run_once(self):
+        try:
+            return super().run_once()
+        finally:
+            self.stop()
+
+
+def test_fail_closed_task_processing_is_not_reported_healthy(tmp_path):
+    heartbeat = tmp_path / "task-worker-heartbeat.json"
+    worker = FailClosedCycleWorker(
+        MalformedIntentStore(), object(), poll_seconds=0.01, heartbeat_path=heartbeat,
+    )
+    worker.run_forever()
+    result = read_heartbeat(heartbeat, expected_component="TASK_WORKER")
+    assert result["status"] == "DEGRADED"
+    assert result["last_cycle_result"] is False
