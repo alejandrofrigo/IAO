@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 from datetime import datetime, timezone
@@ -38,6 +39,33 @@ def event(name, **data):
         EVENTS, {"time": now(), "event": name, **data},
     )
     print(json.dumps(entry, ensure_ascii=False), flush=True)
+
+
+def load_json(path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    fd, temporary = tempfile.mkstemp(prefix=".state-", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, ensure_ascii=False)
+            stream.write("\\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def adapters():
@@ -127,7 +155,7 @@ def status():
         if alive:
             print(f"  PID={pid}")
         elif spec.get("command"):
-            print(f"  COMMAND_CONFIGURED=YES")
+            print("  COMMAND_CONFIGURED=YES")
         else:
             print("  COMMAND_CONFIGURED=NO")
 
