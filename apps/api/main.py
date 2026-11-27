@@ -135,16 +135,22 @@ async def _read_bounded_service_body(request: Request):
 
 
 def _service_response(status: int, payload: dict):
+    correlation_id = payload.get("correlation_id")
+    if (
+        not isinstance(correlation_id, str)
+        or len(correlation_id) != 32
+        or any(char not in "0123456789abcdef" for char in correlation_id.lower())
+    ):
+        correlation_id = uuid.uuid4().hex
+        payload = {**payload, "correlation_id": correlation_id}
     headers = {
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
+        "X-Correlation-ID": correlation_id,
     }
-    correlation_id = payload.get("correlation_id")
-    if isinstance(correlation_id, str):
-        headers["X-Correlation-ID"] = correlation_id
     allowed = payload.get("allowed_methods")
     if status == 405 and isinstance(allowed, list) and all(
-        isinstance(item, str) for item in allowed
+        isinstance(item, str) and item.isalpha() for item in allowed
     ):
         headers["Allow"] = ", ".join(allowed)
     return JSONResponse(status_code=status, content=payload, headers=headers)
