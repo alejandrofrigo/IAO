@@ -73,8 +73,14 @@ def test_stdlib_cors_preflight_matches_api_mutation_methods_and_rejects_patch():
                 urllib.request.urlopen(denied, timeout=3)
                 raise AssertionError("PATCH preflight must be denied")
             except urllib.error.HTTPError as response:
+                payload = __import__("json").loads(response.read())
                 assert response.code == 403
+                assert payload["error"] == "CORS_PREFLIGHT_DENIED"
+                assert len(payload["correlation_id"]) == 32
                 assert response.headers.get("Access-Control-Allow-Origin") is None
+                assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
+                assert response.headers["Cache-Control"] == "no-store"
+                assert response.headers["X-Content-Type-Options"] == "nosniff"
     finally:
         if thread.is_alive():
             httpd.shutdown()
