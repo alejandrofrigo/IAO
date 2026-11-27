@@ -206,7 +206,7 @@ def launch(name, spec):
             return None
         target = ROOT / command[1]
         if not target.is_file():
-            event("entrypoint_missing", motor=name, path=str(target))
+            event("entrypoint_missing", motor=name)
             return None
 
     log_path = LOGS / f"{name.lower()}.log"
@@ -232,8 +232,6 @@ def launch(name, spec):
     child = {
         "pid": proc.pid,
         "started": now(),
-        "command": command,
-        "log": str(log_path),
     }
     children = read_children()
     children[name] = child
