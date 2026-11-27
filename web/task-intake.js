@@ -9,6 +9,7 @@
   if (!queryEl || !submitButton || !refreshButton || !cancelButton || !authStatusEl || !statusEl || !resultEl) return;
 
   let latestTaskId = null;
+  let pendingIdempotency = null;
   let busy = false;
   let lastSessionToken = sessionToken();
 
@@ -98,8 +99,11 @@
         input: { query },
         execution_mode: "queued"
       };
+      if (!pendingIdempotency || pendingIdempotency.query !== query) {
+        pendingIdempotency = {query, key: newIdempotencyKey()};
+      }
       const result = await window.IAODeviceAuthority.submitQueuedTask(
-        payload, newIdempotencyKey()
+        payload, pendingIdempotency.key
       );
       if (
         !result || typeof result.task_id !== "string" ||
@@ -109,6 +113,7 @@
         throw new Error("INVALID_QUEUED_TASK_RESPONSE");
       }
       latestTaskId = result.task_id;
+      pendingIdempotency = null;
       queryEl.value = "";
       resultEl.textContent = JSON.stringify({
         task_id: result.task_id,
