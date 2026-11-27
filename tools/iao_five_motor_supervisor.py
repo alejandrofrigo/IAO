@@ -185,7 +185,8 @@ def status():
         spec = configured.get(name, {})
         child = children.get(name, {})
         pid = child.get("pid")
-        alive = bool(pid and process_alive(pid))
+        pid_alive = bool(pid and process_alive(pid))
+        alive = bool(pid_alive and process_identity_matches(child))
 
         if alive:
             state = "PROCESS_ALIVE_UNVERIFIED"
@@ -204,6 +205,9 @@ def status():
                         state = "DEGRADED"
                     elif heartbeat["status"] == "STALE":
                         state = "STALE_HEARTBEAT"
+        elif pid_alive:
+            # A reused PID is not the child we launched and cannot inherit its health.
+            state = "STALE_PROCESS_IDENTITY"
         elif not spec.get("enabled") or not spec.get("command"):
             state = "NOT_CONFIGURED"
         else:
