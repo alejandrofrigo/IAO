@@ -160,7 +160,11 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
 
         def _send_fed_json(self, status: int, payload: dict[str, object]) -> None:
             correlation_id = payload.get("correlation_id")
-            if not isinstance(correlation_id, str) or len(correlation_id) != 32:
+            if (
+                not isinstance(correlation_id, str)
+                or len(correlation_id) != 32
+                or any(char not in "0123456789abcdef" for char in correlation_id.lower())
+            ):
                 correlation_id = uuid.uuid4().hex
             content = {**payload, "correlation_id": correlation_id}
             allowed = content.get("allowed_methods")
@@ -171,8 +175,8 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Correlation-ID", correlation_id)
-            if status == 405 and isinstance(allowed, list) and all(
-                isinstance(item, str) for item in allowed
+            if status == 405 and isinstance(allowed, list) and allowed and all(
+                isinstance(item, str) and item.isalpha() for item in allowed
             ):
                 self.send_header("Allow", ", ".join(allowed))
             self.end_headers()
@@ -191,6 +195,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Correlation-ID", correlation_id)
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(data)
 
