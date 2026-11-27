@@ -284,6 +284,16 @@ class AgentAuthority:
                 raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 401)
             db.execute("COMMIT")
         return {"agent_id": agent_id, "identity_id": row[0], "authority": "READ_ONLY"}
+    def status_for_agent(self, agent_id: str) -> dict[str, Any]:
+        now = time.time()
+        with self._db() as db:
+            row = db.execute("SELECT agent_id,scopes_json,created_at,expires_at,revoked_at,key_version,identity_id FROM delegated_agents WHERE agent_id=?", (agent_id,)).fetchone()
+            if row is None:
+                raise AgentAuthorityError("AGENT_NOT_FOUND", 404)
+            identity = db.execute("SELECT key_version,status FROM operator_identities WHERE identity_id=?", (row[6],)).fetchone()
+            binding = db.execute("SELECT key_version FROM primary_device_bindings WHERE identity_id=?", (row[6],)).fetchone()
+        active = bool(identity and binding and identity[1] == "ACTIVE" and identity[0] == binding[0] == row[5] and row[4] is None and row[3] > now)
+        return {"agent_id": row[0], "scopes": json.loads(row[1]), "created_at": int(row[2]), "expires_at": int(row[3]), "revoked": row[4] is not None, "active": active, "authority": "READ_ONLY"}
     def revoke(self, *, identity_id: str, key_version: int, agent_id: str,
                root_signature: bytes, primary_signature: bytes) -> dict[str, str]:
         if not isinstance(agent_id, str) or len(agent_id) != 32:
