@@ -47,3 +47,11 @@ def test_internal_error_audit_redacts_request_path_query_and_exception_text():
 def test_production_container_disables_automatic_client_address_access_logs():
     dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
     assert "--no-access-log" in dockerfile.read_text(encoding="utf-8")
+
+def test_stdlib_server_bind_log_uses_scope_not_address():
+    from omega.server import _bind_scope
+
+    assert _bind_scope("0.0.0.0") == "all_interfaces"
+    assert _bind_scope("127.0.0.1") == "loopback"
+    assert _bind_scope("192.168.10.25") == "configured"
+    assert "192.168.10.25" not in _bind_scope("192.168.10.25")
