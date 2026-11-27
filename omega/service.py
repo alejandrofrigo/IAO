@@ -96,7 +96,7 @@ class OmegaService:
             route_path = urlsplit(path).path.rstrip("/") or "/"
             anchor_required = (
                 route_path == "/v1/operator"
-                or route_path.startswith(("/v1/operator/", "/v1/device/"))
+                or route_path.startswith(("/v1/operator/", "/v1/device/", "/v1/agent/"))
             )
             if not anchor_required:
                 authorization = headers.get("authorization", "")
