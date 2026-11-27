@@ -175,6 +175,11 @@ def status() -> int:
     print("TOR_ONION_DISCOVERY=CONFIGURED_FEEDS_VIA_LOOPBACK_SOCKS5")
     print("INTERVAL_SECONDS=" + str(read_interval()))
     print("REPORT_PRESENT=" + str(report_path.is_file()).lower())
+    from omega.supervision import read_heartbeat
+    heartbeat = read_heartbeat(
+        _heartbeat_path(), expected_component="NODE_NETWORK"
+    )
+    print("HEARTBEAT_STATUS=" + str(heartbeat.get("status", "UNVERIFIED")))
     print("AUTO_ASSIMILATION=QUARANTINED_INVENTORY_ONLY")
     print("AUTO_ENROLLMENT=DISABLED")
     print("REMOTE_CODE_EXECUTION=DISABLED")
@@ -188,6 +193,32 @@ def status() -> int:
         except Exception:
             print("LAST_STATUS=REPORT_INVALID")
     return 0
+
+
+def _heartbeat_path() -> Path:
+    root = Path(os.environ.get(
+        "IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")
+    )).expanduser()
+    return root / "node-network-heartbeat.json"
+
+
+def write_worker_heartbeat(
+    phase: str, *, last_completed: float | None = None,
+    last_result: bool | None = None,
+) -> dict:
+    from omega.supervision import write_heartbeat
+
+    interval = read_interval()
+    return write_heartbeat(
+        _heartbeat_path(),
+        component="NODE_NETWORK",
+        pid=os.getpid(),
+        phase=phase,
+        interval_seconds=interval,
+        stale_after_seconds=max(interval * 2, interval + 60),
+        last_cycle_completed_at=last_completed,
+        last_cycle_result=last_result,
+    )
 
 
 def run_loop() -> int:
@@ -204,9 +235,24 @@ def run_loop() -> int:
             print("DISCOVERY_SUPERVISOR_ALREADY_RUNNING", flush=True)
             return 0
         print("IAO_LIBP2P_DISCOVERY=RUNNING", flush=True)
+        last_completed = None
+        last_result = None
+        write_worker_heartbeat("starting")
         try:
             while True:
+                write_worker_heartbeat(
+                    "cycle_running",
+                    last_completed=last_completed,
+                    last_result=last_result,
+                )
                 report = cycle()
+                last_completed = time.time()
+                last_result = report.get("status") == "DISCOVERY_COMPLETED"
+                write_worker_heartbeat(
+                    "cycle_completed",
+                    last_completed=last_completed,
+                    last_result=last_result,
+                )
                 print(
                     "CYCLE_STATUS=" + report["status"]
                     + " DISCOVERED=" + str(report.get("routing_peers_discovered", 0))
