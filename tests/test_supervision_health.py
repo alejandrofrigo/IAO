@@ -1,6 +1,7 @@
 """Functional health checks must distinguish live processes from fresh cycle evidence."""
 import fcntl
 import os
+import stat
 
 from omega.supervision import read_heartbeat, write_heartbeat
 from tools import iao_autonomous_coordinator as coordinator
@@ -19,6 +20,8 @@ def test_heartbeat_reports_cycle_completion_and_staleness(tmp_path):
         last_cycle_result=False,
         now=1000,
     )
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     fresh = read_heartbeat(
         path, expected_component="PADGE_AUTONOMY", now=1010,
     )
