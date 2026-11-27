@@ -47,6 +47,11 @@ async def _runtime_lifespan(_app):
                 "PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED",
                 "TASK_WORKER_SETTINGS_INVALID",
                 "TASK_WORKER_SETTINGS_OUT_OF_RANGE",
+                "OS_SANDBOX_UNAVAILABLE",
+                "OS_SANDBOX_LAUNCH_FAILED",
+                "OS_SANDBOX_EXECUTION_FAILED",
+                "OS_SANDBOX_PREFLIGHT_FAILED",
+                "OS_SANDBOX_REQUIRED",
             }:
                 reason = "WORKER_START_FAILED"
             if _task_worker_requested():
