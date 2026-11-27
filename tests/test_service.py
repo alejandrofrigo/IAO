@@ -1248,7 +1248,12 @@ class QueuedTaskApiTests(Base):
             "execution_mode": "queued",
         }
         headers = self.queued_headers(payload)
-        status, response = self.call("POST", "/v1/tasks", headers, payload)
+        with patch.object(
+            self.svc.operator_identity_authority,
+            "active_capabilities_for_session",
+            return_value=frozenset({"test.write"}),
+        ):
+            status, response = self.call("POST", "/v1/tasks", headers, payload)
         self.assertEqual(status, 403)
         self.assertEqual(response["state"], "DENIED")
         self.assertEqual(
@@ -1274,9 +1279,14 @@ class QueuedTaskApiTests(Base):
             "input": {"value": "x"},
             "execution_mode": "queued",
         }
-        status, response = self.call(
-            "POST", "/v1/tasks", self.queued_headers(payload), payload
-        )
+        with patch.object(
+            self.svc.operator_identity_authority,
+            "active_capabilities_for_session",
+            return_value=frozenset({"test.remote_read"}),
+        ):
+            status, response = self.call(
+                "POST", "/v1/tasks", self.queued_headers(payload), payload
+            )
         self.assertEqual(status, 403)
         self.assertEqual(
             response["reason"], "QUEUED_TASK_CAPABILITY_NOT_ALLOWLISTED"
