@@ -119,7 +119,19 @@ def status():
         alive = bool(pid and process_alive(pid))
 
         if alive:
-            state = "RUNNING"
+            state = "PROCESS_ALIVE_UNVERIFIED"
+            if name in {"PADGE", "AUTONOMY_CONTINUOUS"}:
+                from omega.supervision import read_heartbeat
+
+                heartbeat = read_heartbeat(
+                    ROOT / ".state" / "iao-autonomy" / "coordinator-heartbeat.json",
+                    expected_component="PADGE_AUTONOMY",
+                )
+                if heartbeat.get("pid") == int(pid):
+                    if heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
+                        state = heartbeat["status"]
+                    elif heartbeat["status"] == "STALE":
+                        state = "STALE_HEARTBEAT"
         elif not spec.get("enabled") or not spec.get("command"):
             state = "NOT_CONFIGURED"
         else:
@@ -134,7 +146,7 @@ def status():
             print("  COMMAND_CONFIGURED=NO")
 
     print("\nPADGE y autonomía continua comparten el coordinador.")
-    print("La presencia de un proceso no demuestra salud funcional.")
+    print("Solo un heartbeat reciente del ciclo valida el coordinador; los demás PID quedan sin verificar.")
     print(f"EVENTS={EVENTS}")
 
 
