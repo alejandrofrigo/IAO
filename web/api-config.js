@@ -60,9 +60,10 @@
   global.IAO_API_CONFIG_STATUS = base ? "configured" : "blocked";
   global.iaoApiUrl = function iaoApiUrl(path) {
     if (!base) throw new Error(configError || "API_BASE_NOT_CONFIGURED");
+    const rawPath = typeof path === "string" ? path.split("?", 1)[0] : "";
     if (typeof path !== "string" ||
         !(path.startsWith("/v1/") || path.startsWith("/health/")) ||
-        path.startsWith("//") || path.includes("\\")) {
+        rawPath.startsWith("//") || rawPath.includes("//") || rawPath.includes("\\")) {
       throw new Error("INVALID_API_PATH");
     }
     const target = new URL(path.slice(1), base + "/");
