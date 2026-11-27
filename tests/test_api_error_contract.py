@@ -110,6 +110,32 @@ def test_signed_non_decimal_content_length_is_rejected():
     assert error.headers["x-content-type-options"] == "nosniff"
 
 
+def test_api_body_rejects_single_oversized_stream_chunk():
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b"x" * (main.MAX_BODY + 1),
+            "more_body": False,
+        }
+
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/device/challenge",
+        "headers": [(b"content-length", str(main.MAX_BODY).encode("ascii"))],
+        "query_string": b"",
+        "server": ("test", 80),
+        "client": ("test", 123),
+        "scheme": "http",
+        "http_version": "1.1",
+        "root_path": "",
+    }, receive=receive)
+    _body, error = asyncio.run(main._read_bounded_service_body(request))
+    assert error.status_code == 413
+    assert error.headers["cache-control"] == "no-store"
+    assert error.headers["x-content-type-options"] == "nosniff"
+
+
 def test_service_response_omits_empty_allow_header():
     response = main._service_response(
         405,
