@@ -397,7 +397,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             self.end_headers()
             self.wfile.write(data)
 
-        do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = _do
+        do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _do
 
         def log_message(self, *a: object) -> None:
             pass
