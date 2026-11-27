@@ -159,7 +159,7 @@ class OmegaService:
                 bound_operator_session = self.operator_identity_authority.verify_authenticated_session(
                     p.subject, h[7:],
                 )
-            except OperatorIdentityError:
+            except Exception:
                 bound_operator_session = False
         if p.subject.startswith("operator:") and not bound_operator_session:
             raise ApiError(401, "OPERATOR_SESSION_REVOKED")
