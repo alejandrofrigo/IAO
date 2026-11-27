@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from omega.store import Store
 from omega.tools.registry import ToolRegistry
 from omega.federation import Node, verify_identity_challenge
-from omega.federation_transport import fetch_public_json
+from omega.federation_transport import fetch_public_json, fetch_onion_json, FederationTransportError
 import omega.federation_protocols.native  # noqa: F401
 import omega.federation_protocols.nostr   # noqa: F401
 from omega.federation_protocols import probe_any, get as get_adapter
@@ -117,6 +117,123 @@ def discover_feed(url, timeout=10):
     audit("discovery_feed_ok", peers=len(out))
     return out
 
+
+
+def discover_onion_feed(url, timeout=15):
+    """Discover public IAO candidates from a v3 onion JSON feed via local Tor SOCKS."""
+    try:
+        fetch_onion_json  # fail early if the Tor transport is unavailable
+        from omega.federation_transport import _parse_onion_url
+        _parse_onion_url(url)
+        data = fetch_onion_json(url, timeout=timeout, max_bytes=500_000)
+    except Exception as exc:
+        audit("discovery_onion_feed_failed", error_type=type(exc).__name__)
+        return []
+    if isinstance(data, list):
+        peers = data
+    elif isinstance(data, dict):
+        peers = data.get("peers", [])
+    else:
+        return []
+    if not isinstance(peers, list):
+        return []
+    out = []
+    for peer in peers[:100]:
+        if not isinstance(peer, dict):
+            continue
+        endpoint = peer.get("url") or peer.get("onion_url")
+        if not isinstance(endpoint, str):
+            continue
+        try:
+            _parse_onion_url(endpoint)
+        except FederationTransportError:
+            continue
+        peer_id = peer.get("peer_id")
+        if peer_id is not None and (
+            not isinstance(peer_id, str) or not 20 <= len(peer_id) <= 120
+            or not peer_id.isascii() or not peer_id.isalnum()
+        ):
+            peer_id = None
+        out.append({
+            "service_url": endpoint,
+            "peer_id": peer_id,
+            "source": "tor_onion_feed",
+            "identity_state": "UNVERIFIED",
+            "participation_state": "CANDIDATE_ONLY",
+            "capabilities": [],
+            "granted_capabilities": [],
+            "remote_code_execution": False,
+            "control_authority": False,
+        })
+    audit("discovery_onion_feed_ok", peers=len(out))
+    return out
+
+
+def merge_onion_candidates(candidates):
+    """Persist onion service candidates separately from HTTPS federation nodes."""
+    path = STATE / "iao-onion-candidates.json"
+    if path.is_symlink():
+        raise RuntimeError("ONION_CANDIDATE_REGISTRY_SYMLINK_REFUSED")
+    data = load(path, {"schema": 1, "services": {}})
+    services = data.get("services", {})
+    if not isinstance(services, dict) or len(services) > 2000:
+        raise RuntimeError("ONION_CANDIDATE_REGISTRY_INVALID")
+    added = observed = 0
+    now = utc()
+    from omega.federation_transport import _parse_onion_url
+    for candidate in candidates[:100]:
+        if not isinstance(candidate, dict) or candidate.get("source") != "tor_onion_feed":
+            continue
+        endpoint = candidate.get("service_url")
+        try:
+            host, port, target = _parse_onion_url(endpoint)
+        except Exception:
+            continue
+        key = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
+        previous = services.get(key, {})
+        if previous and not isinstance(previous, dict):
+            raise RuntimeError("ONION_CANDIDATE_RECORD_INVALID")
+        services[key] = {
+            "service_url": endpoint,
+            "onion_host": host,
+            "virtual_port": port,
+            "path": target,
+            "peer_id": candidate.get("peer_id"),
+            "source": "tor_onion_feed",
+            "discovery_state": "FEED_ADVERTISED_UNPROBED",
+            "identity_state": "UNVERIFIED",
+            "participation_state": "CANDIDATE_ONLY",
+            "first_seen": previous.get("first_seen", now),
+            "last_seen": now,
+            "capabilities": [],
+            "granted_capabilities": [],
+            "remote_code_execution": False,
+            "control_authority": False,
+        }
+        observed += 1
+        if not previous:
+            added += 1
+    ordered = sorted(services.items(), key=lambda item: item[1].get("last_seen", ""), reverse=True)[:1000]
+    payload = {"schema": 1, "services": dict(ordered)}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import tempfile
+    fd, name = tempfile.mkstemp(prefix=".onion-candidates-", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        try:
+            os.unlink(name)
+        except OSError:
+            pass
+        raise
+    return {"new": added, "observed": observed, "total": len(payload["services"])}
 
 def _validate_local_ipfs_api(value):
     """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
@@ -237,6 +354,11 @@ def run_discovery():
     for f in sources.get("feeds", []):
         if isinstance(f, str) and f.startswith("https://"):
             candidates.extend(discover_feed(f))
+    onion_feeds = sources.get("onion_feeds", [])
+    if isinstance(onion_feeds, list):
+        for feed in onion_feeds[:20]:
+            if isinstance(feed, str):
+                candidates.extend(discover_onion_feed(feed))
     dht = sources.get("dht", {})
     if dht.get("enabled"):
         candidates.extend(discover_dht(dht.get("ipfs_api", "http://127.0.0.1:5001")))
@@ -516,6 +638,8 @@ def run_cycle(dry_run=False, discover=True):
         candidates = run_discovery()
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
         discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
+        onion_candidates = [item for item in candidates if isinstance(item, dict) and item.get("source") == "tor_onion_feed"]
+        discovery_summary["onion_assimilation"] = merge_onion_candidates(onion_candidates)
         discovery_summary["candidates_discovered"] = len(candidates)
         try:
             from omega.libp2p_discovery import discover_sync
