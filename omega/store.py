@@ -14,7 +14,7 @@ from typing import Any
 from omega.audit import GENESIS_HASH, make_event, verify_chain
 from omega.control import InvalidTransition, transition
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversation(
