@@ -369,7 +369,18 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self.send_header("Allow", ", ".join(allowed_methods))
             self.end_headers()
             self.wfile.write(data)
-            sys.stderr.write(json.dumps({"m": self.command, "p": self.path.split("?")[0], "s": status, "cid": correlation_id}) + "\n")
+            request_path = self.path.split("?", 1)[0]
+            route_group = (
+                "federation" if request_path.startswith("/fed/v1/")
+                else "api" if request_path.startswith("/v1/")
+                else "health" if request_path.startswith("/health/")
+                else "web" if request_path in ("/", "/index.html")
+                else "other"
+            )
+            sys.stderr.write(json.dumps({
+                "m": self.command, "route_group": route_group,
+                "s": status, "cid": correlation_id,
+            }) + "\n")
 
         do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = _do
 
