@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import apps.api.main as api_main
 from starlette.requests import Request
+from omega import supervision
 
 
 def _response_payload(response):
@@ -87,7 +88,7 @@ def test_readiness_hides_internal_runtime_exception(monkeypatch):
 def test_task_worker_readiness_requires_heartbeat_and_live_pid(monkeypatch, tmp_path):
     monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(
-        api_main,
+        supervision,
         "read_heartbeat",
         lambda *_args, **_kwargs: {"status": "HEALTHY", "pid": 4242},
         raising=False,
@@ -105,7 +106,7 @@ def test_task_worker_readiness_requires_heartbeat_and_live_pid(monkeypatch, tmp_
 
     def missing(pid, sig):
         raise ProcessLookupError
-    monkeypatch.setattr(api_main, "read_heartbeat", lambda *_a, **_k: {"status": "HEALTHY", "pid": 4242}, raising=False)
+    monkeypatch.setattr(supervision, "read_heartbeat", lambda *_a, **_k: {"status": "HEALTHY", "pid": 4242}, raising=False)
     monkeypatch.setattr(api_main.os, "kill", missing)
     assert api_main._task_worker_health() == "process_not_alive"
 
