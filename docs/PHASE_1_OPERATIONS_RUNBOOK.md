@@ -22,6 +22,8 @@ El coordinador registra fases `starting`, `cycle_running` y `cycle_completed` en
 | `PROCESS_ALIVE_UNVERIFIED` | Hay PID de un motor, pero no existe protocolo de salud funcional para él |
 | `STALE` (heartbeat) | `read_heartbeat` detecta que el heartbeat superó el límite de frescura; el estado agregado del coordinador pasa a `DEGRADED_UNVERIFIED` |
 
+El `TaskWorker` standalone publica opcionalmente un heartbeat `TASK_WORKER` sin `worker_id`, sujeto ni task ID. Su resultado de ciclo fallido se clasifica `DEGRADED`. Esta señal todavía no está integrada en el supervisor de cinco motores ni se usa para elevar readiness de la API.
+
 Los heartbeats y eventos operativos se guardan bajo directorios privados (0700) y archivos privados (0600). El logger redacta prompts, consultas, trazas, comandos y rutas; los campos string desconocidos y listas de texto no confiables se convierten en digest por defecto. Solo conserva etiquetas de esquema/códigos acotados y nombres de capabilities validados. No deben añadirse prompts, consultas, credenciales ni contenido de usuario a los logs. El barrido del árbol de trabajo no limpia commits anteriores ni artefactos históricos. Una reescritura de historial o force-push requiere autorización explícita y coordinación de la revisión; no se realiza automáticamente.
 
 ## Persistencia y recuperación
