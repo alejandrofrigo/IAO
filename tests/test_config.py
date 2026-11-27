@@ -1,6 +1,6 @@
 import unittest
 
-from omega.config import load_settings, validate_persistent_keys
+from omega.config import load_settings, session_signing_key, validate_persistent_keys
 
 
 class ConfigTests(unittest.TestCase):
@@ -85,3 +85,30 @@ class PersistentKeyTests(unittest.TestCase):
     def test_rejects_whitespace_padded_keys(self) -> None:
         with self.assertRaisesRegex(ValueError, "PERSISTENT_KEYS_INVALID_FORMAT"):
             validate_persistent_keys(" " + "a" * 32, "b" * 32)
+
+
+    def test_production_uses_only_the_dedicated_session_signing_key(self) -> None:
+        self.assertEqual(
+            session_signing_key({
+                "APP_ENV": "production",
+                "IAO_SESSION_SIGNING_KEY": "p" * 40,
+                "OMEGA_DEV_TOKEN_KEY": "d" * 40,
+            }),
+            "p" * 40,
+        )
+        self.assertEqual(
+            session_signing_key({
+                "APP_ENV": "production",
+                "OMEGA_DEV_TOKEN_KEY": "d" * 40,
+            }),
+            "",
+        )
+
+    def test_development_keeps_legacy_dev_key_compatibility(self) -> None:
+        self.assertEqual(
+            session_signing_key({
+                "APP_ENV": "development",
+                "OMEGA_DEV_TOKEN_KEY": "d" * 40,
+            }),
+            "d" * 40,
+        )
