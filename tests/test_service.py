@@ -21,7 +21,7 @@ from omega.operator_identity import OperatorIdentityAuthority, OperatorIdentityE
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-KEY = "unit-test-key-0123456789"
+KEY = "unit-test-auth-key-0123456789-abcdef"
 CORPUS = Path(__file__).resolve().parent.parent / "docs" / "corpus"
 
 
