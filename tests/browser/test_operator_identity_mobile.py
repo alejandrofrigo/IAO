@@ -227,6 +227,49 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 assert session["body"]["scopes"] == []
                 assert session["body"]["subject"].startswith("operator:")
 
+                page.on("dialog", lambda dialog: dialog.accept())
+                grant = panel.get_by_role(
+                    "button", name="Autorizar búsqueda local de solo lectura (15 min)"
+                )
+                assert not grant.is_disabled()
+                grant.click()
+                page.get_by_text("CAPACIDAD CONCEDIDA", exact=False).wait_for(timeout=15000)
+
+                task_panel = page.locator("#iao-task-intake-panel")
+                task_query = task_panel.locator("#iao-task-query")
+                task_submit = task_panel.get_by_role(
+                    "button", name="Enviar búsqueda a la cola local"
+                )
+                task_query.fill("verificar evidencia de auditoría local")
+                page.wait_for_function(
+                    "() => !document.querySelector('#iao-task-submit').disabled",
+                    timeout=10000,
+                )
+                task_submit.click()
+                page.wait_for_function(
+                    """() => {
+                      const result = document.querySelector('#iao-task-result');
+                      return result && result.textContent.includes('"state": "QUEUED"');
+                    }""",
+                    timeout=15000,
+                )
+                queued = page.locator("#iao-task-result").inner_text()
+                assert '"capability": "knowledge.search"' in queued, queued
+                task_panel.get_by_role(
+                    "button", name="Consultar estado de la última tarea"
+                ).click()
+                page.get_by_text("Estado consultado: QUEUED.", exact=True).wait_for(timeout=15000)
+
+                revoke_grant = panel.get_by_role(
+                    "button", name="Revocar autorización de búsqueda"
+                )
+                revoke_grant.click()
+                page.get_by_text("CAPACIDAD REVOCADA", exact=False).wait_for(timeout=15000)
+                page.wait_for_function(
+                    "() => document.querySelector('#iao-task-submit').disabled",
+                    timeout=10000,
+                )
+
                 # A browser reload must preserve non-exportable identity keys,
                 # but must not resurrect the short-lived operator bearer session.
                 page.reload(wait_until="networkidle")
