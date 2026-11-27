@@ -62,7 +62,7 @@ def write_heartbeat(
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
-            stream.write("\\n")
+            stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -84,7 +84,11 @@ def read_heartbeat(
     """Return a bounded health classification; malformed or stale is unverified."""
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        if (
+            not isinstance(payload, dict)
+            or isinstance(payload.get("schema_version"), bool)
+            or payload.get("schema_version") != 1
+        ):
             raise ValueError
         if payload.get("component") != expected_component:
             raise ValueError
@@ -100,6 +104,19 @@ def read_heartbeat(
             or stale_after < 1
             or phase not in _HEARTBEAT_PHASES
         ):
+            raise ValueError
+        last_completed = payload.get("last_cycle_completed_at")
+        last_result = payload.get("last_cycle_result")
+        if (
+            last_completed is not None
+            and (
+                isinstance(last_completed, bool)
+                or not isinstance(last_completed, (int, float))
+                or not math.isfinite(float(last_completed))
+            )
+        ):
+            raise ValueError
+        if last_result is not None and not isinstance(last_result, bool):
             raise ValueError
         current = time.time() if now is None else float(now)
         age = current - float(updated_at)
