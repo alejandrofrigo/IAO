@@ -265,7 +265,8 @@ def run_loop() -> int:
                 last_result = (
                     report.get("status") == "DISCOVERY_COMPLETED"
                     or report.get("tor_onion_discovery", {}).get("status")
-                    == "TOR_DISCOVERY_COMPLETED"
+                    == "ONION_DISCOVERY_COMPLETED"
+                    and report.get("tor_onion_discovery", {}).get("feeds_checked", 0) > 0
                 )
                 write_worker_heartbeat(
                     "cycle_completed",
