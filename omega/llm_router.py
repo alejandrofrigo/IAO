@@ -210,8 +210,14 @@ def _request(provider, messages, timeout):
     return parse_chat_response(raw)
 
 
-def chat_with_metadata(messages, timeout=25, requirements=None):
-    """Route by declared capability, modality, configured cost, health and priority."""
+def chat_with_metadata(messages, timeout=25, requirements=None, max_model_calls=3):
+    """Route by declared constraints and a hard per-request provider-call budget."""
+    if (
+        isinstance(max_model_calls, bool)
+        or not isinstance(max_model_calls, int)
+        or not 1 <= max_model_calls <= 8
+    ):
+        raise ValueError("INVALID_MODEL_CALL_BUDGET")
     if (
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))
@@ -230,6 +236,7 @@ def chat_with_metadata(messages, timeout=25, requirements=None):
     if not isinstance(states, dict):
         states = {}
     candidates = _ordered_candidates(configured, states, route, time.time())
+    candidates = candidates[:max_model_calls]
 
     errors = []
     for p in candidates:
@@ -309,9 +316,11 @@ def chat_with_metadata(messages, timeout=25, requirements=None):
     raise RuntimeError("IAO_ALL_PROVIDERS_FAILED: " + ", ".join(errors))
 
 
-def chat(messages, timeout=25, requirements=None):
-    """Backward-compatible text-only router interface with optional route constraints."""
-    return chat_with_metadata(messages, timeout, requirements)["reply"]
+def chat(messages, timeout=25, requirements=None, max_model_calls=3):
+    """Backward-compatible text-only interface with route and call-budget constraints."""
+    return chat_with_metadata(
+        messages, timeout, requirements, max_model_calls
+    )["reply"]
 
 
 def status():
@@ -353,12 +362,15 @@ class RouterModelAdapter:
         """Backward-compatible text-only adapter interface."""
         return self.chat_with_metadata(messages)["reply"]
 
-    def chat_with_metadata(self, messages, requirements=None):
+    def chat_with_metadata(self, messages, requirements=None, max_model_calls=3):
         from omega.adapters.model import ModelError
 
         prepared = self._prepare(messages)
         try:
-            return chat_with_metadata(prepared, requirements=requirements)
+            return chat_with_metadata(
+                prepared, requirements=requirements,
+                max_model_calls=max_model_calls,
+            )
         except Exception:
             # Never pass provider response bodies, credentials, or prompts
             # into service errors or audit records.
