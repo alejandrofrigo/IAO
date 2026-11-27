@@ -131,3 +131,42 @@ def test_stdlib_api_rejects_invalid_and_oversized_content_length():
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=3)
+
+
+def test_stdlib_service_exception_returns_safe_503(monkeypatch):
+    class BrokenService:
+        def handle(self, _method, _path, _headers, _body):
+            raise RuntimeError("private-service-exception-marker")
+
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0), make_handler(BrokenService()),
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{httpd.server_address[1]}/v1/memory",
+        method="GET",
+    )
+    captured = StringIO()
+    try:
+        with redirect_stderr(captured):
+            try:
+                urllib.request.urlopen(request, timeout=3)
+                raise AssertionError("service exception must return 503")
+            except urllib.error.HTTPError as response:
+                payload = __import__("json").loads(response.read())
+                assert response.code == 503
+                assert payload["error"] == "IAO_SERVICE_UNAVAILABLE"
+                assert len(payload["correlation_id"]) == 32
+                assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
+                assert response.headers["Cache-Control"] == "no-store"
+                assert response.headers["X-Content-Type-Options"] == "nosniff"
+                assert "private-service-exception-marker" not in str(payload)
+        log = captured.getvalue()
+        assert "API_HTTP_ERROR" in log
+        assert "RuntimeError" in log
+        assert "private-service-exception-marker" not in log
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=3)
