@@ -1,6 +1,8 @@
 import json
 import sqlite3
 import time
+import threading
+import hashlib
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -22,13 +24,23 @@ class FakeOperatorIdentity:
         self.database = database
         self.root = ec.generate_private_key(ec.SECP256R1())
         self.primary = ec.generate_private_key(ec.SECP256R1())
+        self.lock = threading.RLock()
+        primary_pem = _pem(self.primary)
+        primary_der = self.primary.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        primary_id = hashlib.sha256(primary_der).hexdigest()
         with sqlite3.connect(self.database) as db:
             db.executescript(
                 "CREATE TABLE operator_identities(identity_id TEXT PRIMARY KEY,key_version INTEGER,status TEXT);"
-                "CREATE TABLE primary_device_bindings(identity_id TEXT PRIMARY KEY,key_version INTEGER);"
+                "CREATE TABLE primary_device_bindings(identity_id TEXT PRIMARY KEY,key_version INTEGER,device_id TEXT,device_public_key_pem TEXT);"
             )
             db.execute("INSERT INTO operator_identities VALUES(?,?,?)", ("a" * 32, 3, "ACTIVE"))
-            db.execute("INSERT INTO primary_device_bindings VALUES(?,?)", ("a" * 32, 3))
+            db.execute(
+                "INSERT INTO primary_device_bindings VALUES(?,?,?,?)",
+                ("a" * 32, 3, primary_id, primary_pem),
+            )
 
     def primary_device_public_key(self):
         return _pem(self.primary)
@@ -170,3 +182,66 @@ def test_root_rotation_invalidates_existing_delegation(tmp_path):
     assert status["agents"][0]["active"] is False
     with pytest.raises(AgentAuthorityError, match="OPERATOR_ROOT_KEY_VERSION_MISMATCH"):
         authority.issue_challenge("a" * 32, 3)
+
+
+def test_root_rotation_between_challenge_and_grant_commit_is_rejected(tmp_path):
+    authority, operator, agent = _setup(tmp_path)
+    challenge = authority.issue_challenge("a" * 32, 3)
+    _, _, fingerprint = authority._public_key(_pem(agent))
+    expiry = int(time.time()) + 300
+    payload = authority._grant_payload(
+        "a" * 32, 3, challenge["nonce"], fingerprint,
+        ["agent.status.read"], expiry,
+    )
+    root_sig = operator.root.sign(
+        ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+    )
+    primary_sig = operator.primary.sign(
+        DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+    )
+    with sqlite3.connect(operator.database) as db:
+        db.execute("UPDATE operator_identities SET key_version=4")
+        db.execute("UPDATE primary_device_bindings SET key_version=4")
+    with pytest.raises(AgentAuthorityError, match="OPERATOR_OR_PRIMARY_DEVICE_CHANGED"):
+        authority.create_delegation(
+            identity_id="a" * 32, key_version=3, nonce=challenge["nonce"],
+            agent_public_key_pem=_pem(agent), scopes=["agent.status.read"],
+            expires_at=expiry, root_signature=root_sig,
+            primary_signature=primary_sig,
+        )
+
+
+def test_primary_device_replacement_invalidates_old_challenge_signature(tmp_path):
+    authority, operator, agent = _setup(tmp_path)
+    challenge = authority.issue_challenge("a" * 32, 3)
+    _, _, fingerprint = authority._public_key(_pem(agent))
+    expiry = int(time.time()) + 300
+    payload = authority._grant_payload(
+        "a" * 32, 3, challenge["nonce"], fingerprint,
+        ["agent.status.read"], expiry,
+    )
+    root_sig = operator.root.sign(
+        ROOT_SIGNATURE_DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+    )
+    old_primary_sig = operator.primary.sign(
+        DOMAIN + payload, ec.ECDSA(hashes.SHA256())
+    )
+    operator.primary = ec.generate_private_key(ec.SECP256R1())
+    new_primary_pem = _pem(operator.primary)
+    new_der = operator.primary.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    new_id = hashlib.sha256(new_der).hexdigest()
+    with sqlite3.connect(operator.database) as db:
+        db.execute(
+            "UPDATE primary_device_bindings SET device_id=?,device_public_key_pem=?",
+            (new_id, new_primary_pem),
+        )
+    with pytest.raises(AgentAuthorityError, match="INVALID_PRIMARY_DEVICE_SIGNATURE"):
+        authority.create_delegation(
+            identity_id="a" * 32, key_version=3, nonce=challenge["nonce"],
+            agent_public_key_pem=_pem(agent), scopes=["agent.status.read"],
+            expires_at=expiry, root_signature=root_sig,
+            primary_signature=old_primary_sig,
+        )
