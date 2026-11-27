@@ -864,6 +864,8 @@ def serve():
         try:
             if server is None:
                 c = cfg()
+                heartbeat_interval = max(1, int(c["heartbeat_interval"]))
+                heartbeat_stale_after = max(180, heartbeat_interval * 3)
                 bind_host = str(c["listen_host"])
                 bind_port = int(c["listen_port"])
                 server = ThreadingHTTPServer(
