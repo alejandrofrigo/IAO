@@ -95,7 +95,7 @@ jobs:
 
       - name: Verify locked development installation
         run: |
-          uv sync --locked --python ${{ matrix.python-version }} --extra dev
+          uv sync --locked --python ${{ matrix.python-version }} --extra dev --extra p2p --extra tor
           uv run --locked --python ${{ matrix.python-version }} --with pip python -m pip check
 
       - name: Publish resolved lockfile for review
