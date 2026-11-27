@@ -149,12 +149,22 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 self.send_header("Vary", "Origin")
 
         def _send_fed_json(self, status: int, payload: dict[str, object]) -> None:
-            data = json.dumps(payload, separators=(",", ":")).encode()
+            correlation_id = payload.get("correlation_id")
+            if not isinstance(correlation_id, str) or len(correlation_id) != 32:
+                correlation_id = uuid.uuid4().hex
+            content = {**payload, "correlation_id": correlation_id}
+            allowed = content.get("allowed_methods")
+            data = json.dumps(content, separators=(",", ":")).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Correlation-ID", correlation_id)
+            if status == 405 and isinstance(allowed, list) and all(
+                isinstance(item, str) for item in allowed
+            ):
+                self.send_header("Allow", ", ".join(allowed))
             self.end_headers()
             self.wfile.write(data)
 
@@ -163,7 +173,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             route = self.path.split("?", 1)[0]
             if route == "/fed/v1/contract":
                 if self.command != "GET":
-                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED", "allowed_methods": ["GET"]})
                     return
                 if fed_node is None:
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
@@ -173,7 +183,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
 
             if route == "/fed/v1/publication":
                 if self.command != "GET":
-                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED", "allowed_methods": ["GET"]})
                     return
                 if fed_node is None:
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
@@ -205,7 +215,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
 
             if route == "/fed/v1/identity":
                 if self.command != "GET":
-                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED", "allowed_methods": ["GET"]})
                     return
                 if fed_node is None:
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
@@ -215,7 +225,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
 
             if route == "/fed/v1/handshake":
                 if self.command != "POST":
-                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED", "allowed_methods": ["POST"]})
                     return
                 if fed_node is None:
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
@@ -249,7 +259,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             # Endpoint interno de federacion: no usa CORS ni la API publica.
             if self.path.split("?", 1)[0] == "/fed/v1/message":
                 if self.command != "POST":
-                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED"})
+                    self._send_fed_json(405, {"error": "METHOD_NOT_ALLOWED", "allowed_methods": ["POST"]})
                     return
                 if fed_node is None:
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
@@ -278,6 +288,10 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     return
                 status, payload = fed_node.handle(body)
                 self._send_fed_json(status, payload)
+                return
+
+            if route.startswith("/fed/v1/"):
+                self._send_fed_json(404, {"error": "NOT_FOUND"})
                 return
 
             if self.command == "OPTIONS":
