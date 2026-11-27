@@ -211,6 +211,15 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 bind.click()
                 page.get_by_text("DISPOSITIVO VINCULADO", exact=False).wait_for(timeout=15000)
 
+                task_panel = page.locator("#taskPanel")
+                task_panel.wait_for(state="visible", timeout=10000)
+                page.locator("#taskQuery").fill("buscar evidencia de auditoría")
+                page.get_by_role(
+                    "button", name="Encolar consulta de solo lectura"
+                ).click()
+                page.get_by_text("estado: QUEUED", exact=False).wait_for(timeout=15000)
+                page.get_by_role("button", name="Cancelar tarea").click()
+                page.get_by_text("cancelación: CANCELLED", exact=False).wait_for(timeout=15000)
                 session = page.evaluate(
                     """async () => {
                       const token = window.iaoGetSessionToken();
