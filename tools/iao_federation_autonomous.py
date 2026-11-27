@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Federacion autonoma externa de IAO - pipeline con validacion mutua."""
 from __future__ import annotations
+import argparse
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import secrets
 import ssl
-import argparse, asyncio, base64, hashlib, json, os, secrets, sys, time, urllib.request
+import sys
+import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.hazmat.primitives.serialization import load_pem_private_key  # noqa: E402
 from omega.store import Store  # noqa: E402
 from omega.tools.registry import ToolRegistry  # noqa: E402
 from omega.federation import Node, verify_identity_challenge  # noqa: E402
