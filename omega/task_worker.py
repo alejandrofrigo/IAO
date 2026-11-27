@@ -87,6 +87,7 @@ class TaskWorker:
 
         task_id = task["id"]
         owner = task["owner"]
+        self._active_lease_generation = task.get("lease_generation")
         try:
             intent = json.loads(task["intent_json"])
             capability = (intent.get("allowed_capabilities") or [None])[0]
@@ -216,7 +217,8 @@ class TaskWorker:
                 datetime.now(timezone.utc).isoformat(),
             )
             if not self.store.update_claimed_task(
-                task_id, self.worker_id, "VERIFYING"
+                task_id, self.worker_id, "VERIFYING",
+                lease_generation=self._active_lease_generation,
             ):
                 self.store.audit(
                     "system", "TASK_WORKER_STALE_CLAIM", task_id,
@@ -256,7 +258,8 @@ class TaskWorker:
         self, task_id: str, owner: str, state: str, result: dict[str, Any]
     ) -> bool:
         if not self.store.update_claimed_task(
-            task_id, self.worker_id, state, result, release=True
+            task_id, self.worker_id, state, result, release=True,
+            lease_generation=getattr(self, "_active_lease_generation", None),
         ):
             self.store.audit(
                 "system", "TASK_WORKER_STALE_COMPLETION", task_id,
