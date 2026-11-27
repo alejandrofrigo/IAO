@@ -890,6 +890,30 @@ class AuthTests(Base):
             for event in events
         ))
 
+    def test_internet_query_audit_stores_digest_not_user_text(self) -> None:
+        from omega import deepseek_web
+
+        query = "private-query-audit-marker"
+        with patch.object(
+            deepseek_web, "obtener_respuesta_internet",
+            return_value="stubbed response",
+        ):
+            status, payload = self.call(
+                "POST", "/v1/federation/internet",
+                self.tok("guest-like", ["federation.internet"]),
+                {"query": query},
+            )
+        self.assertEqual((status, payload["answer"]), (200, "stubbed response"))
+        events = self.svc.store._all_events()
+        event = next(
+            item for item in events if item["event_type"] == "INTERNET_QUERY"
+        )
+        self.assertEqual(
+            event["details"]["query_digest"],
+            hashlib.sha256(query.encode()).hexdigest(),
+        )
+        self.assertNotIn(query, json.dumps(events))
+
     def test_operator_bearer_without_root_bound_session_is_read_only_denied(self) -> None:
         token = issue_token(
             KEY, "operator:" + "a" * 32,
