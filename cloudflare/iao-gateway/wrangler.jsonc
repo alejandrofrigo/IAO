@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "iao-gateway",
   "main": "src/index.js",
-  "compatibility_date": "2026-11-27",
+  "compatibility_date": "2026-11-26",
   "workers_dev": true,
   "observability": {
     "enabled": true

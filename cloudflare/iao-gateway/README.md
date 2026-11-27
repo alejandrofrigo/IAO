@@ -1,55 +1,57 @@
-# IAO Cloudflare gateway foundation
+# IAO Cloudflare gateway — fixed-origin API proxy phase
 
-**Status: foundation only — not deployed, not connected to Termux, and not ready.**
+**Status: code and tests added; not deployed; not connected to Termux; not production-ready.**
 
-This isolated Worker workspace deliberately exposes only liveness and a public,
-non-sensitive protocol contract. Task submission, agent polling, task claims,
-result submission and all command routes return HTTP 503. The Durable Object
-binding is reserved but its fetch handler fails closed.
+The Worker forwards a narrow set of requests to one operator-configured, fixed HTTPS API origin. The origin API remains the only authority for operator identity, delegated-agent grants, authorization, task storage, leases, audit and execution policy.
 
-## Why the gateway is not enabled
+## What this phase does
 
-The existing IAO API has a root identity and one cryptographically bound
-primary device. A queued task is accepted only after operator-session and
-device-proof checks. The existing Python task worker also revalidates that
-authority and currently blocks production execution pending its documented
-readiness evidence.
+- Exposes liveness independently of readiness.
+- Forwards only an explicit allowlist of public-chat, operator/device authentication, signed task submission/status, health and read-only agent challenge/status routes to the fixed IAO_API_ORIGIN. Unknown `/v1/*` paths are rejected by default.
+- Forwards only POST /v1/agent/challenge and GET /v1/agent/status for the signed, read-only Termux agent protocol.
+- Forwards the explicit dual-signed operator capability grant/revocation challenge and status routes; the upstream API remains responsible for verifying root/device signatures, session binding, expiry, policy and revocation.
+- Preserves the four signed agent headers: X-IAO-Agent-Id, X-IAO-Agent-Nonce, X-IAO-Agent-Timestamp and X-IAO-Agent-Signature.
+- Also preserves only the existing API headers required for ordinary authentication: Authorization, Content-Type, Idempotency-Key and X-IAO-Device-Proof.
+- Does not forward cookies, client IP headers, browser identity headers or arbitrary incoming headers.
+- Requires an HTTPS origin with no credentials, path, query or fragment; rejects localhost and IP-literal targets.
+- Caps request bodies at 64 KiB, allows only GET/POST, blocks redirects and never follows an upstream redirect.
+- Keeps agent task polling, claiming, completion and all other /v1/agent/* routes disabled.
+- Keeps unlisted sensitive API routes (including federation internet actions, audit reads, memory endpoints and unknown operator/device controls) blocked. The API remains responsible for authorization on every forwarded route.
+- Keeps privileged commands disabled. The Worker does not execute tasks.
+- Leaves the Durable Object broker disabled: IAO's existing Python SQLite task store remains the single queue and lease authority.
 
-A Cloudflare broker must not create a second, weaker authority registry or
-accept a bearer secret as a substitute for the root plus primary-device proof.
-The remaining integration must define and test:
+The challenge and status routes are only transport pass-throughs. They do not enroll an agent or grant authority. The upstream API must validate the delegated-agent record, one-time challenge, signature, expiry, revocation and root/primary-device binding.
 
-1. A server-verifiable handoff from the existing API authority to the broker,
-   without exporting private keys, bearer tokens or recovery material.
-2. A Termux agent identity bound to the same registered primary device, not a
-   second independently enrolled controller.
-3. Signed, nonce-bound, expiring poll/claim/complete requests with replay
-   protection, idempotency, short leases and revocation checks.
-4. A fixed task-type allowlist; no arbitrary shell, Python, URL fetch or
-   peer-originated command execution.
-5. Redacted, integrity-protected results and audit reconciliation with the
-   existing IAO store.
-6. Tests for revocation during leases, replay, clock skew, duplicate delivery,
-   lost responses, worker restart and Android process interruption.
+## Configuration
+
+Set IAO_API_ORIGIN as a Worker environment variable in Cloudflare, for example the HTTPS origin of an operator-managed IAO API or its authenticated Cloudflare Tunnel endpoint. Do not put tokens, private keys, recovery codes or other secrets in this variable or in source control.
+
+The origin must already serve the IAO API and enforce its existing root, operator-session, primary-device and delegated-agent proof checks. A public tunnel URL alone does not authenticate the caller and does not make Termux continuously available.
+
+## Explicit enablement gate
+
+The checked-in Worker configuration sets IAO_GATEWAY_MODE to disabled. In this state, liveness and the public protocol contract remain readable, but API forwarding and readiness remain blocked even if IAO_API_ORIGIN is accidentally populated. Do not change this flag to enabled until the upstream API, primary-device authorization, exact browser origin allowlist and end-to-end checks are verified. Enabling the gateway is a separate deployment decision; this repository change does not perform it.
+
+## Browser origin policy
+
+Set `IAO_WEB_ORIGINS` as a comma-separated list of exact HTTPS origins allowed to call the Worker from a browser, for example `https://chat.example.org`. Do not use wildcards, URL paths, credentials or trailing slashes. The Worker rejects browser requests whose `Origin` is not in this list and validates CORS preflight methods and headers against the same API route allowlist. If the variable is absent, cross-origin browser requests are blocked by default. Non-browser signed agent requests without an `Origin` header are not affected.
+
+The Worker does not enable credentialed CORS and the browser client must continue using `credentials: "omit"`. Keep the allowlist limited to the actual public IAO web application origin.
+
+## Current limitations
+
+- The proxy does not create or deploy an IAO API origin.
+- It does not enroll the Termux public key or produce a dual-signed grant.
+- It does not install or start a persistent Termux task worker.
+- It does not add remote agent claim/lease/complete endpoints.
+- It does not connect ChatGPT to this API; a separately configured connector with appropriate user authorization would be required.
+- The API's current production readiness remains degraded; this gateway will report degraded readiness unless the upstream API reports normal.
+- No Cloudflare deployment, tunnel, secret, DNS or production setting has been changed by this repository change.
 
 ## Local checks
 
-From this directory:
+Run npm test from cloudflare/iao-gateway. Tests use Node's built-in test runner and require no dependency installation.
 
-```sh
-npm test
-```
+## Deployment boundary
 
-No dependency installation is required for the tests; they use Node's built-in
-test runner.
-
-## Cloudflare deployment boundary
-
-Configure the Cloudflare Git integration's root directory as
-`cloudflare/iao-gateway` only after reviewing this workspace. Do not point
-the existing production Worker at this directory yet. The repository's
-`fonstr-data` static app is separate and must remain untouched.
-
-Even if deployed, this foundation should report readiness as degraded and
-must not be treated as a working Termux bridge. No Cloudflare secrets or
-operator credentials are required or accepted by this foundation.
+Keep the Cloudflare Git integration root directory set to cloudflare/iao-gateway only when deliberately reviewing this Worker. Do not repoint the existing static fonstr-data deployment. Do not deploy until the API origin, access policy, production readiness and end-to-end device proof have been independently verified.
