@@ -833,10 +833,34 @@ def handler_factory(c):
 def serve():
     # ENGINE_CONFIG_RELOAD_V1
     server = None
+    from omega.supervision import write_heartbeat
 
+    heartbeat_state = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get("OMEGA_STATE_DIR", str(Path(__file__).resolve().parents[1] / ".state")),
+        )
+    )
+    heartbeat_path = heartbeat_state / "node-network-heartbeat.json"
+    heartbeat_interval = 60
+    heartbeat_stale_after = 180
+
+    def heartbeat(phase, result=None):
+        write_heartbeat(
+            heartbeat_path,
+            component="NODE_NETWORK",
+            pid=os.getpid(),
+            phase=phase,
+            interval_seconds=heartbeat_interval,
+            stale_after_seconds=heartbeat_stale_after,
+            last_cycle_result=result,
+        )
+
+    heartbeat("starting")
     print("IAO_NODE_NETWORK_STARTING", flush=True)
 
     while True:
+        heartbeat("cycle_running")
         try:
             if server is None:
                 c = cfg()
@@ -860,6 +884,7 @@ def serve():
             heartbeat_all()
             dispatch_pending()
             autobuilder()
+            heartbeat("cycle_completed", True)
 
             time.sleep(max(30, int(c["heartbeat_interval"])))
 
@@ -870,6 +895,7 @@ def serve():
             return
 
         except Exception as exc:
+            heartbeat("cycle_completed", False)
             log_event("ENGINE_RECOVERY", type(exc).__name__)
             print("ENGINE_RECOVERY", type(exc).__name__, flush=True)
             time.sleep(30)
