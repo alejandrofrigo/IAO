@@ -18,6 +18,24 @@ from fastapi.middleware.cors import CORSMiddleware
 _task_worker = None
 _task_worker_thread = None
 _task_worker_lock = threading.Lock()
+_task_worker_state = {"status": "disabled_by_default", "reason": None}
+
+
+def _set_task_worker_state(status: str, reason: str | None = None) -> None:
+    with _task_worker_lock:
+        _task_worker_state["status"] = status
+        _task_worker_state["reason"] = reason
+
+
+def _task_worker_readiness() -> dict[str, str | None]:
+    with _task_worker_lock:
+        thread = _task_worker_thread
+        state = dict(_task_worker_state)
+    if thread is not None and thread.is_alive():
+        return {"status": "running", "reason": None}
+    if state["status"] == "running":
+        return {"status": "worker_exited", "reason": "WORKER_THREAD_NOT_ALIVE"}
+    return state
 
 
 def _task_worker_requested() -> bool:
@@ -28,9 +46,11 @@ def _start_task_worker(service) -> bool:
     """Start one opt-in worker in this API process against the existing Store."""
     global _task_worker, _task_worker_thread
     if not _task_worker_requested():
+        _set_task_worker_state("disabled_by_default")
         return False
     with _task_worker_lock:
         if _task_worker_thread is not None and _task_worker_thread.is_alive():
+            _set_task_worker_state("running")
             return True
         try:
             lease_seconds = int(os.environ.get("IAO_TASK_WORKER_LEASE_SECONDS", "60"))
@@ -68,6 +88,7 @@ def _start_task_worker(service) -> bool:
                 decision="FAIL_CLOSED",
             )
             raise
+        _set_task_worker_state("running")
         return True
 
 
@@ -81,25 +102,41 @@ def _stop_task_worker() -> None:
     worker.stop()
     thread.join(timeout=10)
     if thread.is_alive():
+        _set_task_worker_state("stop_timeout", "WORKER_DID_NOT_STOP_WITHIN_DEADLINE")
         return
     with _task_worker_lock:
         if _task_worker_thread is thread:
             _task_worker = None
             _task_worker_thread = None
+            _task_worker_state["status"] = "stopped"
+            _task_worker_state["reason"] = None
 
 
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # Liveness-only qualification may omit secrets. The task worker is a
-    # separate explicit opt-in and remains disabled unless configured exactly.
-    if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
-            and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
+    # The API may start in liveness-only mode without persistent credentials.
+    # An explicitly requested worker must never fail silently: readiness
+    # exposes a bounded reason code while the API remains available read-only.
+    if not _task_worker_requested():
+        _set_task_worker_state("disabled_by_default")
+    elif (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) < 32
+          or len(os.environ.get("AUDIT_HMAC_KEY", "")) < 32):
+        _set_task_worker_state("blocked", "PERSISTENT_KEYS_UNAVAILABLE")
+    else:
         try:
             service = _get_service()
-            if _task_worker_requested():
-                _start_task_worker(service)
+            _start_task_worker(service)
+        except RuntimeError as exc:
+            reason = str(exc)
+            if reason not in {
+                "PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED",
+                "TASK_WORKER_SETTINGS_INVALID",
+                "TASK_WORKER_SETTINGS_OUT_OF_RANGE",
+            }:
+                reason = "WORKER_START_FAILED"
+            _set_task_worker_state("start_failed", reason)
         except Exception:
-            pass
+            _set_task_worker_state("start_failed", "WORKER_START_FAILED")
     try:
         yield
     finally:
@@ -383,11 +420,14 @@ def ready():
             else "not_configured"
         ),
         "task_worker": (
-            "running"
-            if _task_worker_thread is not None and _task_worker_thread.is_alive()
-            else "configured_not_running"
+            _task_worker_readiness()["status"]
             if _task_worker_requested()
             else "disabled_by_default"
+        ),
+        "task_worker_reason": (
+            _task_worker_readiness()["reason"]
+            if _task_worker_requested()
+            else None
         ),
     }
     return JSONResponse(status_code=200, content=payload)
