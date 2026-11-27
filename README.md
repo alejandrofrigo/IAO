@@ -14,6 +14,8 @@ See [ChatGPT × IAO: collaboration of construction](docs/CHATGPT_IAO_COLLABORATI
 
 La hoja de ruta técnica activa está en [Fase 1 — Núcleo operativo y arquitectura](docs/PHASE_1_CORE_FOUNDATION.md). Cada fase se cierra con 20 objetivos verificables y evidencia; el código presente no se considera capacidad operativa hasta superar sus pruebas.
 
+La siguiente línea de trabajo está especificada en [Fase 2 — Centro de mando seguro y orquestación de tareas](docs/PHASE_2_SECURE_CONTROL_PLANE.md). Esta fase está apilada sobre Fase 1 y no autoriza despliegue ni declara cerradas sus brechas.
+
 La [matriz de autenticación y autorización](docs/AUTHORIZATION_MATRIX.md) describe los requisitos por clase de ruta y las brechas de verificación.
 
 La [auditoría de inventario y dependencias de Fase 1](docs/PHASE_1_INVENTORY_AUDIT_20261127.md) registra los límites de la arquitectura y las relaciones entre PRs sin inferir capacidades no verificadas.
