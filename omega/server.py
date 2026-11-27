@@ -47,8 +47,20 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     store = Store(state_dir / "omega.db", audit_key=audit_key_bytes)
     corpus = KnowledgeCorpus(corpus_dir)
     reg = ToolRegistry()
-    reg.register(ToolSpec("knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
-                          corpus.validate_input, corpus.run, corpus.verify))
+    reg.register(ToolSpec(
+        "knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
+        corpus.validate_input, corpus.run, corpus.verify,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 2, "maxLength": 500},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        provenance="built-in:local-corpus",
+    ))
     allow = {h.strip().lower() for h in os.environ.get("OMEGA_EGRESS_ALLOWLIST", "").split(",") if h.strip()}
     if allow:  # F3: web.fetch exists only when an explicit allowlist is configured (deny-by-default)
         from omega.egress import EgressPolicy
