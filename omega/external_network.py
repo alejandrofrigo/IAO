@@ -24,6 +24,7 @@ STALE_AFTER_SECONDS = 7 * 24 * 60 * 60
 PRUNE_AFTER_SECONDS = 30 * 24 * 60 * 60
 _LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None
+_STOP_EVENT = threading.Event()
 
 
 def _utc() -> str:
@@ -486,6 +487,7 @@ def start_external_network(state_dir: str | Path | None = None, fed_node=None) -
     with _LOCK:
         if _THREAD is not None and _THREAD.is_alive():
             return False
+        _STOP_EVENT.clear()
         network = build_network(state_dir)
         interval = max(300, int(os.environ.get("IAO_EXTERNAL_NETWORK_INTERVAL", DEFAULT_INTERVAL)))
 
@@ -496,7 +498,7 @@ def start_external_network(state_dir: str | Path | None = None, fed_node=None) -
                     fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     return
-                while True:
+                while not _STOP_EVENT.is_set():
                     try:
                         result = network.run_cycle()
                         if fed_node is not None:
@@ -516,8 +518,28 @@ def start_external_network(state_dir: str | Path | None = None, fed_node=None) -
                     except Exception as exc:
                         network._audit("EXTERNAL_NETWORK_WORKER_FAILED",
                                        error_type=type(exc).__name__)
-                    time.sleep(interval)
+                    if _STOP_EVENT.wait(interval):
+                        break
+                network._audit("EXTERNAL_NETWORK_WORKER_STOPPED")
 
         _THREAD = threading.Thread(target=worker, name="iao-external-network", daemon=True)
         _THREAD.start()
         return True
+
+
+def stop_external_network(timeout: float = 5.0) -> bool:
+    """Request external discovery shutdown and wait a bounded time."""
+    global _THREAD
+    _STOP_EVENT.set()
+    thread = _THREAD
+    if thread is None:
+        return True
+    if thread is threading.current_thread():
+        return False
+    thread.join(max(0.0, timeout))
+    stopped = not thread.is_alive()
+    if stopped:
+        with _LOCK:
+            if _THREAD is thread:
+                _THREAD = None
+    return stopped
