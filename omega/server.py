@@ -378,33 +378,62 @@ def main() -> None:
         rate_limit_per_min=int(os.environ.get("OMEGA_RATE_LIMIT", "120")),
         identity_rollback_anchor_enabled=True,
     )
-    fed_key = load_or_create_key(state / "federation-node-ed25519.key")
-    fed_ledger = FederationLedger(
-        state / "federation-audit.jsonl",
-        state / "federation-audit.key",
-    )
-    fed_node = Node(
-        svc.store, svc.registry, key=fed_key,
-        peer_store_path=state / "federation-peers.json",
-        audit_fn=fed_ledger.append,
-    )
-    fed_ledger.append(
-        "system", "FEDERATION_NODE_READY", fed_node.node_id,
-        capabilities=["knowledge.search"]
-    )
-    from omega.federation_autojoin import start_federation_autojoin
-    start_federation_autojoin(fed_node, state)
-    from omega.federation_discovery import start_federation_discovery
-    start_federation_discovery(state)
-    from omega.external_network import start_external_network
-    start_external_network(state / "external-network", fed_node=fed_node)
-    httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
-    (state / "server.pid").write_text(str(os.getpid()))
-    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
-    sys.stderr.write(json.dumps({"event": "listening", "host": s.host, "port": s.port}) + "\n")
-    httpd.serve_forever()
-    svc.store.audit("system", "RUNTIME_STOP", "omega")
-    svc.store.close()
+    httpd = None
+    pid_path = state / "server.pid"
+    try:
+        fed_key = load_or_create_key(state / "federation-node-ed25519.key")
+        fed_ledger = FederationLedger(
+            state / "federation-audit.jsonl",
+            state / "federation-audit.key",
+        )
+        fed_node = Node(
+            svc.store, svc.registry, key=fed_key,
+            peer_store_path=state / "federation-peers.json",
+            audit_fn=fed_ledger.append,
+        )
+        fed_ledger.append(
+            "system", "FEDERATION_NODE_READY", fed_node.node_id,
+            capabilities=["knowledge.search"]
+        )
+        from omega.federation_autojoin import start_federation_autojoin
+        start_federation_autojoin(fed_node, state)
+        from omega.federation_discovery import start_federation_discovery
+        start_federation_discovery(state)
+        from omega.external_network import start_external_network
+        start_external_network(state / "external-network", fed_node=fed_node)
+        httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
+        pid_path.write_text(str(os.getpid()), encoding="ascii")
+        signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
+        sys.stderr.write(json.dumps({"event": "listening", "host": s.host, "port": s.port}) + "\\n")
+        httpd.serve_forever()
+    finally:
+        for module_name, stop_name in (
+            ("omega.federation_autojoin", "stop_federation_autojoin"),
+            ("omega.federation_discovery", "stop_federation_discovery"),
+            ("omega.external_network", "stop_external_network"),
+        ):
+            try:
+                module = __import__(module_name, fromlist=[stop_name])
+                getattr(module, stop_name)(timeout=5.0)
+            except Exception as exc:
+                sys.stderr.write(json.dumps({
+                    "event": "runtime_worker_stop_failed",
+                    "worker": module_name,
+                    "error_type": type(exc).__name__,
+                }) + "\\n")
+        if httpd is not None:
+            httpd.server_close()
+        try:
+            svc.store.audit("system", "RUNTIME_STOP", "omega")
+        finally:
+            svc.store.close()
+            try:
+                if pid_path.read_text(encoding="ascii").strip() == str(os.getpid()):
+                    pid_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
