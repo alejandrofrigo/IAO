@@ -320,6 +320,38 @@ class PartitionAndHostilePeerTests(FedBase):
         r = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
         self.assertFalse(r["ok"])
 
+    def test_signed_response_with_unknown_member_is_rejected(self) -> None:
+        def response(req):
+            payload = {
+                "v": 1, "from": self.b.node_id, "to": self.a.node_id,
+                "ts": self.clock(), "in_reply_to": req["nonce"],
+                "capability": "knowledge.search", "result": {"items": []},
+                "verification": "PASS", "unexpected": True,
+            }
+            return _sign(self.b.key, payload)
+
+        hostile = self._hostile(response)
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
+        self.assertEqual((result["ok"], result["error"]), (False, "BAD_RESPONSE"))
+
+    def test_signed_response_with_non_finite_timestamp_is_rejected(self) -> None:
+        def response(req):
+            return _sign(
+                self.b.key,
+                {
+                    "v": 1, "from": self.b.node_id, "to": self.a.node_id,
+                    "ts": float("nan"), "in_reply_to": req["nonce"],
+                    "capability": "knowledge.search", "result": {"items": []},
+                    "verification": "PASS",
+                },
+            )
+
+        hostile = self._hostile(response)
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
+        self.assertEqual((result["ok"], result["error"]), (False, "CLOCK_SKEW"))
+
     def test_loopback_http_requires_explicit_integration_flag(self) -> None:
         os.environ.pop("IAO_ALLOW_LOOPBACK_HTTP", None)
         try:
