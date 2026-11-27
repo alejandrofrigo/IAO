@@ -1530,7 +1530,10 @@ class OperatorIdentityAuthority:
                 payload = bytes(row["signing_payload"])
                 obj = json.loads(payload.decode("ascii"))
                 if (
-                    obj.get("capability") != row["capability"]
+                    obj.get("protocol") != "IAO-OPERATOR-CAPABILITY-GRANT-V1"
+                    or not isinstance(obj.get("nonce"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", obj.get("nonce", ""))
+                    or obj.get("capability") != row["capability"]
                     or obj.get("device_id") != row["device_id"]
                     or obj.get("expires_at") != int(row["expires_at"])
                     or obj.get("grant_id") != row["grant_id"]
