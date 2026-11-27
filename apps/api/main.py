@@ -15,18 +15,90 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+_task_worker = None
+_task_worker_thread = None
+_task_worker_lock = threading.Lock()
+
+
+def _task_worker_requested() -> bool:
+    return os.environ.get("IAO_TASK_WORKER_ENABLED", "").strip().lower() == "true"
+
+
+def _start_task_worker(service) -> bool:
+    """Start one opt-in worker in this API process against the existing Store."""
+    global _task_worker, _task_worker_thread
+    if not _task_worker_requested():
+        return False
+    with _task_worker_lock:
+        if _task_worker_thread is not None and _task_worker_thread.is_alive():
+            return True
+        lease_seconds = int(os.environ.get("IAO_TASK_WORKER_LEASE_SECONDS", "60"))
+        poll_seconds = float(os.environ.get("IAO_TASK_WORKER_POLL_SECONDS", "1"))
+        if not 15 <= lease_seconds <= 300 or not 0.1 <= poll_seconds <= 30:
+            raise RuntimeError("TASK_WORKER_SETTINGS_OUT_OF_RANGE")
+        from omega.task_worker import TaskWorker
+
+        worker = TaskWorker(
+            service.store,
+            service.registry,
+            lease_seconds=lease_seconds,
+            poll_seconds=poll_seconds,
+            operator_identity_authority=service.operator_identity_authority,
+        )
+        service.store.audit("system", "TASK_WORKER_START", "api_lifespan")
+        thread = threading.Thread(
+            target=worker.run_forever,
+            name="iao-task-worker",
+            daemon=True,
+        )
+        _task_worker = worker
+        _task_worker_thread = thread
+        try:
+            thread.start()
+        except Exception:
+            _task_worker = None
+            _task_worker_thread = None
+            service.store.audit(
+                "system", "TASK_WORKER_START_FAILED", "api_lifespan",
+                decision="FAIL_CLOSED",
+            )
+            raise
+        return True
+
+
+def _stop_task_worker() -> None:
+    global _task_worker, _task_worker_thread
+    with _task_worker_lock:
+        worker = _task_worker
+        thread = _task_worker_thread
+    if worker is None or thread is None:
+        return
+    worker.stop()
+    thread.join(timeout=10)
+    if thread.is_alive():
+        return
+    with _task_worker_lock:
+        if _task_worker_thread is thread:
+            _task_worker = None
+            _task_worker_thread = None
+
+
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # Start persistent service and network workers during configured production boot.
-    # Liveness-only qualification may omit secrets; in that case the API remains
-    # live but readiness and service routes stay fail-closed.
+    # Liveness-only qualification may omit secrets. The task worker is a
+    # separate explicit opt-in and remains disabled unless configured exactly.
     if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
             and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
         try:
-            _get_service()
+            service = _get_service()
+            if _task_worker_requested():
+                _start_task_worker(service)
         except Exception:
             pass
-    yield
+    try:
+        yield
+    finally:
+        _stop_task_worker()
 
 
 app = FastAPI(title="IAO API", version="11.2.0", lifespan=_runtime_lifespan)
@@ -304,6 +376,13 @@ def ready():
             "configured_unverified"
             if _get_service().model is not None
             else "not_configured"
+        ),
+        "task_worker": (
+            "running"
+            if _task_worker_thread is not None and _task_worker_thread.is_alive()
+            else "configured_not_running"
+            if _task_worker_requested()
+            else "disabled_by_default"
         ),
     }
     return JSONResponse(status_code=200, content=payload)
