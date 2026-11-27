@@ -698,6 +698,18 @@ class OmegaService:
 
         if method == "POST" and p == "/v1/federation/internet":
             pr = self._auth(headers)
+            decision = authorize(
+                "federation.internet", authenticated=True,
+                approved_capabilities=set(pr.scopes),
+            )
+            self.store.audit(
+                pr.subject, "DECISION", "federation.internet",
+                decision="ALLOW" if decision.allowed else "DENY",
+                reason=decision.reason, capability="federation.internet",
+                policy_version=POLICY_VERSION,
+            )
+            if not decision.allowed:
+                raise ApiError(403, decision.reason)
             data = self._json(body)
             pregunta = data.get("query", "")
             if not pregunta:
