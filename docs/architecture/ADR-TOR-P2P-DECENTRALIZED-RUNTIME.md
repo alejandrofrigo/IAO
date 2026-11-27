@@ -78,3 +78,15 @@ El diagnóstico posterior (2026-11-26) mostró Tor sin SOCKS accesible en 127.0.
 - Un nodo IPFS no equivale automáticamente a un nodo IAO.
 - No se conoce ni se ha verificado una infraestructura independiente llamada “red UAO”. Si el término se refiere a la red IPFS/libp2p existente, esta especificación la trata como la capa P2P objetivo; si es otra red, se requiere identificar su protocolo/endpoints antes de conectarla.
 - No se instalarán servicios, claves ni workers en equipos de terceros sin enrolamiento y autorización de sus operadores.
+
+## Política de apertura respecto a ADR-007
+
+La instrucción del operador reabre el alcance de participación P2P pública de forma limitada:
+- Se permite descubrir automáticamente peers públicos, consultar metadatos/protocolos y verificar conectividad.
+- Los peers descubiertos se registran como candidatos en cuarentena, sin enrolamiento automático ni autoridad.
+- Se permite intercambio de contenido público direccionado por CID, sujeto a verificación de hash y límites de recursos.
+- No se permite ejecutar código, herramientas, órdenes o modelos proporcionados por un peer desconocido.
+- La promoción a nodo federado con capacidades de tarea requiere identidad criptográfica IAO, contrato/lease, permisos explícitos, límites, auditoría y revocación.
+- El mando administrativo nunca se delega a la red P2P.
+
+Esto reabre descubrimiento y participación de datos públicos; no elimina las salvaguardas de confianza de ADR-007 ni habilita ejecución remota arbitraria.
