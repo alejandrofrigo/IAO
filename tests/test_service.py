@@ -1542,6 +1542,16 @@ class LimitsAndIntegrityTests(Base):
         s, p = self.call("GET", "/health/ready")
         self.assertEqual((s, p["status"]), (503, "not_ready"))  # integrity failure => not ready (RESTRICTED)
 
+    def test_readiness_requires_authenticated_audit_key(self) -> None:
+        original_key = self.svc.store.audit_key
+        self.svc.store.audit_key = None
+        try:
+            status, payload = self.call("GET", "/health/ready")
+            self.assertEqual((status, payload["status"]), (503, "not_ready"))
+            self.assertFalse(payload["checks"]["audit_authenticated"])
+        finally:
+            self.svc.store.audit_key = original_key
+
     def test_chat_reports_model_not_configured_after_authz(self) -> None:
         self.assertEqual(self.call("POST", "/v1/chat", {}, {"conversation_id": "x", "message": "hi"})[0], 401)
         cid = self.call("POST", "/v1/conversations", self.tok("a"), {})[1]["conversation_id"]
