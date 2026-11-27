@@ -8,7 +8,7 @@ from omega.tor_transport import (
 
 
 class TorTransportTests(unittest.TestCase):
-    def fake_proxy(self, reply=b"\\x05\\x00\\x00\\x01\\x7f\\x00\\x00\\x01\\x00\\x50"):
+    def fake_proxy(self, reply=b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x50"):
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -18,7 +18,7 @@ class TorTransportTests(unittest.TestCase):
             conn, _ = listener.accept()
             with conn:
                 captured["greeting"] = conn.recv(3)
-                conn.sendall(b"\\x05\\x00")
+                conn.sendall(b"\x05\x00")
                 head = conn.recv(5)
                 length = head[4]
                 host = conn.recv(length)
@@ -43,15 +43,15 @@ class TorTransportTests(unittest.TestCase):
         )
         sock.close()
         thread.join(2)
-        self.assertEqual(captured["greeting"], b"\\x05\\x01\\x00")
-        self.assertEqual(captured["request"][:4], b"\\x05\\x01\\x00\\x03")
+        self.assertEqual(captured["greeting"], b"\x05\x01\x00")
+        self.assertEqual(captured["request"][:4], b"\x05\x01\x00\x03")
         self.assertEqual(
             captured["request"][5:-2], b"exampleonionservice.onion"
         )
 
     def test_proxy_refusal_fails_without_fallback(self):
         port, _, thread = self.fake_proxy(
-            b"\\x05\\x05\\x00\\x01\\x7f\\x00\\x00\\x01\\x00\\x50"
+            b"\x05\x05\x00\x01\x7f\x00\x00\x01\x00\x50"
         )
         with self.assertRaisesRegex(TorTransportError, "CONNECT_FAILED"):
             open_tor_socket("exampleonionservice.onion", 80, proxy_port=port, timeout=2)
