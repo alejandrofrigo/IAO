@@ -91,3 +91,43 @@ class TaskIntentContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_task_budget_defaults_and_extended_limits_are_canonicalized():
+    intent = _intent()
+    normalized = validate_task_intent_v1(intent)
+    assert normalized["budget"] == {
+        "max_model_calls": 0,
+        "max_tool_calls": 1,
+        "max_input_bytes": 65_536,
+        "max_output_bytes": 1_048_576,
+        "timeout_seconds": 20.0,
+    }
+    intent["budget"] = {
+        "max_model_calls": 2,
+        "max_tool_calls": 3,
+        "max_input_bytes": 4096,
+        "max_output_bytes": 8192,
+        "timeout_seconds": 15,
+    }
+    normalized = validate_task_intent_v1(intent)
+    assert normalized["budget"]["max_tool_calls"] == 3
+    assert normalized["budget"]["max_input_bytes"] == 4096
+
+
+@pytest.mark.parametrize("field,value", [
+    ("max_tool_calls", 21),
+    ("max_input_bytes", 65_537),
+    ("max_output_bytes", 1_048_577),
+    ("max_tool_calls", True),
+    ("max_input_bytes", 0),
+])
+def test_task_budget_rejects_unbounded_or_invalid_limits(field, value):
+    intent = _intent()
+    intent["budget"] = {
+        "max_model_calls": 0,
+        "timeout_seconds": 20,
+        field: value,
+    }
+    with pytest.raises(TaskContractError, match="TASK_BUDGET_INVALID"):
+        validate_task_intent_v1(intent)
