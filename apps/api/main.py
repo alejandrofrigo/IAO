@@ -124,11 +124,11 @@ async def _read_bounded_service_body(request: Request):
             )
     chunks = bytearray()
     async for chunk in request.stream():
-        chunks.extend(chunk)
-        if len(chunks) > MAX_BODY:
+        if len(chunks) + len(chunk) > MAX_BODY:
             return None, _service_response(
                 413, {"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex}
             )
+        chunks.extend(chunk)
     if raw_length is not None and len(chunks) != declared_length:
         return None, _service_response(
             400, {"error": "INCOMPLETE_BODY", "correlation_id": uuid.uuid4().hex}
@@ -346,9 +346,9 @@ async def _federation_body(request: Request):
         return None, _federation_json(413, {"error": "PAYLOAD_TOO_LARGE"})
     chunks = bytearray()
     async for chunk in request.stream():
-        chunks.extend(chunk)
-        if len(chunks) > MAX_MSG:
+        if len(chunks) + len(chunk) > MAX_MSG:
             return None, _federation_json(413, {"error": "PAYLOAD_TOO_LARGE"})
+        chunks.extend(chunk)
     if len(chunks) != length:
         return None, _federation_json(400, {"error": "INCOMPLETE_BODY"})
     return bytes(chunks), None
