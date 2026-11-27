@@ -1,6 +1,6 @@
 import json
 
-from tests.test_service import Base
+from tests.test_service import Base, KEY
 
 SECRET = "my-dog-is-called-Zorbulon-4417"
 
@@ -66,7 +66,7 @@ class MemoryTests(Base):
         self.assertEqual(len(self.call("GET", "/v1/memory", rd)[1]["memories"]), 1)
         t0 = self.svc.clock
         self.svc.clock = lambda: t0() + 2 * 86400  # type: ignore[assignment]
-        rd2 = {"authorization": "Bearer " + __import__("omega.auth", fromlist=["x"]).issue_token("unit-test-key-0123456789", "alice", ["memory.read"], now=self.svc.clock())}
+        rd2 = {"authorization": "Bearer " + __import__("omega.auth", fromlist=["x"]).issue_token(KEY, "alice", ["memory.read"], now=self.svc.clock())}
         self.assertEqual(self.call("GET", "/v1/memory", rd2)[1]["memories"], [])
         self.assertEqual(self.svc.store.memory_purge_expired("9999"), 1)
 
