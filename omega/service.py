@@ -754,9 +754,11 @@ class OmegaService:
             return 201, {"algorithm": enrolled["algorithm"]}
 
         if method == "POST" and p == "/v1/device/command":
+            pr = self._auth(headers)
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
-            pr = self._auth(headers)
             try:
                 result = self.device_authority.verify_status(self._json(body), owner_subject=pr.subject)
             except DeviceAuthorityError as exc:
@@ -773,10 +775,10 @@ class OmegaService:
 
         pr = self._auth(headers)
         if method == "POST" and p == "/v1/device/challenge":
-            if self.device_authority is None:
-                raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
             if pr.subject.startswith("guest:"):
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+            if self.device_authority is None:
+                raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
             data = self._json(body)
             try:
                 challenge = self.device_authority.challenge(data.get("device_id"), owner_subject=pr.subject)
