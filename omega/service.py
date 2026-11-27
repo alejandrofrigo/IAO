@@ -87,6 +87,18 @@ class OmegaService:
     def handle(self, method: str, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
         cid = uuid.uuid4().hex
         try:
+            raw_length = headers.get("content-length")
+            if raw_length is not None:
+                try:
+                    declared_length = int(raw_length)
+                except (TypeError, ValueError):
+                    raise ApiError(400, "INVALID_CONTENT_LENGTH") from None
+                if declared_length < 0:
+                    raise ApiError(400, "INVALID_CONTENT_LENGTH")
+                if declared_length > MAX_BODY:
+                    raise ApiError(413, "PAYLOAD_TOO_LARGE")
+                if declared_length != len(body):
+                    raise ApiError(400, "INCOMPLETE_BODY")
             if len(body) > MAX_BODY:
                 raise ApiError(413, "PAYLOAD_TOO_LARGE")
             normalized_method = method.upper()
