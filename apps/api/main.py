@@ -273,10 +273,27 @@ def _get_service():
 
 
 def _federation_json(status: int, payload: dict):
-    return JSONResponse(
-        status_code=status,
-        content=payload,
-        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    correlation_id = payload.get("correlation_id")
+    if not isinstance(correlation_id, str) or len(correlation_id) != 32:
+        correlation_id = uuid.uuid4().hex
+    content = {**payload, "correlation_id": correlation_id}
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Correlation-ID": correlation_id,
+    }
+    allowed = content.get("allowed_methods")
+    if status == 405 and isinstance(allowed, list) and all(
+        isinstance(item, str) for item in allowed
+    ):
+        headers["Allow"] = ", ".join(allowed)
+    return JSONResponse(status_code=status, content=content, headers=headers)
+
+
+def _federation_method_not_allowed(allowed_methods: tuple[str, ...]):
+    return _federation_json(
+        405,
+        {"error": "METHOD_NOT_ALLOWED", "allowed_methods": list(allowed_methods)},
     )
 
 
@@ -299,8 +316,10 @@ async def _federation_body(request: Request):
     return body, None
 
 
-@app.get("/fed/v1/contract")
-def federation_contract():
+@app.api_route("/fed/v1/contract", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def federation_contract(request: Request):
+    if request.method != "GET":
+        return _federation_method_not_allowed(("GET",))
     try:
         node = _get_federation_node()
         return _federation_json(200, node.contract_for_self(sorted(node.served)))
@@ -308,8 +327,10 @@ def federation_contract():
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.get("/fed/v1/publication")
-def federation_publication():
+@app.api_route("/fed/v1/publication", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def federation_publication(request: Request):
+    if request.method != "GET":
+        return _federation_method_not_allowed(("GET",))
     try:
         node = _get_federation_node()
         origin = os.environ.get("IAO_FEDERATION_PUBLIC_ORIGIN", "").strip().rstrip("/")
@@ -332,16 +353,20 @@ def federation_publication():
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.get("/fed/v1/identity")
-def federation_identity():
+@app.api_route("/fed/v1/identity", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def federation_identity(request: Request):
+    if request.method != "GET":
+        return _federation_method_not_allowed(("GET",))
     try:
         return _federation_json(200, _get_federation_node().identity_document())
     except Exception:
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.post("/fed/v1/handshake")
+@app.api_route("/fed/v1/handshake", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def federation_handshake(request: Request):
+    if request.method != "POST":
+        return _federation_method_not_allowed(("POST",))
     try:
         node = _get_federation_node()
         body, error = await _federation_body(request)
@@ -353,8 +378,10 @@ async def federation_handshake(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.post("/fed/v1/message")
+@app.api_route("/fed/v1/message", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def federation_message(request: Request):
+    if request.method != "POST":
+        return _federation_method_not_allowed(("POST",))
     try:
         node = _get_federation_node()
         body, error = await _federation_body(request)
@@ -364,6 +391,14 @@ async def federation_message(request: Request):
         return _federation_json(status, payload)
     except Exception:
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+
+
+@app.api_route(
+    "/fed/v1/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+)
+def federation_not_found(path: str, request: Request):
+    return _federation_json(404, {"error": "NOT_FOUND"})
 
 
 @app.api_route(
