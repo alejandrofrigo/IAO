@@ -1,3 +1,5 @@
+import { proxyApi } from "./proxy.js";
+
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
@@ -19,8 +21,8 @@ export class TaskBroker {
   }
 
   async fetch() {
-    // The durable queue is intentionally not exposed until the API's
-    // root+primary-device proof and agent lease protocol are integrated.
+    // The DO remains deliberately disabled. The Python API's SQLite task
+    // store is the current source of truth; a second queue would split leases.
     return json(503, { status: "disabled", error: "BROKER_AUTHORITY_NOT_INTEGRATED" });
   }
 }
@@ -34,35 +36,52 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/health/ready") {
-      return json(503, {
-        status: "degraded",
-        service: "iao-gateway",
-        production_gates: {
-          operator_root_and_device_verification: "not_integrated",
-          termux_agent_authentication: "not_integrated",
-          task_claim_and_lease_protocol: "not_integrated",
-          result_signature_and_audit: "not_integrated",
+      const upstream = await proxyApi(request, env);
+      if (!upstream.ok) {
+        return json(503, {
+          status: "degraded",
+          service: "iao-gateway",
+          upstream_status: upstream.status,
           privileged_commands: "disabled",
-        },
-      });
+          agent_polling: "disabled",
+        });
+      }
+      let payload;
+      try { payload = await upstream.clone().json(); } catch { payload = {}; }
+      if (payload.status !== "normal") {
+        return json(503, {
+          status: "degraded",
+          service: "iao-gateway",
+          upstream_status: upstream.status,
+          upstream_readiness: payload.status || "unknown",
+          privileged_commands: "disabled",
+          agent_polling: "disabled",
+        });
+      }
+      return upstream;
     }
 
     if (request.method === "GET" && url.pathname === "/v1/gateway/contract") {
       return json(200, {
         protocol: "IAO-CLOUDFLARE-GATEWAY-V1",
-        mode: "foundation_only",
-        accepted_commands: [],
-        task_submission: "disabled",
+        mode: "fixed_origin_api_proxy",
+        task_submission: "forwarded_to_IAO_API_authorization_required",
         agent_polling: "disabled",
-        authority: "existing IAO root plus registered primary device; integration pending",
+        privileged_commands: "disabled",
+        durable_object_queue: "disabled; IAO API task store remains authoritative",
+        authority: "existing IAO root, operator session and registered primary device",
       });
     }
 
-    if (url.pathname.startsWith("/v1/agent/") || url.pathname.startsWith("/v1/tasks")) {
+    if (url.pathname.startsWith("/v1/agent/")) {
       return json(503, {
-        error: "GATEWAY_NOT_PROVISIONED",
-        message: "No command or task endpoint is enabled until cryptographic authority integration is verified.",
+        error: "AGENT_PROTOCOL_NOT_INTEGRATED",
+        message: "No Termux agent claim or completion endpoint is enabled.",
       });
+    }
+
+    if (url.pathname.startsWith("/v1/")) {
+      return proxyApi(request, env);
     }
 
     return json(404, { error: "NOT_FOUND" });
