@@ -23,6 +23,7 @@ from omega.audit import canonical_json
 from omega.auth import Principal, issue_token, verify_token
 from omega.control import transition
 from omega.device_authority import DeviceAuthority, DeviceAuthorityError
+from omega.agent_authority import AgentAuthority, AgentAuthorityError
 from omega.operator_identity import OperatorIdentityAuthority, OperatorIdentityError
 from omega.policy import authorize
 from omega.store import Store
@@ -52,6 +53,11 @@ class OmegaService:
         self.store, self.registry, self.token_key = store, registry, token_key
         self.device_authority = device_authority
         self.operator_identity_authority = operator_identity_authority
+        self.agent_authority = (
+            AgentAuthority(Path(device_authority.database).parent / "delegated-agents.sqlite3", operator_identity_authority)
+            if device_authority is not None and operator_identity_authority is not None
+            else None
+        )
         self.identity_rollback_anchor = identity_rollback_anchor
         self.identity_state_supplier = identity_state_supplier
         self.rate, self.quota, self.ttl, self.model, self.clock = rate_limit_per_min, daily_task_quota, task_ttl_seconds, model_adapter, clock
@@ -90,7 +96,7 @@ class OmegaService:
             route_path = urlsplit(path).path.rstrip("/") or "/"
             anchor_required = (
                 route_path == "/v1/operator"
-                or route_path.startswith(("/v1/operator/", "/v1/device/"))
+                or route_path.startswith(("/v1/operator/", "/v1/device/", "/v1/agent/"))
             )
             if not anchor_required:
                 authorization = headers.get("authorization", "")
@@ -689,6 +695,59 @@ class OmegaService:
             return 200, result
 
         pr = self._auth(headers)
+        if p.startswith("/v1/agent/"):
+            if self.agent_authority is None or self.operator_identity_authority is None:
+                raise ApiError(503, "AGENT_AUTHORITY_UNAVAILABLE")
+            match = re.fullmatch(r"operator:([0-9a-f]{32})", pr.subject)
+            if match is None:
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+            identity_id = match.group(1)
+            def decode_signature(value: Any) -> bytes:
+                if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", value):
+                    raise ApiError(400, "INVALID_AGENT_SIGNATURE")
+                try:
+                    return base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+                except binascii.Error:
+                    raise ApiError(400, "INVALID_AGENT_SIGNATURE") from None
+            try:
+                if method == "POST" and p == "/v1/agent/delegation/challenge":
+                    data = self._json(body)
+                    result = self.agent_authority.issue_challenge(identity_id, data.get("key_version"))
+                    self.store.audit(pr.subject, "AGENT_DELEGATION_CHALLENGE_ISSUED", "delegated_agent", authority="READ_ONLY")
+                    return 200, result
+                if method == "POST" and p == "/v1/agent/delegation":
+                    data = self._json(body)
+                    result = self.agent_authority.create_delegation(
+                        identity_id=identity_id, key_version=data.get("key_version"),
+                        nonce=data.get("nonce"), agent_public_key_pem=data.get("agent_public_key_pem"),
+                        scopes=data.get("scopes"), expires_at=data.get("expires_at"),
+                        root_signature=decode_signature(data.get("root_signature")),
+                        primary_signature=decode_signature(data.get("primary_signature")),
+                    )
+                    self.store.audit(pr.subject, "AGENT_DELEGATED_READ_ONLY", result["agent_id"],
+                                     decision="ALLOW", scopes=result["scopes"], expires_at=result["expires_at"])
+                    return 201, result
+                if method == "POST" and p == "/v1/agent/delegation/revoke":
+                    data = self._json(body)
+                    result = self.agent_authority.revoke(
+                        identity_id=identity_id, key_version=data.get("key_version"),
+                        agent_id=data.get("agent_id"),
+                        root_signature=decode_signature(data.get("root_signature")),
+                        primary_signature=decode_signature(data.get("primary_signature")),
+                    )
+                    self.store.audit(pr.subject, "AGENT_DELEGATION_REVOKED", data.get("agent_id"),
+                                     decision="ALLOW", authority="READ_ONLY")
+                    return 200, result
+                if method == "GET" and p == "/v1/agent/status":
+                    result = self.agent_authority.status(identity_id)
+                    return 200, result
+            except AgentAuthorityError as exc:
+                self.store.audit(pr.subject, "AGENT_AUTHORITY_DENIED", "delegated_agent",
+                                 decision="DENY", reason=exc.code)
+                raise ApiError(exc.status, exc.code) from None
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            raise ApiError(404, "NOT_FOUND")
         if method == "POST" and p == "/v1/device/challenge":
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
