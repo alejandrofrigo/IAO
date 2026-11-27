@@ -378,16 +378,17 @@ def ready(request: Request):
         service = _get_service()
         status, payload = service.handle("GET", "/health/ready", {}, b"")
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={
+        return _service_response(
+            503,
+            {
                 "status": "not_ready",
                 "reason": "PERSISTENT_RUNTIME_UNAVAILABLE",
+                "correlation_id": uuid.uuid4().hex,
             },
         )
     if status != 200 or payload.get("status") == "not_ready":
         payload["status"] = "not_ready"
-        return JSONResponse(status_code=503, content=payload)
+        return _service_response(503, payload)
 
     # Local dependency checks are not proof of production readiness.
     # Worker start flags are not heartbeats or functional health checks.
@@ -415,7 +416,7 @@ def ready(request: Request):
         "independent_federation": "not_verified",
         "model_provider": model_state,
     }
-    return JSONResponse(status_code=200, content=payload)
+    return _service_response(200, payload)
 
 @app.api_route("/v1/device/enroll", methods=["GET", "POST", "PUT", "DELETE"])
 async def device_enroll(request: Request):
