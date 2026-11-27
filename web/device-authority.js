@@ -376,6 +376,29 @@
     return b64url(rawEcdsaToDer(raw));
   }
 
+  async function signOperatorCapabilityGrantPayload(payloadBase64) {
+    const identity = await dbGet();
+    if (!identity || !identity.privateKey || !identity.deviceId) {
+      throw new Error("DEVICE_NOT_ENROLLED");
+    }
+    if (typeof payloadBase64 !== "string" || !/^[A-Za-z0-9_-]+$/.test(payloadBase64)) {
+      throw new Error("INVALID_OPERATOR_CAPABILITY_GRANT_PAYLOAD");
+    }
+    const encoded = payloadBase64.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = Uint8Array.from(
+      atob(encoded + "=".repeat((4 - encoded.length % 4) % 4)),
+      c => c.charCodeAt(0)
+    );
+    const domain = new TextEncoder().encode("IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00");
+    const message = new Uint8Array(domain.length + payload.length);
+    message.set(domain);
+    message.set(payload, domain.length);
+    const raw = new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, identity.privateKey, message
+    ));
+    return b64url(rawEcdsaToDer(raw));
+  }
+
   async function signedTaskHeaders(payload) {
     const identity = await dbGet();
     if (!identity || !identity.privateKey || !identity.deviceId) {
@@ -611,6 +634,7 @@
     signRecoveryPayload,
     activateRecoveryIdentity,
     signOperatorLoginPayload,
+    signOperatorCapabilityGrantPayload,
     signedStatus,
     signedTaskHeaders,
     submitQueuedTask
