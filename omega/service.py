@@ -166,14 +166,27 @@ class OmegaService:
         if p is None:
             self.store.audit("anonymous", "AUTH", "request", decision="DENY", reason="AUTHENTICATION_REQUIRED")
             raise ApiError(401, "AUTHENTICATION_REQUIRED")
-        if p.subject.startswith("operator:"):
-            if (
-                self.operator_identity_authority is None
-                or not self.operator_identity_authority.verify_authenticated_session(
+        bound_operator_session = False
+        if (
+            self.operator_identity_authority is not None
+            and not p.subject.startswith("guest:")
+        ):
+            try:
+                bound_operator_session = self.operator_identity_authority.verify_authenticated_session(
                     p.subject, h[7:],
                 )
-            ):
-                raise ApiError(401, "OPERATOR_SESSION_REVOKED")
+            except Exception:
+                bound_operator_session = False
+        if p.subject.startswith("operator:") and not bound_operator_session:
+            raise ApiError(401, "OPERATOR_SESSION_REVOKED")
+        if bound_operator_session:
+            try:
+                active_scopes = self.operator_identity_authority.active_capabilities_for_session(
+                    p.subject, h[7:], policy_version=POLICY_VERSION,
+                )
+            except OperatorIdentityError:
+                raise ApiError(403, "CAPABILITY_AUTHORITY_UNAVAILABLE") from None
+            p = Principal(p.subject, frozenset(active_scopes))
         now = self.clock()
         with self._rl:
             q = self._hits[p.subject]
@@ -226,6 +239,11 @@ class OmegaService:
             "/v1/operator/session/challenge": ("POST",),
             "/v1/operator/session/bind": ("POST",),
             "/v1/operator/session/status": ("GET",),
+            "/v1/operator/capability-grant/challenge": ("POST",),
+            "/v1/operator/capability-grant/complete": ("POST",),
+            "/v1/operator/capability-grant/revoke/challenge": ("POST",),
+            "/v1/operator/capability-grant/revoke/complete": ("POST",),
+            "/v1/operator/capability-grant/status": ("GET",),
             "/v1/federation/status": ("GET",),
             "/v1/federation/internet": ("POST",),
             "/v1/me": ("GET",),
@@ -778,6 +796,104 @@ class OmegaService:
             return 200, result
 
         pr = self._auth(headers)
+        if p.startswith("/v1/operator/capability-grant/"):
+            if self.operator_identity_authority is None:
+                raise ApiError(503, "OPERATOR_IDENTITY_UNAVAILABLE")
+            token = self._verified_bearer_token(headers)
+            try:
+                if not self.operator_identity_authority.verify_authenticated_session(
+                    pr.subject, token,
+                ):
+                    raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
+                if method == "POST" and p == "/v1/operator/capability-grant/challenge":
+                    data = self._json(body)
+                    result = self.operator_identity_authority.create_capability_challenge(
+                        pr.subject, token, data.get("device_id"),
+                        data.get("capability"), POLICY_VERSION,
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_CHALLENGE_ISSUED",
+                        "capability_grant", capability=result["capability"],
+                        purpose=result["purpose"],
+                    )
+                    return 200, result
+                if method == "POST" and p == "/v1/operator/capability-grant/complete":
+                    data = self._json(body)
+
+                    def signature_bytes(name: str) -> bytes:
+                        value = data.get(name)
+                        if not isinstance(value, str) or not 80 <= len(value) <= 120:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE")
+                        try:
+                            return base64.b64decode(
+                                value + "=" * (-len(value) % 4),
+                                altchars=b"-_", validate=True,
+                            )
+                        except binascii.Error:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE") from None
+
+                    result = self.operator_identity_authority.complete_capability_challenge(
+                        pr.subject, token, data.get("challenge"),
+                        signature_bytes("root_signature"),
+                        signature_bytes("device_signature"),
+                        policy_version=POLICY_VERSION,
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_GRANTED",
+                        "capability_grant", capability=result["capability"],
+                        expires_at=result.get("expires_at"),
+                    )
+                    return 200, result
+                if method == "POST" and p == "/v1/operator/capability-grant/revoke/challenge":
+                    data = self._json(body)
+                    result = self.operator_identity_authority.create_capability_challenge(
+                        pr.subject, token, data.get("device_id"),
+                        data.get("capability"), POLICY_VERSION,
+                        purpose="REVOKE", grant_id=data.get("grant_id"),
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_REVOCATION_CHALLENGE_ISSUED",
+                        "capability_grant", capability=result["capability"],
+                    )
+                    return 200, result
+                if method == "POST" and p == "/v1/operator/capability-grant/revoke/complete":
+                    data = self._json(body)
+
+                    def revoke_signature_bytes(name: str) -> bytes:
+                        value = data.get(name)
+                        if not isinstance(value, str) or not 80 <= len(value) <= 120:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE")
+                        try:
+                            return base64.b64decode(
+                                value + "=" * (-len(value) % 4),
+                                altchars=b"-_", validate=True,
+                            )
+                        except binascii.Error:
+                            raise ApiError(400, "INVALID_CAPABILITY_SIGNATURE") from None
+
+                    result = self.operator_identity_authority.complete_capability_challenge(
+                        pr.subject, token, data.get("challenge"),
+                        revoke_signature_bytes("root_signature"),
+                        revoke_signature_bytes("device_signature"),
+                        policy_version=POLICY_VERSION,
+                    )
+                    self.store.audit(
+                        pr.subject, "OPERATOR_CAPABILITY_REVOKED",
+                        "capability_grant", capability=result["capability"],
+                    )
+                    return 200, result
+                if method == "GET" and p == "/v1/operator/capability-grant/status":
+                    grants = self.operator_identity_authority.list_capability_grants_for_session(
+                        pr.subject, token, policy_version=POLICY_VERSION,
+                    )
+                    active = sorted(self.operator_identity_authority.active_capabilities_for_session(
+                        pr.subject, token, policy_version=POLICY_VERSION,
+                    ))
+                    return 200, {"grants": grants, "active_capabilities": active}
+            except OperatorIdentityError as exc:
+                raise ApiError(exc.status, exc.code) from None
+            raise ApiError(404, "NOT_FOUND")
+
         if method == "POST" and p == "/v1/device/challenge":
             if not pr.subject.startswith("operator:"):
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
@@ -1260,11 +1376,7 @@ class OmegaService:
             "contract_version": "1.0",
             "goal": goal if isinstance(goal, str) else None,
             "allowed_capabilities": [cap] if isinstance(cap, str) and cap else [],
-            "authorized_scopes": sorted(
-                set(pr.scopes) | (
-                    set(QUEUED_TOOL_ALLOWLIST) if execution_mode == "queued" else set()
-                )
-            ),
+            "authorized_scopes": sorted(set(pr.scopes)),
             "input": tin if isinstance(tin, dict) else {},
             "request_digest": request_digest,
             "operator_session_digest": (
@@ -1308,13 +1420,9 @@ class OmegaService:
             self.store.set_task_state(tid, st, res)
             return 422, {"task_id": tid, "state": st, **res}
         assert isinstance(cap, str) and isinstance(tin, dict)
-        approved_capabilities = set(pr.scopes)
-        if execution_mode == "queued":
-            # A primary-device proof grants only the reviewed read-only queue allowlist.
-            approved_capabilities.update(QUEUED_TOOL_ALLOWLIST)
         dec = authorize(
             cap, authenticated=True,
-            approved_capabilities=approved_capabilities & self.registry.names(),
+            approved_capabilities=set(pr.scopes) & self.registry.names(),
         )
         self.store.audit(pr.subject, "DECISION", tid, decision="ALLOW" if dec.allowed else "DENY", reason=dec.reason,
                          capability=cap, policy_version=POLICY_VERSION)
@@ -1347,6 +1455,23 @@ class OmegaService:
             }
             self.store.set_task_state(tid, st, result)
             return 403, {"task_id": tid, "state": st, **result}
+        if execution_mode == "queued":
+            try:
+                live_capabilities = self.operator_identity_authority.active_capabilities_for_session(
+                    pr.subject, self._verified_bearer_token(headers),
+                    policy_version=POLICY_VERSION,
+                )
+            except OperatorIdentityError:
+                live_capabilities = frozenset()
+            if cap not in live_capabilities:
+                self.store.audit(
+                    pr.subject, "TASK_CAPABILITY_REVALIDATION_DENIED", "task_submission",
+                    decision="DENY", capability=cap,
+                )
+                to("DENIED", reason="CAPABILITY_NOT_GRANTED")
+                result = {"decision": "DENY", "reason": "CAPABILITY_NOT_GRANTED"}
+                self.store.set_task_state(tid, st, result)
+                return 403, {"task_id": tid, "state": st, **result}
         to("AUTHORIZED")
         if execution_mode == "queued":
             if self.ttl <= 0:
