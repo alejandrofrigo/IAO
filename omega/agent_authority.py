@@ -58,7 +58,7 @@ class AgentAuthority:
                 CREATE TABLE IF NOT EXISTS agent_challenges(
                     nonce TEXT PRIMARY KEY, identity_id TEXT NOT NULL,
                     key_version INTEGER NOT NULL, expires_at REAL NOT NULL,
-                    consumed_at REAL
+                    consumed_at REAL, primary_device_id TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS agent_challenge_expiry
                     ON agent_challenges(expires_at);
@@ -72,6 +72,13 @@ class AgentAuthority:
                 CREATE INDEX IF NOT EXISTS delegated_agents_owner
                     ON delegated_agents(identity_id, revoked_at, expires_at);
             """)
+            challenge_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(agent_challenges)")
+            }
+            if "primary_device_id" not in challenge_columns:
+                db.execute(
+                    "ALTER TABLE agent_challenges ADD COLUMN primary_device_id TEXT NOT NULL DEFAULT ''"
+                )
         os.chmod(self.database, 0o600)
 
     @contextmanager
@@ -87,21 +94,36 @@ class AgentAuthority:
         finally:
             db.close()
 
-    def _current_parent_key_version(self, identity_id: str) -> int:
+    def _current_parent_binding(self, identity_id: str) -> tuple[int, str, str]:
+        """Read the exact active root/device pair while the identity lock is held."""
         identity_db = getattr(self.operator_identity, "database", None)
         if identity_db is None:
             raise AgentAuthorityError("OPERATOR_IDENTITY_UNAVAILABLE", 503)
         try:
             with sqlite3.connect(str(identity_db), timeout=5) as db:
                 row = db.execute(
-                    "SELECT i.key_version,i.status,b.key_version FROM operator_identities i JOIN primary_device_bindings b ON b.identity_id=i.identity_id WHERE i.identity_id=?",
+                    """SELECT i.key_version,i.status,b.key_version,b.device_id,
+                    b.device_public_key_pem
+                    FROM operator_identities i
+                    JOIN primary_device_bindings b ON b.identity_id=i.identity_id
+                    WHERE i.identity_id=?""",
                     (identity_id,),
                 ).fetchone()
         except sqlite3.Error:
             raise AgentAuthorityError("OPERATOR_IDENTITY_UNAVAILABLE", 503) from None
-        if row is None or row[1] != "ACTIVE" or row[0] != row[2]:
+        if (
+            row is None or row[1] != "ACTIVE" or row[0] != row[2]
+            or not isinstance(row[3], str) or len(row[3]) != 64
+            or not isinstance(row[4], str) or not row[4]
+        ):
             raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
-        return int(row[0])
+        _, canonical_pem, fingerprint = self._public_key(row[4])
+        if not __import__("hmac").compare_digest(row[3], fingerprint):
+            raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        return int(row[0]), canonical_pem, fingerprint
+
+    def _current_parent_key_version(self, identity_id: str) -> int:
+        return self._current_parent_binding(identity_id)[0]
 
     @staticmethod
     def _public_key(value: Any) -> tuple[Any, str, str]:
@@ -134,26 +156,29 @@ class AgentAuthority:
     def issue_challenge(self, identity_id: str, key_version: int) -> dict[str, Any]:
         if not isinstance(identity_id, str) or len(identity_id) != 32 or isinstance(key_version, bool) or not isinstance(key_version, int) or key_version < 1:
             raise AgentAuthorityError("INVALID_OPERATOR_BINDING", 403)
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else contextmanager(lambda: (yield))()
         try:
-            if self._current_parent_key_version(identity_id) != key_version:
-                raise AgentAuthorityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
-            primary_pem = self.operator_identity.primary_device_public_key()
-            self.operator_identity.verify_primary_device(identity_id, primary_pem)
-        except AgentAuthorityError:
-            raise
-        except Exception:
-            raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403) from None
-        now = time.time()
-        nonce = secrets.token_hex(32)
-        with self.lock, self._db() as db:
+            with identity_guard:
+                current_version, primary_pem, primary_device_id = self._current_parent_binding(identity_id)
+                if current_version != key_version:
+                    raise AgentAuthorityError("OPERATOR_ROOT_KEY_VERSION_MISMATCH", 409)
+                self.operator_identity.verify_primary_device(identity_id, primary_pem)
+                now = time.time()
+                nonce = secrets.token_hex(32)
+                with self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM agent_challenges WHERE expires_at<=?", (now,))
             count = db.execute("SELECT COUNT(*) FROM agent_challenges WHERE identity_id=? AND consumed_at IS NULL AND expires_at>?", (identity_id, now)).fetchone()[0]
             if count >= 5:
                 db.execute("ROLLBACK")
                 raise AgentAuthorityError("AGENT_CHALLENGE_LIMIT", 429)
-            db.execute("INSERT INTO agent_challenges(nonce,identity_id,key_version,expires_at) VALUES(?,?,?,?)", (nonce, identity_id, key_version, now + CHALLENGE_TTL))
-            db.execute("COMMIT")
+                    db.execute("INSERT INTO agent_challenges(nonce,identity_id,key_version,expires_at,primary_device_id) VALUES(?,?,?,?,?)", (nonce, identity_id, key_version, now + CHALLENGE_TTL, primary_device_id))
+                    db.execute("COMMIT")
+        except AgentAuthorityError:
+            raise
+        except Exception:
+            raise AgentAuthorityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403) from None
         return {"nonce": nonce, "expires_in": CHALLENGE_TTL, "protocol": PROTOCOL}
 
     def create_delegation(self, *, identity_id: str, key_version: int, nonce: str,
@@ -186,20 +211,44 @@ class AgentAuthority:
         agent_id = secrets.token_hex(16)
         digest = hashlib.sha256(payload).hexdigest()
         primary_device_id = hashlib.sha256(serialization.load_pem_public_key(primary_pem.encode("ascii")).public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
-        with self.lock, self._db() as db:
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else contextmanager(lambda: (yield))()
+        with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            challenge = db.execute("SELECT * FROM agent_challenges WHERE nonce=?", (nonce,)).fetchone()
-            if challenge is None or challenge["identity_id"] != identity_id or challenge["key_version"] != key_version or challenge["consumed_at"] is not None or challenge["expires_at"] <= now:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 409)
-            if db.execute("SELECT 1 FROM delegated_agents WHERE identity_id=? AND revoked_at IS NULL AND expires_at>? AND public_key_pem=?", (identity_id, now, canonical_pem)).fetchone():
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_ALREADY_ENROLLED", 409)
-            db.execute("UPDATE agent_challenges SET consumed_at=? WHERE nonce=? AND consumed_at IS NULL", (now, nonce))
-            db.execute("""INSERT INTO delegated_agents
-                (agent_id,identity_id,key_version,primary_device_id,public_key_pem,scopes_json,created_at,expires_at,grant_digest)
-                VALUES(?,?,?,?,?,?,?,?,?)""", (agent_id, identity_id, key_version, primary_device_id, canonical_pem, json.dumps(sorted(scopes)), now, expires_at, digest))
-            db.execute("COMMIT")
+            try:
+                current_version, current_primary_pem, current_device_id = self._current_parent_binding(identity_id)
+                if (
+                    current_version != key_version
+                    or current_device_id != primary_device_id
+                    or current_primary_pem != primary_pem
+                ):
+                    raise AgentAuthorityError("OPERATOR_OR_PRIMARY_DEVICE_CHANGED", 409)
+                self.operator_identity.verify_primary_device(identity_id, current_primary_pem)
+                challenge = db.execute("SELECT * FROM agent_challenges WHERE nonce=?", (nonce,)).fetchone()
+                if (
+                    challenge is None or challenge["identity_id"] != identity_id
+                    or challenge["key_version"] != key_version
+                    or challenge["primary_device_id"] != primary_device_id
+                    or challenge["consumed_at"] is not None
+                    or challenge["expires_at"] <= now
+                ):
+                    raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 409)
+                if db.execute("SELECT 1 FROM delegated_agents WHERE identity_id=? AND revoked_at IS NULL AND expires_at>? AND public_key_pem=?", (identity_id, now, canonical_pem)).fetchone():
+                    raise AgentAuthorityError("AGENT_ALREADY_ENROLLED", 409)
+                changed = db.execute(
+                    "UPDATE agent_challenges SET consumed_at=? WHERE nonce=? AND consumed_at IS NULL AND expires_at>?",
+                    (now, nonce, now),
+                ).rowcount
+                if changed != 1:
+                    raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 409)
+                db.execute("""INSERT INTO delegated_agents
+                    (agent_id,identity_id,key_version,primary_device_id,public_key_pem,scopes_json,created_at,expires_at,grant_digest)
+                    VALUES(?,?,?,?,?,?,?,?,?)""", (agent_id, identity_id, key_version, primary_device_id, canonical_pem, json.dumps(sorted(scopes)), now, expires_at, digest))
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
         return {"agent_id": agent_id, "fingerprint": fingerprint, "scopes": sorted(scopes), "expires_at": expires_at, "authority": "DELEGATED_READ_ONLY"}
 
     @staticmethod
@@ -240,11 +289,24 @@ class AgentAuthority:
             raise
         except Exception:
             raise AgentAuthorityError("PRIMARY_OR_ROOT_AUTHORITY_INVALID", 403) from None
-        with self.lock, self._db() as db:
+        identity_lock = getattr(self.operator_identity, "lock", None)
+        identity_guard = identity_lock if identity_lock is not None else contextmanager(lambda: (yield))()
+        with identity_guard, self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            changed = db.execute("UPDATE delegated_agents SET revoked_at=? WHERE agent_id=? AND identity_id=? AND key_version=? AND revoked_at IS NULL", (time.time(), agent_id, identity_id, key_version)).rowcount
-            if changed != 1:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 404)
-            db.execute("COMMIT")
+            try:
+                current_version, current_primary_pem, _ = self._current_parent_binding(identity_id)
+                if current_version != key_version or current_primary_pem != primary_pem:
+                    raise AgentAuthorityError("OPERATOR_OR_PRIMARY_DEVICE_CHANGED", 409)
+                self.operator_identity.verify_primary_device(identity_id, current_primary_pem)
+                changed = db.execute(
+                    "UPDATE delegated_agents SET revoked_at=? WHERE agent_id=? AND identity_id=? AND key_version=? AND revoked_at IS NULL",
+                    (time.time(), agent_id, identity_id, key_version),
+                ).rowcount
+                if changed != 1:
+                    raise AgentAuthorityError("AGENT_NOT_ACTIVE", 404)
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
         return {"revoked": True, "authority": "READ_ONLY"}
