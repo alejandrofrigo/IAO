@@ -3,6 +3,7 @@ import fcntl
 import os
 import stat
 
+from omega import supervision
 from omega.supervision import read_heartbeat, read_lock_owner, write_heartbeat
 from tools import iao_autonomous_coordinator as coordinator
 from tools import iao_five_motor_supervisor as supervisor
@@ -305,3 +306,17 @@ def test_supervisor_rejects_reused_pid_before_reporting_motor_health(tmp_path, m
     output = capsys.readouterr().out
     assert "PADGE: STALE_PROCESS_IDENTITY" in output
     assert "PADGE: HEALTHY" not in output
+
+
+def test_heartbeat_rejects_reused_pid_even_when_numeric_pid_is_alive(tmp_path, monkeypatch):
+    path = tmp_path / "heartbeat.json"
+    write_heartbeat(
+        path,
+        component="TASK_WORKER",
+        pid=os.getpid(),
+        phase="cycle_completed",
+        interval_seconds=1,
+        stale_after_seconds=60,
+    )
+    monkeypatch.setattr(supervision, "_process_start_ticks", lambda _pid: "999999")
+    assert read_heartbeat(path, expected_component="TASK_WORKER") == {"status": "UNVERIFIED"}
