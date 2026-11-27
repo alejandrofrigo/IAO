@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import stat
 
 from omega import federation_transport, onion_discovery
