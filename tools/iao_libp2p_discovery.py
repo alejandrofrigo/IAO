@@ -115,7 +115,7 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
             "persisted_new_peers": added,
             "auto_assimilation": assimilation_state,
             "auto_assimilated_new_peers": assimilation["new"],
-            "auto_assimililated_observations": assimilation["observed"],
+            "auto_assimilated_observations": assimilation["observed"],
             "assimilated_registry_total": assimilation["total"],
             "identity_verification": "NOT_PERFORMED",
             "enrollment_performed": False,
