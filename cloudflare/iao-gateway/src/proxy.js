@@ -117,7 +117,9 @@ export async function proxyApi(request, env) {
   }
 
   const headers = new Headers();
+  const signedAgentStatus = incoming.pathname === "/v1/agent/status";
   for (const name of FORWARDED_HEADERS) {
+    if (name.startsWith("x-iao-agent-") && !signedAgentStatus) continue;
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
