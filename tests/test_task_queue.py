@@ -262,14 +262,10 @@ class DurableTaskQueueTests(unittest.TestCase):
                 for row in migrated.db.execute("PRAGMA table_info(task)").fetchall()
             }
             self.assertTrue(
-                {"lease_owner", "lease_until", "attempt_count", "lease_generation"}.issubset(columns)
+                {"lease_owner", "lease_until", "attempt_count", "lease_generation", "cancel_requested_at"}.issubset(columns)
             )
         finally:
             migrated.close()
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
     def test_queued_task_can_be_cancelled_atomically(self) -> None:
@@ -307,3 +303,7 @@ if __name__ == "__main__":
         self.assertFalse(self.store.task_cancel_requested(
             "task-1", "worker-a", claimed["lease_generation"]
         ))
+
+
+if __name__ == "__main__":
+    unittest.main()
