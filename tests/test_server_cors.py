@@ -1,6 +1,7 @@
 """Default CORS policy must not disclose or trust a hard-coded operator origin."""
 import os
 import threading
+import urllib.error
 from contextlib import redirect_stderr
 from io import StringIO
 import urllib.request
