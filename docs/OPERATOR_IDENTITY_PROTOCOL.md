@@ -235,7 +235,7 @@ the same leakage.
 
 Until every required test and lifecycle control is implemented and reviewed:
 
-- keep worker production startup blocked;
+- require the internal dual-signed root/primary-device login, persistent session key, and live OS-sandbox preflight before enabling the local read-only worker;
 - keep privileged scopes disabled;
 - keep the public chat guest-only;
 - keep the pull request in draft;
