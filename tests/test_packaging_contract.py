@@ -4,9 +4,9 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-_REQUIREMENT = re.compile(
-    r"([A-Za-z0-9_.-]+)(?:\\[([A-Za-z0-9_,.-]+)\\])?==([A-Za-z0-9_.+-]+)"
-)
+_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+_EXTRAS = re.compile(r"[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*")
+_VERSION = re.compile(r"[A-Za-z0-9_.+-]+")
 
 
 def _normalized(name: str) -> str:
@@ -16,11 +16,17 @@ def _normalized(name: str) -> str:
 def _parse(requirements: list[str]) -> dict[tuple[str, tuple[str, ...]], str]:
     parsed = {}
     for line in requirements:
-        match = _REQUIREMENT.fullmatch(line.strip())
-        assert match is not None, f"unlocked or invalid requirement: {line}"
-        name, extras, version = match.groups()
-        key = (_normalized(name), tuple(sorted((extras or "").split(","))) if extras else ())
-        assert key not in parsed, f"duplicate requirement: {name}"
+        parts = line.strip().split("==")
+        assert len(parts) == 2, f"unlocked or invalid requirement: {line}"
+        package, version = parts
+        extras = ""
+        if "[" in package:
+            assert package.endswith("]") and package.count("[") == 1, line
+            package, extras = package[:-1].split("[", 1)
+        assert _NAME.fullmatch(package) and _VERSION.fullmatch(version), line
+        assert not extras or _EXTRAS.fullmatch(extras), line
+        key = (_normalized(package), tuple(sorted(extras.split(","))) if extras else ())
+        assert key not in parsed, f"duplicate requirement: {package}"
         parsed[key] = version
     return parsed
 
