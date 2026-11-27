@@ -1390,15 +1390,31 @@ class OperatorIdentityAuthority:
                     or not hmac.compare_digest(root["session_digest"], session_digest)
                 ):
                     raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                if purpose == "GRANT":
+                    existing = db.execute(
+                        """SELECT 1 FROM operator_capability_grants
+                        WHERE identity_id=? AND subject_digest=? AND session_digest=?
+                        AND device_id=? AND capability=? AND policy_version=?
+                        AND revoked_at IS NULL AND expires_at>?""",
+                        (
+                            root["identity_id"], subject_digest, session_digest,
+                            device_id, capability, policy_version, now,
+                        ),
+                    ).fetchone()
+                    if existing is not None:
+                        raise OperatorIdentityError("CAPABILITY_ALREADY_GRANTED", 409)
                 if purpose == "REVOKE":
                     grant = db.execute(
-                        """SELECT capability FROM operator_capability_grants
+                        """SELECT capability,policy_version FROM operator_capability_grants
                         WHERE grant_id=? AND identity_id=? AND subject_digest=?
                         AND session_digest=? AND device_id=? AND revoked_at IS NULL
                         AND expires_at>?""",
                         (grant_id, root["identity_id"], subject_digest, session_digest, device_id, now),
                     ).fetchone()
-                    if grant is None or grant["capability"] != capability:
+                    if (
+                        grant is None or grant["capability"] != capability
+                        or grant["policy_version"] != policy_version
+                    ):
                         raise OperatorIdentityError("CAPABILITY_GRANT_NOT_ACTIVE", 404)
                 active = db.execute(
                     """SELECT COUNT(*) FROM operator_capability_challenges
@@ -1649,6 +1665,9 @@ class OperatorIdentityAuthority:
     ) -> list[dict[str, Any]]:
         subject_digest = self._session_subject_digest(subject)
         session_digest = self._session_credential_digest(session_token)
+        active_capabilities = self.active_capabilities_for_session(
+            subject, session_token, policy_version=policy_version,
+        )
         with self._database() as db:
             rows = db.execute(
                 """SELECT grant_id,capability,created_at,expires_at,revoked_at
@@ -1661,7 +1680,9 @@ class OperatorIdentityAuthority:
                 "grant_id": row["grant_id"], "capability": row["capability"],
                 "created_at": int(row["created_at"]), "expires_at": int(row["expires_at"]),
                 "revoked": row["revoked_at"] is not None,
-                "active": row["revoked_at"] is None and row["expires_at"] > time.time(),
+                "active": row["revoked_at"] is None
+                    and row["expires_at"] > time.time()
+                    and row["capability"] in active_capabilities,
             }
             for row in rows
         ]
