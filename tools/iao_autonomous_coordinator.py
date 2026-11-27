@@ -60,11 +60,12 @@ def now():
 
 
 def log(event, **data):
-    STATE.mkdir(parents=True, exist_ok=True)
-    record = {"time": now(), "event": event, **data}
-    with EVENTS.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(json.dumps(record, ensure_ascii=False), flush=True)
+    from omega.operational_log import append_private_jsonl
+
+    entry = append_private_jsonl(
+        EVENTS, {"time": utc(), "event": event, **data},
+    )
+    print(json.dumps(entry, ensure_ascii=False), flush=True)
 
 
 def inventory():
