@@ -87,6 +87,8 @@ class OmegaService:
     def handle(self, method: str, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
         cid = uuid.uuid4().hex
         try:
+            if headers.get("transfer-encoding"):
+                raise ApiError(400, "INVALID_TRANSFER_ENCODING")
             raw_length = headers.get("content-length")
             if raw_length is not None:
                 try:
