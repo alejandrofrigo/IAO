@@ -24,8 +24,8 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | Nº | Objetivo | Criterio de aceptación | Estado |
 |---:|---|---|---|
 | 01 | Inventario técnico y fuente de verdad | Identificar HEAD/base, ramas y PRs apilados; inventariar API, núcleo, stores, configuración, workers y pruebas sin sobrescribir trabajo previo. | EN CURSO |
-| 02 | Contrato de arquitectura del núcleo | Documentar límites entre API, servicio, dominio, persistencia, herramientas y adaptadores; no duplicar autoridades ni colas. | PENDIENTE |
-| 03 | Configuración tipada y validada | Validar entorno, puertos, adaptadores y límites; rechazar valores inválidos de forma determinista y sin filtrar secretos. | PENDIENTE |
+| 02 | Contrato de arquitectura del núcleo | Documentar límites entre API, servicio, dominio, persistencia, herramientas y adaptadores; no duplicar autoridades ni colas. | IMPLEMENTADO |
+| 03 | Configuración tipada y validada | Validar entorno, puertos, host, URL pública y adaptadores; rechazar valores inválidos de forma determinista y sin filtrar secretos. | IMPLEMENTADO |
 | 04 | Gestión segura de secretos | Exigir secretos persistentes donde corresponda; no generar identidades silenciosamente en producción ni registrar valores sensibles. | PENDIENTE |
 | 05 | Ciclo de vida de la API | Arranque y parada explícitos, idempotentes y observables; fallos críticos reflejados en readiness sin ocultar excepciones. | EN CURSO |
 | 06 | Servicio de aplicación único | Una única construcción del servicio y sus autoridades por proceso; inicialización segura y concurrencia controlada. | PENDIENTE |
@@ -46,10 +46,13 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 
 ## Inventario inicial conocido — no equivale a verificación actual
 
-- El repositorio ya contiene omega/config.py, una API FastAPI bajo apps/api, servicios y persistencia SQLite, auditoría, identidad de dispositivos, cola de tareas, workers y workflows.
-- El README de main declara que la autenticación de desarrollo no es OIDC y que SQLite es de desarrollo; también advierte que FastAPI, PostgreSQL, Docker e infraestructura externa no se ejecutan en ese entorno de validación.
-- Existe trabajo pendiente en PR #16 (lifecycle del TaskWorker), PR #19 (diagnóstico de readiness apilado sobre #16), PR #17 (gates de producción) y PR #18 (IPFS read-only). Deben revisarse sus bases y dependencias antes de integrar; esta rama no los incorpora automáticamente.
-- El informe docs/IAO_OBJECTIVES_GAP_ANALYSIS.md tiene un corte estático anterior y no sustituye una inspección de la revisión actual.
+- El repositorio contiene `omega/config.py`, una API FastAPI bajo `apps/api`, servicio `OmegaService`, persistencia SQLite, auditoría, identidad de dispositivos, cola de tareas, workers y workflows.
+- `omega/server.py` es un adaptador HTTP basado en stdlib y `apps/api/main.py` es el adaptador ASGI. Ambos son entrypoints separados; no se afirma que ambos estén ejecutándose ni que compartan una instancia entre procesos.
+- `omega/store.py` implementa SQLite para el piloto. La dependencia psycopg en `pyproject.toml` no demuestra un Store PostgreSQL funcional.
+- El README declara que la autenticación de desarrollo no es OIDC y que SQLite es el backend de desarrollo; también advierte que FastAPI, Docker e infraestructura externa no se ejecutan en el entorno offline de validación.
+- PR #16 contiene el lifecycle opt-in del TaskWorker; PR #19 aporta diagnósticos de readiness apilados sobre #16. PR #17 contiene gates de producción; PR #18 agrega IPFS read-only. Son líneas independientes y no están incorporadas automáticamente en esta rama.
+- PR #20 (esta hoja de ruta) se basa en `iao-production-gates-20261127T0856Z`; la rama estaba 2 commits por delante y 0 por detrás de esa base antes de la ejecución técnica de esta continuación.
+- El informe `docs/IAO_OBJECTIVES_GAP_ANALYSIS.md` tiene un corte estático anterior y no sustituye una inspección de la revisión actual.
 - No se afirma que exista un runtime persistente mundial ni que los workers estén activos en producción.
 
 ## Secuencia de ejecución
@@ -66,4 +69,6 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 
 | Objetivo | Evidencia | Resultado / brecha |
 |---:|---|---|
-| 01 | Rama creada desde iao-production-gates-20261127T0856Z; PRs #16–#19 identificados en el repositorio. | Inventario parcial; falta inspección completa del HEAD, workflow y dependencias exactas. |
+| 01 | Rama aislada, base identificada, comparación GitHub (2 commits ahead/0 behind antes de esta continuación), PRs #16–#20 localizados; inspección de README, pyproject, entrypoints, servicio, Store, auditoría, worker lifecycle y workflows. | Inventario sustancial; falta resolver SHA exacto/dependencias completas de PRs apilados y estado CI de esta rama. |
+| 02 | `docs/CORE_ARCHITECTURE_CONTRACT.md`, enlazado desde README. | Límites y fuentes de verdad documentados; falta prueba de integración de ambos adaptadores. |
+| 03 | `omega/config.py` y `tests/test_config.py`; validación de APP_ENV, PORT, HOST, adaptador y URL pública; casos inválidos y representación sin datos de configuración. | Implementado; pendiente CI Python 3.12/3.13 y verificación del contrato en los entrypoints. |
