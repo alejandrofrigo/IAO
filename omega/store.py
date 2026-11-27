@@ -14,7 +14,7 @@ from typing import Any
 from omega.audit import GENESIS_HASH, make_event, verify_chain
 from omega.control import InvalidTransition, transition
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversation(
@@ -34,6 +34,19 @@ CREATE TABLE IF NOT EXISTS tool_execution(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES task(id), tool_name TEXT NOT NULL, tool_version TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN('PENDING','RUNNING','SUCCEEDED','FAILED','DENIED','TIMED_OUT','CANCELLED')),
   input_digest TEXT NOT NULL, output_digest TEXT, error_code TEXT, started_at TEXT, finished_at TEXT);
+CREATE TABLE IF NOT EXISTS task_budget_usage(
+  task_id TEXT PRIMARY KEY REFERENCES task(id) ON DELETE CASCADE,
+  max_model_calls INTEGER NOT NULL CHECK(max_model_calls BETWEEN 0 AND 100),
+  max_tool_calls INTEGER NOT NULL CHECK(max_tool_calls BETWEEN 1 AND 20),
+  max_input_bytes INTEGER NOT NULL CHECK(max_input_bytes BETWEEN 1 AND 65536),
+  max_output_bytes INTEGER NOT NULL CHECK(max_output_bytes BETWEEN 1 AND 1048576),
+  max_timeout_ms INTEGER NOT NULL CHECK(max_timeout_ms BETWEEN 1 AND 300000),
+  used_model_calls INTEGER NOT NULL DEFAULT 0,
+  used_tool_calls INTEGER NOT NULL DEFAULT 0,
+  used_input_bytes INTEGER NOT NULL DEFAULT 0,
+  used_output_bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS memory(
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, mtype TEXT NOT NULL CHECK(mtype IN('PREFERENCE','FACT')),
   value TEXT NOT NULL, provenance TEXT NOT NULL, consent_at TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -170,7 +183,32 @@ class Store:
                         "INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)",
                         (now_iso(),),
                     )
+                    version = 4
                 elif "cancel_requested_at" not in columns:
+                    raise RuntimeError("DATABASE_SCHEMA_MIGRATION_STATE_INVALID")
+                if version < 5:
+                    self.db.execute("""
+                        CREATE TABLE IF NOT EXISTS task_budget_usage(
+                          task_id TEXT PRIMARY KEY REFERENCES task(id) ON DELETE CASCADE,
+                          max_model_calls INTEGER NOT NULL CHECK(max_model_calls BETWEEN 0 AND 100),
+                          max_tool_calls INTEGER NOT NULL CHECK(max_tool_calls BETWEEN 1 AND 20),
+                          max_input_bytes INTEGER NOT NULL CHECK(max_input_bytes BETWEEN 1 AND 65536),
+                          max_output_bytes INTEGER NOT NULL CHECK(max_output_bytes BETWEEN 1 AND 1048576),
+                          max_timeout_ms INTEGER NOT NULL CHECK(max_timeout_ms BETWEEN 1 AND 300000),
+                          used_model_calls INTEGER NOT NULL DEFAULT 0,
+                          used_tool_calls INTEGER NOT NULL DEFAULT 0,
+                          used_input_bytes INTEGER NOT NULL DEFAULT 0,
+                          used_output_bytes INTEGER NOT NULL DEFAULT 0,
+                          updated_at TEXT NOT NULL
+                        )
+                    """)
+                    self.db.execute(
+                        "INSERT INTO schema_migrations(version, applied_at) VALUES(5, ?)",
+                        (now_iso(),),
+                    )
+                elif self.db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_budget_usage'"
+                ).fetchone() is None:
                     raise RuntimeError("DATABASE_SCHEMA_MIGRATION_STATE_INVALID")
                 self.db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_task_queue "
@@ -433,17 +471,46 @@ class Store:
     # ---- tasks ----
     def create_task(self, task_id: str, owner: str, intent: dict[str, Any], idem: str | None) -> tuple[dict[str, Any], bool]:
         ts = now_iso()
+        budget = intent.get("budget", {}) if isinstance(intent, dict) else {}
+        values = (
+            int(budget.get("max_model_calls", 0)),
+            int(budget.get("max_tool_calls", 1)),
+            int(budget.get("max_input_bytes", 65_536)),
+            int(budget.get("max_output_bytes", 1_048_576)),
+            int(float(budget.get("timeout_seconds", 20)) * 1000),
+        )
         with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
             try:
-                self.db.execute("INSERT INTO task(id,owner,state,intent_json,idem_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                                (task_id, owner, "CREATED", json.dumps(intent, sort_keys=True), idem, ts, ts))
-                created = True
-            except sqlite3.IntegrityError:
-                created = False
-            if created:
-                row = self.db.execute("SELECT * FROM task WHERE id=?", (task_id,)).fetchone()
-            else:
-                row = self.db.execute("SELECT * FROM task WHERE owner=? AND idem_key=?", (owner, idem)).fetchone()
+                try:
+                    self.db.execute(
+                        "INSERT INTO task(id,owner,state,intent_json,idem_key,created_at,updated_at) "
+                        "VALUES(?,?,?,?,?,?,?)",
+                        (task_id, owner, "CREATED", json.dumps(intent, sort_keys=True), idem, ts, ts),
+                    )
+                    created = True
+                except sqlite3.IntegrityError:
+                    created = False
+                if created:
+                    self.db.execute(
+                        "INSERT INTO task_budget_usage("
+                        "task_id,max_model_calls,max_tool_calls,max_input_bytes,"
+                        "max_output_bytes,max_timeout_ms,updated_at"
+                        ") VALUES(?,?,?,?,?,?,?)",
+                        (task_id, *values, ts),
+                    )
+                    row = self.db.execute("SELECT * FROM task WHERE id=?", (task_id,)).fetchone()
+                else:
+                    row = self.db.execute(
+                        "SELECT * FROM task WHERE owner=? AND idem_key=?",
+                        (owner, idem),
+                    ).fetchone()
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+        if row is None:
+            raise RuntimeError("TASK_CREATE_CONFLICT")
         return dict(row), created
 
     def get_task_by_idempotency(self, owner: str, idem: str) -> dict[str, Any] | None:
@@ -673,6 +740,59 @@ class Store:
                 self.db.execute("ROLLBACK")
                 raise
         return recovered
+
+    def consume_task_budget(
+        self,
+        task_id: str,
+        worker_id: str,
+        lease_generation: int,
+        budget_kind: str,
+        amount: int,
+    ) -> bool:
+        """Atomically charge a live lease against its immutable task budget."""
+        columns = {
+            "model_calls": ("used_model_calls", "max_model_calls"),
+            "tool_calls": ("used_tool_calls", "max_tool_calls"),
+            "input_bytes": ("used_input_bytes", "max_input_bytes"),
+            "output_bytes": ("used_output_bytes", "max_output_bytes"),
+        }
+        selected = columns.get(budget_kind)
+        if (
+            selected is None
+            or isinstance(amount, bool)
+            or not isinstance(amount, int)
+            or amount < 1
+            or isinstance(lease_generation, bool)
+            or not isinstance(lease_generation, int)
+            or lease_generation < 1
+        ):
+            return False
+        used_column, maximum_column = selected
+        now = now_iso()
+        with self.lock:
+            changed = self.db.execute(
+                f"UPDATE task_budget_usage SET {used_column}={used_column}+?, updated_at=? "
+                f"WHERE task_id=? AND {used_column}+?<={maximum_column} "
+                "AND EXISTS (SELECT 1 FROM task WHERE task.id=? "
+                "AND task.state IN ('RUNNING','VERIFYING') AND task.lease_owner=? "
+                "AND task.lease_generation=? AND task.lease_until>? "
+                "AND task.cancel_requested_at IS NULL)",
+                (
+                    amount, now, task_id, amount, task_id, worker_id,
+                    lease_generation, now,
+                ),
+            ).rowcount
+        return changed == 1
+
+    def task_budget_status(self, task_id: str, owner: str) -> dict[str, int] | None:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT budget.* FROM task_budget_usage AS budget "
+                "JOIN task ON task.id=budget.task_id "
+                "WHERE task.id=? AND task.owner=?",
+                (task_id, owner),
+            ).fetchone()
+        return dict(row) if row else None
 
     def get_task(self, task_id: str, owner: str) -> dict[str, Any] | None:
         with self.lock:
