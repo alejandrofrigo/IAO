@@ -170,7 +170,7 @@ def test_every_privileged_v1_route_requires_a_bearer(tmp_path, monkeypatch):
         for method, path, body in PROTECTED_ROUTES:
             status, payload = service.handle(method, path, {}, body)
             assert status == 401, (method, path, status, payload)
-            assert payload["error"] == "AUTH_REQUIRED", (method, path, payload)
+            assert payload["error"] == "AUTHENTICATION_REQUIRED", (method, path, payload)
             assert len(payload["correlation_id"]) == 32
     finally:
         service.store.close()
