@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from omega.config import validate_persistent_keys
+from omega.service import MAX_BODY
 
 @asynccontextmanager
 async def _runtime_lifespan(_app):
@@ -93,6 +95,59 @@ def _get_device_authority():
     if authority is None:
         raise RuntimeError("DEVICE_AUTHORITY_UNAVAILABLE")
     return authority
+
+
+async def _read_bounded_service_body(request: Request):
+    """Read API bodies incrementally and reject invalid or oversized requests."""
+    raw_length = request.headers.get("content-length")
+    if raw_length is not None:
+        try:
+            declared_length = int(raw_length)
+        except ValueError:
+            return None, JSONResponse(
+                status_code=400,
+                content={"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex},
+            )
+        if declared_length < 0:
+            return None, JSONResponse(
+                status_code=400,
+                content={"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex},
+            )
+        if declared_length > MAX_BODY:
+            return None, JSONResponse(
+                status_code=413,
+                content={"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex},
+            )
+    chunks = bytearray()
+    async for chunk in request.stream():
+        chunks.extend(chunk)
+        if len(chunks) > MAX_BODY:
+            return None, JSONResponse(
+                status_code=413,
+                content={"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex},
+            )
+    if raw_length is not None and len(chunks) != declared_length:
+        return None, JSONResponse(
+            status_code=400,
+            content={"error": "INCOMPLETE_BODY", "correlation_id": uuid.uuid4().hex},
+        )
+    return bytes(chunks), None
+
+
+def _service_response(status: int, payload: dict):
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+    correlation_id = payload.get("correlation_id")
+    if isinstance(correlation_id, str):
+        headers["X-Correlation-ID"] = correlation_id
+    allowed = payload.get("allowed_methods")
+    if status == 405 and isinstance(allowed, list) and all(
+        isinstance(item, str) for item in allowed
+    ):
+        headers["Allow"] = ", ".join(allowed)
+    return JSONResponse(status_code=status, content=payload, headers=headers)
 
 
 async def _device_json(request: Request):
@@ -361,10 +416,12 @@ async def _device_service_route(request: Request, path: str):
     """Keep device endpoints behind the same authenticated service boundary."""
     try:
         service = _get_service()
-        body = await request.body()
+        body, body_error = await _read_bounded_service_body(request)
+        if body_error is not None:
+            return body_error
         headers = {key.lower(): value for key, value in request.headers.items()}
         status, payload = service.handle("POST", path, headers, body)
-        return JSONResponse(status_code=status, content=payload)
+        return _service_response(status, payload)
     except RuntimeError:
         return JSONResponse(
             status_code=503, content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE"}
@@ -379,7 +436,9 @@ async def api_v1(path: str, request: Request):
     """Pass the complete v1 API through the audited persistent service."""
     try:
         service = _get_service()
-        body = await request.body()
+        body, body_error = await _read_bounded_service_body(request)
+        if body_error is not None:
+            return body_error
         headers = {key.lower(): value for key, value in request.headers.items()}
         # Use the socket peer only for the public-session rate limiter. Never
         # accept a caller-supplied forwarding header as device identity.
@@ -394,14 +453,16 @@ async def api_v1(path: str, request: Request):
             headers,
             body,
         )
-        return JSONResponse(status_code=status, content=payload)
+        return _service_response(status, payload)
     except RuntimeError:
         return JSONResponse(
             status_code=503,
-            content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE"},
+            content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
         )
     except Exception:
         return JSONResponse(
             status_code=503,
-            content={"error": "IAO_SERVICE_UNAVAILABLE"},
+            content={"error": "IAO_SERVICE_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
         )
