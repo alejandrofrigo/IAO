@@ -16,7 +16,8 @@ def _buscar_tavily(pregunta: str) -> str:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode('utf-8'))
         resultados = data.get("results", [])
-        if not resultados: return ""
+        if not resultados:
+            return ""
         contexto = "Resultados de búsqueda (Tavily):\n"
         for i, r in enumerate(resultados, 1):
             contexto += f"{i}. {r.get('title', '')}\n   {r.get('content', '')[:300]}\n\n"
