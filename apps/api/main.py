@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 _task_worker = None
 _task_worker_thread = None
-_task_worker_lock = threading.Lock()
+_task_worker_lock = threading.RLock()
 _task_worker_state = {"status": "disabled_by_default", "reason": None}
 
 
