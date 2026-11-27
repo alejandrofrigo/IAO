@@ -3,7 +3,6 @@ import sqlite3
 import time
 
 import pytest
-from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -92,7 +91,7 @@ def test_dual_signature_creates_read_only_agent_and_status(tmp_path):
 
 def test_challenge_is_single_use(tmp_path):
     authority, operator, agent = _setup(tmp_path)
-    _, challenge, _ = _grant(authority, operator, agent)
+    _, challenge, payload = _grant(authority, operator, agent)
     _, _, fingerprint = authority._public_key(_pem(agent))
     expiry = json.loads(payload.decode("ascii"))["expires_at"]
     payload = authority._grant_payload(
@@ -159,6 +158,7 @@ def test_duplicate_active_agent_key_rejected(tmp_path):
     _grant(authority, operator, agent)
     with pytest.raises(AgentAuthorityError, match="AGENT_ALREADY_ENROLLED"):
         _grant(authority, operator, agent)
+
 
 def test_root_rotation_invalidates_existing_delegation(tmp_path):
     authority, operator, agent = _setup(tmp_path)
