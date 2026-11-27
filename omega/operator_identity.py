@@ -169,6 +169,9 @@ class OperatorIdentityAuthority:
                 );
                 CREATE INDEX IF NOT EXISTS operator_capability_grants_active
                     ON operator_capability_grants(identity_id, session_digest, revoked_at, expires_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS one_active_operator_capability_grant
+                    ON operator_capability_grants(identity_id, session_digest, capability)
+                    WHERE revoked_at IS NULL;
                 """
             )
             recovery_columns = {
@@ -1391,6 +1394,12 @@ class OperatorIdentityAuthority:
                 ):
                     raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
                 if purpose == "GRANT":
+                    db.execute(
+                        """UPDATE operator_capability_grants SET revoked_at=?
+                        WHERE identity_id=? AND session_digest=? AND capability=?
+                        AND revoked_at IS NULL AND expires_at<=?""",
+                        (now, root["identity_id"], session_digest, capability, now),
+                    )
                     existing = db.execute(
                         """SELECT 1 FROM operator_capability_grants
                         WHERE identity_id=? AND subject_digest=? AND session_digest=?
@@ -1560,6 +1569,14 @@ class OperatorIdentityAuthority:
                 if changed != 1:
                     raise OperatorIdentityError("CAPABILITY_CHALLENGE_REPLAYED", 409)
                 if row["purpose"] == "GRANT":
+                    existing = db.execute(
+                        """SELECT 1 FROM operator_capability_grants
+                        WHERE identity_id=? AND session_digest=? AND capability=?
+                        AND revoked_at IS NULL AND expires_at>?""",
+                        (row["identity_id"], session_digest, row["capability"], now),
+                    ).fetchone()
+                    if existing is not None:
+                        raise OperatorIdentityError("CAPABILITY_ALREADY_GRANTED", 409)
                     grant_expires = obj.get("grant_expires_at")
                     if (
                         isinstance(grant_expires, bool) or not isinstance(grant_expires, int)
