@@ -52,7 +52,7 @@ def test_task_worker_failure_leaves_bounded_cycle_evidence(tmp_path):
     else:
         raise AssertionError("worker failure was hidden")
     result = read_heartbeat(heartbeat, expected_component="TASK_WORKER")
-    assert result["status"] == "HEALTHY"
+    assert result["status"] == "DEGRADED"
     assert result["phase"] == "cycle_completed"
     assert result["last_cycle_result"] is False
     assert "private-task-marker" not in heartbeat.read_text(encoding="utf-8")
