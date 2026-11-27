@@ -1297,16 +1297,19 @@ class OmegaService:
             self.store.set_task_state(tid, st, res)
             return 403, {"task_id": tid, "state": st, **res}
         spec = self.registry.get(cap)
-        if execution_mode == "queued" and (
-            spec is None or not authorize_effect(
+        effect_allowed = (
+            spec is not None
+            and authorize_effect(
                 spec.effect_class, approved_effects={"READ_ONLY"}
             ).allowed
-        ):
-            to("DENIED", reason="QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY")
-            result = {
-                "decision": "DENY",
-                "reason": "QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY",
-            }
+        )
+        if not effect_allowed:
+            reason = (
+                "QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY"
+                if execution_mode == "queued" else "TASK_EFFECT_NOT_GRANTED"
+            )
+            to("DENIED", reason=reason)
+            result = {"decision": "DENY", "reason": reason}
             self.store.set_task_state(tid, st, result)
             return 403, {"task_id": tid, "state": st, **result}
         if execution_mode == "queued" and cap not in QUEUED_TOOL_ALLOWLIST:
