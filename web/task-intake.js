@@ -161,6 +161,32 @@
     }
   }
 
+  async function cancelTask() {
+    if (!latestTaskId || busy) return;
+    if (!window.IAODeviceAuthority ||
+        typeof window.IAODeviceAuthority.cancelQueuedTask !== "function") {
+      setStatus("El cliente seguro del dispositivo no está disponible.");
+      return;
+    }
+    busy = true;
+    cancelButton.disabled = true;
+    setStatus("Firmando la cancelación con el dispositivo primario...");
+    try {
+      const result = await window.IAODeviceAuthority.cancelQueuedTask(latestTaskId);
+      resultEl.textContent = JSON.stringify({
+        task_id: latestTaskId,
+        state: result.state,
+        cancellation: result.cancellation
+      }, null, 2);
+      setStatus("Cancelación: " + result.cancellation + ". Estado: " + result.state + ".");
+    } catch (error) {
+      setStatus("No se pudo cancelar la tarea: " + String(error.message || error));
+    } finally {
+      busy = false;
+      await refreshGate();
+    }
+  }
+
   submitButton.addEventListener("click", submitTask);
   refreshButton.addEventListener("click", refreshTaskStatus);
   cancelButton.addEventListener("click", cancelTask);
