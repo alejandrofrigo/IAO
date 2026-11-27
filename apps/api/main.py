@@ -27,15 +27,37 @@ class _PersistentRuntimeUnavailable(RuntimeError):
 
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # Start persistent service and network workers during configured production boot.
-    # Liveness-only qualification may omit secrets; in that case the API remains
-    # live but readiness and service routes stay fail-closed.
+    # The task worker is a separate explicit opt-in. Missing persistent keys
+    # keep liveness available but block worker startup and readiness.
+    if not _task_worker_requested():
+        _set_task_worker_state("disabled_by_default")
+    elif (
+        len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) < 32
+        or len(os.environ.get("AUDIT_HMAC_KEY", "")) < 32
+    ):
+        _set_task_worker_state("blocked", "PERSISTENT_KEYS_UNAVAILABLE")
     if os.environ.get("OMEGA_DEV_TOKEN_KEY") or os.environ.get("AUDIT_HMAC_KEY"):
         try:
-            _get_service()
+            service = _get_service()
+            if _task_worker_requested():
+                _start_task_worker(service)
+        except RuntimeError as exc:
+            reason = str(exc)
+            if reason not in {
+                "PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED",
+                "TASK_WORKER_SETTINGS_INVALID",
+                "TASK_WORKER_SETTINGS_OUT_OF_RANGE",
+            }:
+                reason = "WORKER_START_FAILED"
+            if _task_worker_requested():
+                _set_task_worker_state("start_failed", reason)
+            logging.getLogger("iao.runtime").error(
+                "RUNTIME_START_FAILED error_type=%s",
+                type(exc).__name__,
+            )
         except Exception as exc:
-            # Keep liveness available, but never hide a failed configured startup.
-            # Log only the exception class; messages may contain paths or secrets.
+            if _task_worker_requested():
+                _set_task_worker_state("start_failed", "WORKER_START_FAILED")
             logging.getLogger("iao.runtime").error(
                 "RUNTIME_START_FAILED error_type=%s",
                 type(exc).__name__,
@@ -43,6 +65,7 @@ async def _runtime_lifespan(_app):
     try:
         yield
     finally:
+        _stop_task_worker()
         _stop_background_workers()
 
 
@@ -76,6 +99,105 @@ _federation_node = None
 _federation_lock = threading.Lock()
 _federation_worker_status = {"autojoin": False, "discovery": False, "external_network": False}
 _service_lock = threading.Lock()
+_task_worker = None
+_task_worker_thread = None
+_task_worker_lock = threading.RLock()
+_task_worker_state = {"status": "disabled_by_default", "reason": None}
+
+
+def _set_task_worker_state(status: str, reason: str | None = None) -> None:
+    with _task_worker_lock:
+        _task_worker_state["status"] = status
+        _task_worker_state["reason"] = reason
+
+
+def _task_worker_requested() -> bool:
+    return os.environ.get("IAO_TASK_WORKER_ENABLED", "").strip().lower() == "true"
+
+
+def _task_worker_readiness() -> dict[str, str | None]:
+    with _task_worker_lock:
+        thread = _task_worker_thread
+        state = dict(_task_worker_state)
+    if thread is not None and thread.is_alive():
+        return {"status": "running", "reason": None}
+    if state["status"] == "running":
+        return {"status": "worker_exited", "reason": "WORKER_THREAD_NOT_ALIVE"}
+    return state
+
+
+def _start_task_worker(service) -> bool:
+    """Start one opt-in worker using the API's existing Store and identity authority."""
+    global _task_worker, _task_worker_thread
+    if not _task_worker_requested():
+        _set_task_worker_state("disabled_by_default")
+        return False
+    with _task_worker_lock:
+        if _task_worker_thread is not None and _task_worker_thread.is_alive():
+            _set_task_worker_state("running")
+            return True
+        try:
+            lease_seconds = int(os.environ.get("IAO_TASK_WORKER_LEASE_SECONDS", "60"))
+            poll_seconds = float(os.environ.get("IAO_TASK_WORKER_POLL_SECONDS", "1"))
+        except (TypeError, ValueError):
+            raise RuntimeError("TASK_WORKER_SETTINGS_INVALID") from None
+        if not 15 <= lease_seconds <= 300 or not 0.1 <= poll_seconds <= 30:
+            raise RuntimeError("TASK_WORKER_SETTINGS_OUT_OF_RANGE")
+        from omega.task_worker import TaskWorker
+
+        state_dir = Path(os.environ.get(
+            "IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")
+        ))
+        worker = TaskWorker(
+            service.store,
+            service.registry,
+            lease_seconds=lease_seconds,
+            poll_seconds=poll_seconds,
+            operator_identity_authority=service.operator_identity_authority,
+            heartbeat_path=state_dir / "task-worker-heartbeat.json",
+            heartbeat_stale_after_seconds=max(60, lease_seconds * 2),
+        )
+        service.store.audit("system", "TASK_WORKER_START", "api_lifespan")
+        thread = threading.Thread(
+            target=worker.run_forever,
+            name="iao-task-worker",
+            daemon=True,
+        )
+        _task_worker = worker
+        _task_worker_thread = thread
+        try:
+            thread.start()
+        except Exception:
+            _task_worker = None
+            _task_worker_thread = None
+            service.store.audit(
+                "system", "TASK_WORKER_START_FAILED", "api_lifespan",
+                decision="FAIL_CLOSED",
+            )
+            _set_task_worker_state("start_failed", "WORKER_START_FAILED")
+            raise
+        _set_task_worker_state("running")
+        return True
+
+
+def _stop_task_worker() -> None:
+    global _task_worker, _task_worker_thread
+    with _task_worker_lock:
+        worker = _task_worker
+        thread = _task_worker_thread
+    if worker is None or thread is None:
+        return
+    worker.stop()
+    thread.join(timeout=10)
+    if thread.is_alive():
+        _set_task_worker_state("stop_timeout", "WORKER_DID_NOT_STOP_WITHIN_DEADLINE")
+        return
+    with _task_worker_lock:
+        if _task_worker_thread is thread:
+            _task_worker = None
+            _task_worker_thread = None
+    _set_task_worker_state("stopped")
+
 
 _allowed_origins = [
     item.strip().rstrip("/")
@@ -533,7 +655,12 @@ def ready(request: Request):
         **payload.get("checks", {}),
         "federation_workers": worker_checks,
         "model_adapter": model_state,
-        "task_worker": _task_worker_health(),
+        "task_worker": (
+            _task_worker_health()
+            if _task_worker_requested() and _task_worker_readiness()["status"] == "running"
+            else _task_worker_readiness()["status"]
+        ),
+        "task_worker_reason": _task_worker_readiness()["reason"],
     }
     payload["production_gates"] = {
         "device_identity_verification": "integrated_read_only",
