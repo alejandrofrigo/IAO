@@ -1772,6 +1772,39 @@ class LimitsAndIntegrityTests(Base):
         finally:
             self.svc.store.audit_key = original_key
 
+
+    def test_chat_audit_records_non_secret_model_provenance(self) -> None:
+        class ModelWithMetadata:
+            def chat_with_metadata(self, _messages):
+                return {
+                    "reply": "verified structure only",
+                    "model_identity": {
+                        "provider_id": "provider-a",
+                        "configured_model": "model-a",
+                        "upstream_model": "model-a-v2",
+                        "identity_status": "upstream_model_reported",
+                    },
+                }
+
+        cid = self.call("POST", "/v1/conversations", self.tok("audit-user"), {})[1]["conversation_id"]
+        self.svc.model = ModelWithMetadata()
+        status, response = self.call(
+            "POST", "/v1/chat", self.tok("audit-user"),
+            {"conversation_id": cid, "message": "hello"},
+        )
+        self.assertEqual(status, 200)
+        events = [
+            event for event in self.svc.store._all_events()
+            if event["event_type"] == "CHAT_COMPLETED"
+        ]
+        self.assertEqual(len(events), 1)
+        details = json.loads(events[0]["details"])
+        self.assertEqual(details["model_provider_id"], "provider-a")
+        self.assertEqual(details["model_configured_id"], "model-a")
+        self.assertEqual(details["model_upstream_id"], "model-a-v2")
+        self.assertNotIn("api_key", details)
+        self.assertNotIn("secret", json.dumps(details).casefold())
+
     def test_chat_reports_model_not_configured_after_authz(self) -> None:
         self.assertEqual(self.call("POST", "/v1/chat", {}, {"conversation_id": "x", "message": "hi"})[0], 401)
         cid = self.call("POST", "/v1/conversations", self.tok("a"), {})[1]["conversation_id"]
