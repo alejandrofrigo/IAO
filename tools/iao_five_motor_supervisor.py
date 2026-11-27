@@ -32,28 +32,12 @@ def now():
 
 
 def event(name, **data):
-    STATE.mkdir(parents=True, exist_ok=True)
-    record = {"time": now(), "event": name, **data}
-    with EVENTS.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(json.dumps(record, ensure_ascii=False), flush=True)
+    from omega.operational_log import append_private_jsonl
 
-
-def load_json(path, default):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return default
-
-
-def save_json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+    entry = append_private_jsonl(
+        EVENTS, {"time": now(), "event": name, **data},
     )
-    os.replace(temp, path)
+    print(json.dumps(entry, ensure_ascii=False), flush=True)
 
 
 def adapters():
