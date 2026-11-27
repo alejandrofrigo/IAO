@@ -153,6 +153,11 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
                       ) -> tuple[dict[str, Any], str]:
     if not 0 < timeout_seconds <= 300:
         raise ValueError("INVALID_TOOL_TIMEOUT")
+    input_bytes = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    if len(input_bytes) > MAX_INPUT_BYTES:
+        raise ValueError("TOOL_INPUT_TOO_LARGE")
     mode = os.environ.get("IAO_TOOL_SANDBOX_MODE")
     if mode is None:
         mode = "bubblewrap" if os.environ.get("APP_ENV", "").lower() == "production" else "process"
@@ -160,11 +165,6 @@ def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
         return _run_tool_bubblewrap(run, verify, payload, timeout_seconds)
     if mode != "process":
         raise ValueError("INVALID_TOOL_SANDBOX_MODE")
-    input_bytes = json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
-    if len(input_bytes) > MAX_INPUT_BYTES:
-        raise ValueError("TOOL_INPUT_TOO_LARGE")
 
     context = multiprocessing.get_context("spawn")
     receive_conn, send_conn = context.Pipe(duplex=False)
