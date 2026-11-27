@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,9 +15,11 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.state = Path(self.temp.name)
+        self.env = patch.dict(os.environ, {"IAO_P2P_ALLOW_DIRECT": "true"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
 
     def test_cycle_persists_only_safe_discovery_status(self):
-        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "DISCOVERY_COMPLETED",
             "connected_bootstrappers": 2,
@@ -51,7 +54,6 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(inventory["capabilities"], [])
 
     def test_success_without_bootstrap_is_rejected_and_not_assimilated(self):
-        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "DISCOVERY_COMPLETED",
             "connected_bootstrappers": 0,
@@ -71,7 +73,6 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertFalse((self.state / "p2p-assimilated-peers.json").exists())
 
     def test_bootstrap_unavailable_does_not_assimilate(self):
-        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "BOOTSTRAP_UNAVAILABLE",
             "connected_bootstrappers": 0,
@@ -88,7 +89,6 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertFalse((self.state / "p2p-assimilated-peers.json").exists())
 
     def test_optional_dependency_failure_is_not_reported_as_success(self):
-        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         def fail(**kwargs):
             raise ImportError("optional dependency unavailable")
         with patch.object(worker, "state_dir", return_value=self.state), patch.object(
@@ -101,7 +101,6 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
 
 
     def test_tor_discovery_runs_even_when_libp2p_bootstrap_is_unavailable(self):
-        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         result = {
             "status": "BOOTSTRAP_UNAVAILABLE",
             "connected_bootstrappers": 0,
@@ -126,7 +125,6 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(report["tor_onion_discovery"], tor)
 
     def test_tor_discovery_runs_even_when_libp2p_raises(self):
-        self.env.setenv("IAO_P2P_ALLOW_DIRECT", "true")
         tor = {
             "status": "ONION_DISCOVERY_COMPLETED",
             "feeds_checked": 1,
@@ -141,6 +139,21 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         self.assertEqual(report["status"], "DISCOVERY_ERROR")
         self.assertEqual(report["tor_onion_discovery"], tor)
 
+
+
+    def test_direct_p2p_is_disabled_without_explicit_privacy_opt_in(self):
+        with patch.dict(os.environ, {"IAO_P2P_ALLOW_DIRECT": ""}), patch.object(
+            worker.libp2p_discovery,
+            "discover_sync",
+            side_effect=AssertionError("direct network must remain disabled"),
+        ), patch.object(
+            worker, "tor_discovery_cycle",
+            return_value={"status": "NO_CONFIGURED_FEEDS"},
+        ), patch.object(worker, "state_dir", return_value=self.state):
+            report = worker.cycle(timeout=5)
+        self.assertEqual(report["status"], "DIRECT_P2P_DISABLED_PRIVACY_POLICY")
+        self.assertEqual(report["auto_assimilation"], "SKIPPED_PRIVACY_POLICY")
+        self.assertFalse(report["listener_exposed"])
 
     def test_multiaddresses_are_classified_without_claiming_connectivity(self):
         from omega.p2p_assimilation import classify_multiaddr
