@@ -240,3 +240,13 @@ def test_invalid_timeout_is_rejected_before_provider_calls(monkeypatch):
         router.chat_with_metadata(
             [{"role": "user", "content": "test"}], timeout=float("inf")
         )
+
+
+
+def test_status_handles_corrupt_health_document_without_exposing_config_secrets(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    monkeypatch.setattr(router, "health", lambda: {"alpha": "corrupt"})
+    result = router.status()
+    assert result["providers"][0]["id"] == "alpha"
+    assert result["providers"][0]["failures"] == 0
+    assert result["providers"][0]["last_latency_ms"] is None
