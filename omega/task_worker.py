@@ -174,6 +174,11 @@ class TaskWorker:
                 self.operator_identity_authority.verify_primary_device_for_session_digest(
                     owner, session_digest, device_id,
                 )
+                active_capabilities = self.operator_identity_authority.active_capabilities_for_session_digest(
+                    owner, session_digest, device_id, policy_version=POLICY_VERSION,
+                )
+                if capability not in active_capabilities:
+                    raise PermissionError("TASK_CAPABILITY_GRANT_REVOKED")
             except Exception:
                 self.store.audit(
                     owner, "TASK_WORKER_OPERATOR_AUTHORITY_DENIED", task_id,
