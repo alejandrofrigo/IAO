@@ -96,7 +96,7 @@ Para que el supervisor de cinco motores lo gestione, el motor `NODE_NETWORK` deb
 - Servicio onion llega al backend correcto sin exponer puertos administrativos.
 - Prueba negativa: peer desconocido no puede ejecutar tareas, acceder a datos privados ni cambiar políticas.
 - Prueba de revocación efectiva.
-- CI y quality gates verdes.
+- CI y quality gates verdes, incluido el smoke Tor/Kubo y una prueba controlada entre dos nodos IAO.
 
 ## Límites explícitos
 
@@ -165,4 +165,4 @@ No existe un directorio onion global que permita enumerar automáticamente todos
 - Las direcciones onion y los CIDs permanecen como metadatos públicos no autenticados hasta que una fase posterior valide identidad, firma, origen y política de contenido.
 
 
-La configuración del transporte Tor usa por defecto SOCKS5 en `127.0.0.1:9050`; el puerto y host pueden cambiarse mediante `IAO_TOR_SOCKS_HOST` y `IAO_TOR_SOCKS_PORT` (por ejemplo, si el `torrc` local usa otro puerto). El código no inicia Tor ni presupone que el socket esté activo. El smoke test efímero de CI activa `IAO_P2P_ALLOW_DIRECT=true` solo dentro del runner aislado para probar DHT; el runtime local no hereda esa excepción.
+La configuración del transporte Tor usa por defecto SOCKS5 en `127.0.0.1:9050`; el puerto y host pueden cambiarse mediante `IAO_TOR_SOCKS_HOST` y `IAO_TOR_SOCKS_PORT` (por ejemplo, si el `torrc` local usa otro puerto). El código no inicia Tor ni presupone que el socket esté activo. El smoke test efímero de CI activa `IAO_P2P_ALLOW_DIRECT=true` solo dentro del runner aislado para probar DHT y hace una única petición a un onion service oficial de Tor Project; el runtime local no hereda esa excepción. La prueba no representa una federación entre nodos IAO.
