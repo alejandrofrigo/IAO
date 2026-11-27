@@ -13,9 +13,9 @@ services:
       IAO_TASK_WORKER_ENABLED: ${IAO_TASK_WORKER_ENABLED:-true}
       IAO_IDENTITY_ROLLBACK_DIR: /var/lib/iao/identity-trust
       IAO_CORS_ORIGINS: ${IAO_CORS_ORIGINS:?set exact IAO_CORS_ORIGINS}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set HTTPS PUBLIC_BASE_URL}
-    ports:
-      - "8080:8080"
+      PUBLIC_BASE_URL: https://${IAO_DOMAIN:?set public IAO_DOMAIN}
+    expose:
+      - "8080"
     volumes:
       - iao_state:/var/lib/iao
       - iao_identity_trust:/var/lib/iao/identity-trust
@@ -28,6 +28,25 @@ services:
       - ALL
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      IAO_DOMAIN: ${IAO_DOMAIN:?set public IAO_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   iao_state: {}
   iao_identity_trust: {}
+  caddy_data: {}
+  caddy_config: {}
