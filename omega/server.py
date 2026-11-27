@@ -130,6 +130,15 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     return OmegaService(store, reg, token_key, **kw)  # type: ignore[arg-type]
 
 
+def _bind_scope(host: str) -> str:
+    normalized = str(host).strip().lower()
+    if normalized in {"0.0.0.0", "::"}:
+        return "all_interfaces"
+    if normalized in {"127.0.0.1", "::1", "localhost"}:
+        return "loopback"
+    return "configured"
+
+
 def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHTTPRequestHandler]:
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -449,7 +458,7 @@ def main() -> None:
         httpd = ThreadingHTTPServer((s.host, s.port), make_handler(svc, fed_node))
         pid_path.write_text(str(os.getpid()), encoding="ascii")
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
-        sys.stderr.write(json.dumps({"event": "listening", "host": s.host, "port": s.port}) + "\n")
+        sys.stderr.write(json.dumps({"event": "listening", "bind_scope": _bind_scope(s.host), "port": s.port}) + "\n")
         httpd.serve_forever()
     finally:
         workers_stopped = True
