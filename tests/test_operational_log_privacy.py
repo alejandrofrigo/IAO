@@ -68,6 +68,8 @@ def test_operational_log_hashes_unknown_strings_and_untrusted_string_lists():
         "origin": "https://private-host.example/private-path-marker",
         "annotations": ["private-list-marker", "another-private-value"],
         "capabilities": ["knowledge.search"],
+        "status": "192.0.2.55",
+        "state": "private-state-marker",
     })
     assert safe["time"] == "2026-11-27T00:00:00+00:00"
     assert safe["event"] == "NODE_CANDIDATE_DISCOVERED"
@@ -75,6 +77,10 @@ def test_operational_log_hashes_unknown_strings_and_untrusted_string_lists():
     assert safe["repository_digest"].startswith("sha256:")
     assert safe["origin_digest"].startswith("sha256:")
     assert safe["annotations_digest"].startswith("sha256:")
+    assert safe["status_digest"].startswith("sha256:")
+    assert safe["state_digest"].startswith("sha256:")
+    assert "192.0.2.55" not in str(safe)
+    assert "private-state-marker" not in str(safe)
     assert "repository" not in safe
     assert "origin" not in safe
     assert "annotations" not in safe
