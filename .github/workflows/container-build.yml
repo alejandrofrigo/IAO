@@ -45,6 +45,8 @@ jobs:
       - name: Verify container starts and serves liveness
         run: |
           docker run --detach --rm --name iao-api-qualification \
+            --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges \
             --publish 127.0.0.1:18080:8080 iao-api:qualification
           trap 'docker stop iao-api-qualification >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 20); do
@@ -56,7 +58,21 @@ jobs:
           curl --fail --silent http://127.0.0.1:18080/health/live
           docker exec iao-api-qualification python -c "from pathlib import Path; p=Path('/app/knowledge'); files=sorted(p.glob('*.txt')); assert len(files) >= 1, 'production knowledge corpus missing'; assert (p/'omega-overview.txt').is_file(), 'required corpus document missing'; print('knowledge_corpus_files=' + str(len(files)))"
           docker exec --user iao iao-api-qualification python -c 'from omega.tools.knowledge_search import KnowledgeCorpus; from omega.tools.process_runner import run_tool_isolated; corpus=KnowledgeCorpus("/app/knowledge"); payload=corpus.validate_input({"query":"IAO","limit":1}); output, verdict=run_tool_isolated(corpus.run, corpus.verify, payload, 10); assert verdict == "PASS"; print("BWRAP_OS_SANDBOX=PASS")'
+          docker run --detach --rm --name iao-api-deploy-qualification \
+            --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --publish 127.0.0.1:18081:8080 iao-api-deploy:qualification
+          trap 'docker stop iao-api-qualification iao-api-deploy-qualification >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:18081/health/live; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:18081/health/live
+          docker exec --user iao iao-api-deploy-qualification python -c 'from omega.tools.knowledge_search import KnowledgeCorpus; from omega.tools.process_runner import run_tool_isolated; corpus=KnowledgeCorpus("/app/knowledge"); payload=corpus.validate_input({"query":"IAO","limit":1}); output, verdict=run_tool_isolated(corpus.run, corpus.verify, payload, 10); assert verdict == "PASS"; print("DEPLOY_IMAGE_BWRAP_OS_SANDBOX=PASS")'
           docker logs iao-api-qualification
+          docker logs iao-api-deploy-qualification
           docker run --detach --rm --name iao-api-deploy-qualification --publish 127.0.0.1:18081:8080 iao-api:deploy-qualification
           trap 'docker stop iao-api-qualification iao-api-deploy-qualification >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 20); do
