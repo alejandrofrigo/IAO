@@ -247,6 +247,16 @@ def test_known_route_wrong_method_returns_stable_405_and_allow_header(monkeypatc
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+def test_service_errors_include_correlation_header(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/v1/me")
+    assert response.status_code == 401
+    assert response.json()["correlation_id"]
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
 def test_api_rejects_oversized_body_before_service_dispatch(monkeypatch, tmp_path):
     from omega.service import MAX_BODY
 
