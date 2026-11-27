@@ -62,7 +62,7 @@
     if (!base) throw new Error(configError || "API_BASE_NOT_CONFIGURED");
     if (typeof path !== "string" ||
         !(path.startsWith("/v1/") || path.startsWith("/health/")) ||
-        path.startsWith("//") || path.includes("\\\\")) {
+        path.startsWith("//") || path.includes("\\")) {
       throw new Error("INVALID_API_PATH");
     }
     const target = new URL(path.slice(1), base + "/");
