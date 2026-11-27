@@ -64,7 +64,7 @@ def providers():
     configured = data.get("providers", []) if isinstance(data, dict) else []
     result = []
     for provider in configured:
-        if not isinstance(provider, dict) or not provider.get("enabled", True):
+        if not isinstance(provider, dict) or provider.get("enabled", True) is not True:
             continue
         ident = provider.get("id")
         if (
@@ -140,27 +140,44 @@ def _compatible(provider, requirements):
     return True
 
 
+def _finite_number(value, default):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        return default
+    return float(value)
+
+
+def _health_entry(states, ident):
+    entry = states.get(ident, {})
+    return entry if isinstance(entry, dict) else {}
+
+
 def _ordered_candidates(configured, states, requirements, now):
     compatible = [p for p in configured if _compatible(p, requirements)]
     if not compatible:
         raise RuntimeError("IAO_NO_COMPATIBLE_PROVIDERS")
     ready = [
         p for p in compatible
-        if float(states.get(p["id"], {}).get("retry_after", 0) or 0) <= now
+        if _finite_number(_health_entry(states, p["id"]).get("retry_after"), 0.0) <= now
     ]
     candidates = ready or compatible
-    return sorted(candidates, key=lambda p: (
-        min(int(states.get(p["id"], {}).get("failures", 0) or 0), 1000),
-        float(p.get("cost_per_1k_tokens"))
-        if isinstance(p.get("cost_per_1k_tokens"), (int, float))
-        and not isinstance(p.get("cost_per_1k_tokens"), bool)
-        and math.isfinite(float(p["cost_per_1k_tokens"]))
-        and p["cost_per_1k_tokens"] >= 0 else float("inf"),
-        float(states.get(p["id"], {}).get("latency_ewma_ms", float("inf")) or float("inf")),
-        int(p.get("priority", 100)) if isinstance(p.get("priority", 100), int)
-        and not isinstance(p.get("priority", 100), bool) else 100,
-        p["id"],
-    ))
+
+    def order(provider):
+        state = _health_entry(states, provider["id"])
+        failures = max(0, min(1000, int(_finite_number(state.get("failures"), 0))))
+        cost = _finite_number(provider.get("cost_per_1k_tokens"), float("inf"))
+        if cost < 0:
+            cost = float("inf")
+        latency = _finite_number(state.get("latency_ewma_ms"), float("inf"))
+        if latency < 0:
+            latency = float("inf")
+        priority = _finite_number(provider.get("priority"), 100)
+        return failures, cost, latency, priority, provider["id"]
+
+    return sorted(candidates, key=order)
 
 
 def health():
@@ -200,6 +217,13 @@ def _request(provider, messages, timeout):
 
 def chat_with_metadata(messages, timeout=25, requirements=None):
     """Route by declared capability, modality, configured cost, health and priority."""
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(float(timeout))
+        or timeout <= 0
+    ):
+        raise ValueError("INVALID_PROVIDER_TIMEOUT")
     configured = providers()
     if not configured:
         raise RuntimeError(
@@ -233,7 +257,7 @@ def chat_with_metadata(messages, timeout=25, requirements=None):
                 states = health()
                 if not isinstance(states, dict):
                     states = {}
-                previous = states.get(ident, {})
+                previous = _health_entry(states, ident)
                 old_latency = previous.get("latency_ewma_ms")
                 latency_ewma = (
                     latency_ms if not isinstance(old_latency, (int, float))
@@ -268,8 +292,8 @@ def chat_with_metadata(messages, timeout=25, requirements=None):
                 states = health()
                 if not isinstance(states, dict):
                     states = {}
-                previous = states.get(ident, {})
-                failures = min(int(previous.get("failures", 0)) + 1, 12)
+                previous = _health_entry(states, ident)
+                failures = min(max(0, int(_finite_number(previous.get("failures"), 0))) + 1, 12)
                 delay = min(90 * (2 ** min(failures - 1, 5)), 3600)
                 old_latency = previous.get("latency_ewma_ms")
                 latency_ewma = (
