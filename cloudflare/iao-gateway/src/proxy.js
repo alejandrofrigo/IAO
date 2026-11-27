@@ -50,14 +50,44 @@ export function configuredApiOrigin(value) {
 
 function allowedRoute(method, pathname) {
   if (pathname === "/health/live" || pathname === "/health/ready") return method === "GET";
-  // Only the two signed, read-only delegated-agent protocol routes are
-  // forwarded. Task polling/claim/completion and every other agent path stay
-  // blocked; the upstream IAO API remains the sole authority.
+
+  // The gateway exposes only routes used by the public chat, signed primary
+  // device workflows, task submission/status, and the read-only agent proof.
+  // All other API routes remain private to the upstream service.
   if (pathname === "/v1/agent/challenge") return method === "POST";
   if (pathname === "/v1/agent/status") return method === "GET";
-  return pathname.startsWith("/v1/") &&
-    !pathname.startsWith("/v1/gateway/") &&
-    !pathname.startsWith("/v1/agent/");
+
+  const postRoutes = new Set([
+    "/v1/public/session",
+    "/v1/conversations",
+    "/v1/chat",
+    "/v1/operator/bootstrap/status",
+    "/v1/operator/bootstrap",
+    "/v1/operator/recovery/status",
+    "/v1/operator/recovery/challenge",
+    "/v1/operator/recovery/complete",
+    "/v1/operator/login/challenge",
+    "/v1/operator/login/complete",
+    "/v1/operator/identity/revoke",
+    "/v1/operator/device/bind",
+    "/v1/operator/session/challenge",
+    "/v1/operator/session/bind",
+    "/v1/device/enroll",
+    "/v1/device/challenge",
+    "/v1/device/command",
+    "/v1/tasks",
+  ]);
+  if (method === "POST" && postRoutes.has(pathname)) return true;
+
+  if (method === "GET" && [
+    "/v1/me",
+    "/v1/operator/session/status",
+  ].includes(pathname)) return true;
+
+  if (method === "GET" &&
+      /^\\/v1\\/conversations\\/[0-9a-f-]{36}\\/messages$/.test(pathname)) return true;
+  if (method === "GET" && /^\\/v1\\/tasks\\/[0-9a-f-]{36}$/.test(pathname)) return true;
+  return false;
 }
 
 export async function proxyApi(request, env) {
