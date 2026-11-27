@@ -84,7 +84,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-IAO-Device-Proof"],
 )
 
@@ -316,7 +316,7 @@ async def _federation_body(request: Request):
     return body, None
 
 
-@app.api_route("/fed/v1/contract", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+@app.api_route("/fed/v1/contract", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 def federation_contract(request: Request):
     if request.method != "GET":
         return _federation_method_not_allowed(("GET",))
@@ -327,7 +327,7 @@ def federation_contract(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.api_route("/fed/v1/publication", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+@app.api_route("/fed/v1/publication", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 def federation_publication(request: Request):
     if request.method != "GET":
         return _federation_method_not_allowed(("GET",))
@@ -353,7 +353,7 @@ def federation_publication(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.api_route("/fed/v1/identity", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+@app.api_route("/fed/v1/identity", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 def federation_identity(request: Request):
     if request.method != "GET":
         return _federation_method_not_allowed(("GET",))
@@ -363,7 +363,7 @@ def federation_identity(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.api_route("/fed/v1/handshake", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+@app.api_route("/fed/v1/handshake", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def federation_handshake(request: Request):
     if request.method != "POST":
         return _federation_method_not_allowed(("POST",))
@@ -378,7 +378,7 @@ async def federation_handshake(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.api_route("/fed/v1/message", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+@app.api_route("/fed/v1/message", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def federation_message(request: Request):
     if request.method != "POST":
         return _federation_method_not_allowed(("POST",))
@@ -395,7 +395,7 @@ async def federation_message(request: Request):
 
 @app.api_route(
     "/fed/v1/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
 )
 def federation_not_found(path: str, request: Request):
     return _federation_json(404, {"error": "NOT_FOUND"})
@@ -403,7 +403,7 @@ def federation_not_found(path: str, request: Request):
 
 @app.api_route(
     "/health/live",
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
 )
 def live(request: Request):
     if request.method != "GET":
@@ -414,7 +414,7 @@ def live(request: Request):
     )
 
 
-@app.api_route("/health/ready", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/health/ready", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 def ready(request: Request):
     if request.method != "GET":
         return _method_not_allowed(("GET",))
@@ -462,17 +462,17 @@ def ready(request: Request):
     }
     return _service_response(200, payload)
 
-@app.api_route("/v1/device/enroll", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/v1/device/enroll", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def device_enroll(request: Request):
     return await _device_service_route(request, "/v1/device/enroll")
 
 
-@app.api_route("/v1/device/challenge", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/v1/device/challenge", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def device_challenge(request: Request):
     return await _device_service_route(request, "/v1/device/challenge")
 
 
-@app.api_route("/v1/device/command", methods=["GET", "POST", "PUT", "DELETE"])
+@app.api_route("/v1/device/command", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def device_command(request: Request):
     return await _device_service_route(request, "/v1/device/command")
 
@@ -499,7 +499,7 @@ async def _device_service_route(request: Request, path: str):
 
 @app.api_route(
     "/v1/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
 )
 async def api_v1(path: str, request: Request):
     """Pass the complete v1 API through the audited persistent service."""
