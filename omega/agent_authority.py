@@ -13,7 +13,7 @@ import sqlite3
 import stat
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -154,10 +154,14 @@ class AgentAuthority:
             raise AgentAuthorityError("INVALID_PRIMARY_DEVICE_SIGNATURE", 401) from None
 
     def issue_challenge(self, identity_id: str, key_version: int) -> dict[str, Any]:
-        if not isinstance(identity_id, str) or len(identity_id) != 32 or isinstance(key_version, bool) or not isinstance(key_version, int) or key_version < 1:
+        if (
+            not isinstance(identity_id, str) or len(identity_id) != 32
+            or isinstance(key_version, bool) or not isinstance(key_version, int)
+            or key_version < 1
+        ):
             raise AgentAuthorityError("INVALID_OPERATOR_BINDING", 403)
         identity_lock = getattr(self.operator_identity, "lock", None)
-        identity_guard = identity_lock if identity_lock is not None else contextmanager(lambda: (yield))()
+        identity_guard = identity_lock if identity_lock is not None else nullcontext()
         try:
             with identity_guard:
                 current_version, primary_pem, primary_device_id = self._current_parent_binding(identity_id)
@@ -167,13 +171,21 @@ class AgentAuthority:
                 now = time.time()
                 nonce = secrets.token_hex(32)
                 with self.lock, self._db() as db:
-            db.execute("BEGIN IMMEDIATE")
-            db.execute("DELETE FROM agent_challenges WHERE expires_at<=?", (now,))
-            count = db.execute("SELECT COUNT(*) FROM agent_challenges WHERE identity_id=? AND consumed_at IS NULL AND expires_at>?", (identity_id, now)).fetchone()[0]
-            if count >= 5:
-                db.execute("ROLLBACK")
-                raise AgentAuthorityError("AGENT_CHALLENGE_LIMIT", 429)
-                    db.execute("INSERT INTO agent_challenges(nonce,identity_id,key_version,expires_at,primary_device_id) VALUES(?,?,?,?,?)", (nonce, identity_id, key_version, now + CHALLENGE_TTL, primary_device_id))
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute("DELETE FROM agent_challenges WHERE expires_at<=?", (now,))
+                    count = db.execute(
+                        "SELECT COUNT(*) FROM agent_challenges WHERE identity_id=? AND consumed_at IS NULL AND expires_at>?",
+                        (identity_id, now),
+                    ).fetchone()[0]
+                    if count >= 5:
+                        db.execute("ROLLBACK")
+                        raise AgentAuthorityError("AGENT_CHALLENGE_LIMIT", 429)
+                    db.execute(
+                        """INSERT INTO agent_challenges
+                        (nonce,identity_id,key_version,expires_at,primary_device_id)
+                        VALUES(?,?,?,?,?)""",
+                        (nonce, identity_id, key_version, now + CHALLENGE_TTL, primary_device_id),
+                    )
                     db.execute("COMMIT")
         except AgentAuthorityError:
             raise
