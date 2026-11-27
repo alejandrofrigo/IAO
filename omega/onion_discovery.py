@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from omega.federation_transport import (
+from omega.ipfs_content import validate_cid\nfrom omega.federation_transport import (
     FederationTransportError,
     _parse_onion_url,
     fetch_onion_json,
@@ -58,9 +58,17 @@ def discover_onion_feed(url: str, timeout: float = 15.0) -> list[dict[str, Any]]
             or not peer_id.isalnum()
         ):
             peer_id = None
+        announced_cids = peer.get("cids", [])
+        if not isinstance(announced_cids, list):
+            announced_cids = []
+        content_cids = list(dict.fromkeys(
+            normalized for item in announced_cids[:32]
+            if (normalized := validate_cid(item)) is not None
+        ))
         result.append({
             "service_url": endpoint,
             "peer_id": peer_id,
+            "content_cids": content_cids,
             "source": "tor_onion_feed",
             "identity_state": "UNVERIFIED",
             "participation_state": "CANDIDATE_ONLY",
@@ -127,6 +135,10 @@ def merge_onion_candidates(
             "virtual_port": port,
             "path": target,
             "peer_id": peer_id,
+            "content_cids": sorted(set(previous.get("content_cids", [])) | set(
+                item for item in candidate.get("content_cids", [])
+                if validate_cid(item) is not None
+            ))[:32],
             "source": "tor_onion_feed",
             "discovery_state": "FEED_ADVERTISED_UNPROBED",
             "identity_state": "UNVERIFIED",
