@@ -32,9 +32,9 @@ class StdlibRuntimePersistentKeyTests(unittest.TestCase):
             key_path = home / ".config" / "iao" / "audit-hmac-key"
             key_path.parent.mkdir(parents=True)
             key_path.write_text(" " + "b" * 32 + "\n", encoding="utf-8")
-            with patch("omega.server.Path.home", return_value=home), patch(
-                "omega.server.Store"
-            ) as store:
+            with patch.dict("os.environ", {"AUDIT_HMAC_KEY": ""}), patch(
+                "omega.server.Path.home", return_value=home
+            ), patch("omega.server.Store") as store:
                 with self.assertRaisesRegex(RuntimeError, "PERSISTENT_KEYS_INVALID_FORMAT"):
                     build_service(home / "state", "a" * 32, home / "corpus")
                 store.assert_not_called()
