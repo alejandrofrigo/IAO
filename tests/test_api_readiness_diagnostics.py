@@ -60,7 +60,7 @@ def test_readiness_fails_closed_when_local_dependencies_are_not_ready(monkeypatc
         handle=lambda *_args: (503, {"status": "not_ready", "checks": {"database": False}}),
     )
     monkeypatch.setattr(api_main, "_get_service", lambda: service)
-    response = api_main.ready()
+    response = api_main.ready(_ready_request())
     payload = _response_payload(response)
     assert response.status_code == 503
     assert payload["status"] == "not_ready"
@@ -73,7 +73,7 @@ def test_readiness_hides_internal_runtime_exception(monkeypatch):
         raise RuntimeError("private-runtime-detail")
 
     monkeypatch.setattr(api_main, "_get_service", fail)
-    response = api_main.ready()
+    response = api_main.ready(_ready_request())
     payload = _response_payload(response)
     assert response.status_code == 503
     assert payload == {
