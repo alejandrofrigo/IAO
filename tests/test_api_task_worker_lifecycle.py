@@ -10,6 +10,10 @@ import apps.api.main as api_main
 class _Store:
     def __init__(self):
         self.events = []
+        self.recovered = [{"id": "private-task-id", "owner": "private-owner"}]
+
+    def recover_interrupted_tasks(self):
+        return list(self.recovered)
 
     def audit(self, *args, **kwargs):
         self.events.append((args, kwargs))
@@ -66,7 +70,11 @@ def test_opt_in_worker_uses_existing_store_and_stops_cleanly(monkeypatch):
     assert constructed["kwargs"]["operator_identity_authority"] is service.operator_identity_authority
     assert constructed["kwargs"]["lease_seconds"] == 75
     assert constructed["kwargs"]["poll_seconds"] == 0.2
-    assert service.store.events[0][0] == ("system", "TASK_WORKER_START", "api_lifespan")
+    assert service.store.events[0][0] == ("system", "TASK_WORKER_INTERRUPTED_RECOVERED", "api_lifespan")
+    assert service.store.events[0][1]["recovered_count"] == 1
+    assert "private-task-id" not in repr(service.store.events)
+    assert "private-owner" not in repr(service.store.events)
+    assert service.store.events[1][0] == ("system", "TASK_WORKER_START", "api_lifespan")
 
     api_main._stop_task_worker()
     assert stopped.is_set()
