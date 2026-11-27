@@ -78,7 +78,7 @@
 
   async function submitTask() {
     const query = queryEl.value.trim();
-    if (!query || query.length > 2000 || busy) return;
+    if (!query || query.length > 500 || busy) return;
     if (!window.IAODeviceAuthority ||
         typeof window.IAODeviceAuthority.submitQueuedTask !== "function") {
       setStatus("El cliente seguro del dispositivo no está disponible.");
