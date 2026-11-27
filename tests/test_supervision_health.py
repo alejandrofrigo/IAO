@@ -245,9 +245,11 @@ def test_supervisor_rejects_boolean_and_invalid_pids_before_probing(monkeypatch)
 
 def test_supervisor_only_signals_its_own_session_process_group(monkeypatch):
     monkeypatch.setattr(supervisor, "process_alive", lambda _pid: True)
-    monkeypatch.setattr(supervisor.os, "getpgid", lambda _pid: 999)
+    monkeypatch.setattr(supervisor.os, "getpgid", lambda pid: pid)
+    assert supervisor.managed_process_group(999) is True
+    monkeypatch.setattr(supervisor.os, "getpgid", lambda pid: pid + 1)
     assert supervisor.managed_process_group(999) is False
-    monkeypatch.setattr(supervisor.os, "getpgid", lambda _pid: 999)
-    assert supervisor.managed_process_group(999) is False
-    monkeypatch.setattr(supervisor.os, "getpgid", lambda _pid: 999)
+    def missing(_pid):
+        raise ProcessLookupError
+    monkeypatch.setattr(supervisor.os, "getpgid", missing)
     assert supervisor.managed_process_group(999) is False
