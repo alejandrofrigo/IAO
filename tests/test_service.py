@@ -1542,6 +1542,28 @@ class LimitsAndIntegrityTests(Base):
         s, p = self.call("GET", "/health/ready")
         self.assertEqual((s, p["status"]), (503, "not_ready"))  # integrity failure => not ready (RESTRICTED)
 
+    def test_known_route_wrong_method_returns_method_not_allowed(self) -> None:
+        status, payload = self.svc.handle("GET", "/v1/chat", {}, b"")
+        self.assertEqual(status, 405)
+        self.assertEqual(payload["error"], "METHOD_NOT_ALLOWED")
+        self.assertEqual(payload["allowed_methods"], ["POST"])
+
+    def test_content_length_mismatch_is_rejected_before_route_dispatch(self) -> None:
+        status, payload = self.svc.handle(
+            "POST", "/v1/public/session",
+            {"content-length": "2"}, b"{}",
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "INCOMPLETE_BODY")
+
+    def test_invalid_content_length_is_rejected(self) -> None:
+        status, payload = self.svc.handle(
+            "POST", "/v1/public/session",
+            {"content-length": "not-a-number"}, b"",
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "INVALID_CONTENT_LENGTH")
+
     def test_readiness_requires_authenticated_audit_key(self) -> None:
         original_key = self.svc.store.audit_key
         self.svc.store.audit_key = None
