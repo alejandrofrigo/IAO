@@ -88,7 +88,7 @@
       const active = await refreshGate();
       if (!active) throw new Error("CAPABILITY_NOT_GRANTED");
       const payload = {
-        goal: "Consulta de solo lectura en el corpus local",
+        goal: "Consulta de solo lectura en el corpus de IAO",
         capability: "knowledge.search",
         input: { query },
         execution_mode: "queued"
@@ -110,7 +110,7 @@
         state: result.state,
         capability: result.capability
       }, null, 2);
-      setStatus("Búsqueda aceptada por la cola local. El trabajador local verificará de nuevo la autorización antes de ejecutarla.");
+      setStatus("Búsqueda aceptada por la cola de IAO. Si el TaskWorker está activo, volverá a verificar la autorización antes de ejecutarla.");
     } catch (error) {
       setStatus("No se pudo enviar la tarea: " + String(error.message || error));
     } finally {
