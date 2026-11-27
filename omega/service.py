@@ -166,20 +166,14 @@ class OmegaService:
         if p is None:
             self.store.audit("anonymous", "AUTH", "request", decision="DENY", reason="AUTHENTICATION_REQUIRED")
             raise ApiError(401, "AUTHENTICATION_REQUIRED")
-        bound_operator_session = False
-        if (
-            self.operator_identity_authority is not None
-            and not p.subject.startswith("guest:")
-        ):
-            try:
-                bound_operator_session = self.operator_identity_authority.verify_authenticated_session(
+        if p.subject.startswith("operator:"):
+            if (
+                self.operator_identity_authority is None
+                or not self.operator_identity_authority.verify_authenticated_session(
                     p.subject, h[7:],
                 )
-            except Exception:
-                bound_operator_session = False
-        if p.subject.startswith("operator:") and not bound_operator_session:
-            raise ApiError(401, "OPERATOR_SESSION_REVOKED")
-        if bound_operator_session:
+            ):
+                raise ApiError(401, "OPERATOR_SESSION_REVOKED")
             try:
                 active_scopes = self.operator_identity_authority.active_capabilities_for_session(
                     p.subject, h[7:], policy_version=POLICY_VERSION,
