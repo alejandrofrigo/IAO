@@ -1474,7 +1474,7 @@ def _capability_session(tmp_path):
         login["signing_payload"] + "=" * (-len(login["signing_payload"]) % 4)
     )
     device_login_signature = device_private.sign(
-        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + login_payload,
+        b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + login_payload,
         ec.ECDSA(hashes.SHA256()),
     )
     session = authority.complete_operator_login(
@@ -1498,7 +1498,7 @@ def _signed_capability_payload(challenge, root_private, device_private):
     )
     root_signature = sign(root_private, payload)
     device_signature = device_private.sign(
-        b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\\x00" + payload,
+        b"IAO-OPERATOR-CAPABILITY-GRANT-DEVICE-V1\x00" + payload,
         ec.ECDSA(hashes.SHA256()),
     )
     return root_signature, device_signature
@@ -1562,7 +1562,7 @@ def test_capability_grant_rejects_ungrantable_scope_and_stale_session(tmp_path):
         login["signing_payload"] + "=" * (-len(login["signing_payload"]) % 4)
     )
     new_device_sig = device.sign(
-        b"IAO-OPERATOR-DEVICE-LOGIN-V1\\x00" + login_payload,
+        b"IAO-OPERATOR-DEVICE-LOGIN-V1\x00" + login_payload,
         ec.ECDSA(hashes.SHA256()),
     )
     new_session = authority.complete_operator_login(
@@ -1597,7 +1597,7 @@ def test_capability_grant_is_invalidated_by_policy_change_and_bad_signature(tmp_
     _, device_sig = _signed_capability_payload(challenge, root, device)
     with pytest.raises(OperatorIdentityError, match="INVALID_CAPABILITY_SIGNATURE"):
         authority.complete_capability_challenge(
-            subject, token, challenge["challenge"], b"\\x00" * 70, device_sig,
+            subject, token, challenge["challenge"], b"\x00" * 70, device_sig,
             policy_version=policy,
         )
 
