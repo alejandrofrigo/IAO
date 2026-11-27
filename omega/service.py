@@ -25,6 +25,7 @@ from omega.control import transition
 from omega.device_authority import DeviceAuthority, DeviceAuthorityError
 from omega.operator_identity import OperatorIdentityAuthority, OperatorIdentityError
 from omega.policy import authorize
+from omega.effect_policy import authorize_effect
 from omega.store import Store
 from omega.task_contract import validate_task_intent_v1
 from omega.tools.registry import QUEUED_TOOL_ALLOWLIST, ToolRegistry
@@ -1297,7 +1298,9 @@ class OmegaService:
             return 403, {"task_id": tid, "state": st, **res}
         spec = self.registry.get(cap)
         if execution_mode == "queued" and (
-            spec is None or spec.effect_class != "READ_ONLY"
+            spec is None or not authorize_effect(
+                spec.effect_class, approved_effects={"READ_ONLY"}
+            ).allowed
         ):
             to("DENIED", reason="QUEUED_TASK_REQUIRES_READ_ONLY_CAPABILITY")
             result = {
