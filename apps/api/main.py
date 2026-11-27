@@ -300,7 +300,11 @@ def _get_service():
 
 def _federation_json(status: int, payload: dict):
     correlation_id = payload.get("correlation_id")
-    if not isinstance(correlation_id, str) or len(correlation_id) != 32:
+    if (
+        not isinstance(correlation_id, str)
+        or len(correlation_id) != 32
+        or any(char not in "0123456789abcdef" for char in correlation_id.lower())
+    ):
         correlation_id = uuid.uuid4().hex
     content = {**payload, "correlation_id": correlation_id}
     headers = {
@@ -309,8 +313,8 @@ def _federation_json(status: int, payload: dict):
         "X-Correlation-ID": correlation_id,
     }
     allowed = content.get("allowed_methods")
-    if status == 405 and isinstance(allowed, list) and all(
-        isinstance(item, str) for item in allowed
+    if status == 405 and isinstance(allowed, list) and allowed and all(
+        isinstance(item, str) and item.isalpha() for item in allowed
     ):
         headers["Allow"] = ", ".join(allowed)
     return JSONResponse(status_code=status, content=content, headers=headers)
