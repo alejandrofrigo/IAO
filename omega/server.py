@@ -44,6 +44,13 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         from omega.egress import EgressPolicy
         from omega.tools.web_fetch import make_web_fetch
         reg.register(make_web_fetch(EgressPolicy(allow_hosts=frozenset(allow))))
+    # Optional IPFS retrieval is enabled only for explicitly configured HTTPS gateways.
+    ipfs_hosts = [h.strip().lower() for h in os.environ.get(
+        "IAO_IPFS_GATEWAY_HOSTS", ""
+    ).split(",") if h.strip()]
+    if ipfs_hosts:
+        from omega.tools.ipfs_gateway import make_ipfs_fetch
+        reg.register(make_ipfs_fetch(ipfs_hosts))
     store.audit("system", "RUNTIME_START", "omega", docs=len(corpus.docs), tools=sorted(reg.names()))
     from omega.adapters.model import adapter_from_env
     router_enabled = os.environ.get("IAO_LLM_ROUTER", "").strip().lower() in {
