@@ -231,6 +231,11 @@ class TaskWorker:
                 task_id, self.worker_id, "VERIFYING",
                 lease_generation=self._active_lease_generation,
             ):
+                if self._cancel_requested(task_id):
+                    return self._finish(
+                        task_id, owner, "CANCELLED",
+                        {"decision": "CANCELLED", "reason": "COOPERATIVE_CANCELLATION"},
+                    )
                 self.store.audit(
                     "system", "TASK_WORKER_STALE_CLAIM", task_id,
                     worker=self.worker_id, decision="REJECT",
