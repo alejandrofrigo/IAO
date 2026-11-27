@@ -615,6 +615,73 @@ def enroll_if_consented(node, protocol, candidate, verified, item, policy):
     audit("peer_enrolled", peer_id=peer_id, capabilities=sorted(requested), mode="AUTONOMOUS")
     return {"status": "ENROLLED", "peer_id": peer_id, "capabilities": sorted(requested)}
 
+
+def run_trusted_public_enrollment(node, items):
+    """Bridge public feed candidates into the pinned-HTTPS signed autojoin path."""
+    from omega.federation_autonomous import _origin, run_discovered_cycle
+
+    registry_path = STATE / "iao-public-federation-candidates.json"
+    registry = load(registry_path, {"schema": 1, "candidates": {}})
+    if (
+        not isinstance(registry, dict)
+        or registry.get("schema") != 1
+        or not isinstance(registry.get("candidates"), dict)
+    ):
+        raise RuntimeError("PUBLIC_FEDERATION_REGISTRY_INVALID")
+
+    candidates = registry["candidates"]
+    eligible = 0
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or item.get("source") not in {"signed_directory", "public_feed"}
+            or not isinstance(item.get("url"), str)
+            or not item["url"].startswith("https://")
+        ):
+            continue
+        peer_id = item.get("id")
+        if (
+            not isinstance(peer_id, str)
+            or len(peer_id) != 16
+            or any(ch not in "0123456789abcdef" for ch in peer_id)
+        ):
+            continue
+        try:
+            origin = _origin(item["url"])
+        except ValueError:
+            continue
+        candidate_id = hashlib.sha256(origin.encode("utf-8")).hexdigest()
+        existing = candidates.get(candidate_id)
+        if isinstance(existing, dict) and existing.get("node_id") != peer_id:
+            existing["status"] = "IDENTITY_CONFLICT"
+            existing["identity_verified"] = False
+            continue
+        if not isinstance(existing, dict):
+            candidates[candidate_id] = {
+                "candidate_id": candidate_id,
+                "origin": origin,
+                "node_id": peer_id,
+                "status": "DISCOVERED_UNVERIFIED",
+                "identity_verified": False,
+                "enrolled": False,
+                "granted_capabilities": [],
+                "source": item.get("source"),
+            }
+        eligible += 1
+
+    if not eligible:
+        return {
+            "status": "NO_ELIGIBLE_PUBLIC_IAO_CANDIDATES",
+            "checked": 0,
+            "enrolled": 0,
+            "failed": 0,
+            "inbound_capabilities_granted": 0,
+        }
+    save(registry_path, registry)
+    return run_discovered_cycle(
+        node, STATE / "federation", registry_path
+    )
+
 def run_cycle(dry_run=False, discover=True):
     policy = load(POLICY, {})
     if not policy.get("enabled"): return {"status": "FEDERATION_DISABLED"}
@@ -644,9 +711,36 @@ def run_cycle(dry_run=False, discover=True):
     items = [n for n in load(NODES, {"nodes": []}).get("nodes", []) if isinstance(n, dict)]
     node = make_node(policy) if not dry_run else None
     results = []
+    if node is not None:
+        try:
+            public_summary = run_trusted_public_enrollment(node, items)
+        except Exception as exc:
+            public_summary = {
+                "status": "TRUSTED_PUBLIC_ENROLLMENT_FAILED",
+                "checked": 0,
+                "enrolled": 0,
+                "failed": 1,
+                "inbound_capabilities_granted": 0,
+                "error_type": type(exc).__name__,
+            }
+            audit("trusted_public_enrollment_failed", error_type=type(exc).__name__)
+        discovery_summary["trusted_public_federation"] = public_summary
+        results.append({
+            "protocol": "iao-federation-public-https",
+            "status": public_summary.get("status"),
+            "checked": public_summary.get("checked", 0),
+            "enrolled_count": public_summary.get("enrolled", 0),
+            "failed_count": public_summary.get("failed", 0),
+            "inbound_capabilities_granted": 0,
+        })
     for item in items:
         addr = item.get("url")
         if not isinstance(addr, str): continue
+        # Los endpoints públicos HTTPS ya pasan por el transporte fijado,
+        # challenge firmado y consentimiento explícito de run_discovered_cycle.
+        # Nunca volver al probe urllib heredado para esos peers.
+        if node is not None and addr.startswith("https://"):
+            continue
         # Rama Nostr: no hace probe HTTPS; usa el bridge directamente
         if item.get("source") == "nostr_bridge" and item.get("nostr_event"):
             from omega.federation_protocols.nostr_bridge import NostrBridge
@@ -693,10 +787,12 @@ def run_cycle(dry_run=False, discover=True):
     report = {"utc": utc(), "policy_mode": policy.get("padge_mode"),
         "discovery": discovery_summary, "total_items": len(items), "results": results,
         "summary": {
-            "enrolled": sum(1 for r in results if r.get("status") == "ENROLLED"),
+            "enrolled": sum(1 for r in results if r.get("status") == "ENROLLED")
+                + discovery_summary.get("trusted_public_federation", {}).get("enrolled", 0),
             "skipped_not_authorized": sum(1 for r in results if r.get("status","").startswith("SKIPPED_NOT_AUTHORIZED")),
             "skipped_handshake": sum(1 for r in results if r.get("status","").startswith("SKIPPED_HANDSHAKE")),
-            "failed": sum(1 for r in results if r.get("status") == "ENROLL_FAILED")}}
+            "failed": sum(1 for r in results if r.get("status") == "ENROLL_FAILED")
+                + discovery_summary.get("trusted_public_federation", {}).get("failed", 0)}}
     if not dry_run:
         save(REPORT, report); audit("autonomous_cycle_completed", **report["summary"])
     return report
