@@ -200,6 +200,8 @@ def status():
                 if heartbeat.get("pid") == int(pid) == lock_owner:
                     if heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
                         state = heartbeat["status"]
+                    elif heartbeat["status"] == "DEGRADED":
+                        state = "DEGRADED"
                     elif heartbeat["status"] == "STALE":
                         state = "STALE_HEARTBEAT"
         elif not spec.get("enabled") or not spec.get("command"):
