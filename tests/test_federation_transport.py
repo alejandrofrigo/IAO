@@ -245,6 +245,12 @@ def test_onion_transport_accepts_only_v3_onion_http():
             transport._parse_onion_url(url)
 
 
+def test_tor_proxy_defaults_to_iao_node_configured_port(monkeypatch):
+    monkeypatch.delenv("IAO_TOR_SOCKS_HOST", raising=False)
+    monkeypatch.delenv("IAO_TOR_SOCKS_PORT", raising=False)
+    assert transport._tor_proxy() == ("127.0.0.1", 19050)
+
+
 def test_tor_proxy_must_be_loopback(monkeypatch):
     monkeypatch.setenv("IAO_TOR_SOCKS_HOST", "192.0.2.10")
     with pytest.raises(
