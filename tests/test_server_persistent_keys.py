@@ -26,6 +26,19 @@ class StdlibRuntimePersistentKeyTests(unittest.TestCase):
                     build_service(Path(directory), key, Path(directory) / "corpus")
                 store.assert_not_called()
 
+    def test_build_service_rejects_padded_audit_key_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            key_path = home / ".config" / "iao" / "audit-hmac-key"
+            key_path.parent.mkdir(parents=True)
+            key_path.write_text(" " + "b" * 32 + "\\n", encoding="utf-8")
+            with patch("omega.server.Path.home", return_value=home), patch(
+                "omega.server.Store"
+            ) as store:
+                with self.assertRaisesRegex(RuntimeError, "PERSISTENT_KEYS_INVALID_FORMAT"):
+                    build_service(home / "state", "a" * 32, home / "corpus")
+                store.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
