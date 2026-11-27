@@ -12,6 +12,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from omega.provider_contract import (
+    MAX_RESPONSE_BYTES,
+    ProviderContractError,
+    parse_chat_response,
+    validate_chat_messages,
+    validate_provider_config,
+)
+
 CONFIG = Path.home() / ".config" / "iao" / "llm-providers.json"
 STATE = Path.home() / ".local" / "share" / "iao" / "llm-health.json"
 LOCK = threading.Lock()
@@ -66,17 +74,10 @@ def providers():
     for provider in configured:
         if not isinstance(provider, dict) or provider.get("enabled", True) is not True:
             continue
-        ident = provider.get("id")
-        if (
-            not isinstance(ident, str)
-            or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", ident)
-            or not isinstance(provider.get("url"), str)
-            or not provider["url"].startswith("https://")
-            or not isinstance(provider.get("model"), str)
-            or not provider["model"].strip()
-        ):
+        try:
+            result.append(validate_provider_config(provider))
+        except ProviderContractError:
             continue
-        result.append(provider)
     return result
 
 
@@ -185,6 +186,8 @@ def health():
 
 
 def _request(provider, messages, timeout):
+    provider = validate_provider_config(provider)
+    messages = validate_chat_messages(messages)
     url = provider["url"].rstrip("/") + "/chat/completions"
     key_env = provider.get("key_env", "")
     key = _secret_value(key_env) if key_env else ""
@@ -202,17 +205,9 @@ def _request(provider, messages, timeout):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        data = json.loads(response.read(2_000_000).decode("utf-8"))
-    answer = data["choices"][0]["message"]["content"]
-    if not isinstance(answer, str) or not answer.strip():
-        raise ValueError("empty response")
-    upstream_model = data.get("model")
-    if not isinstance(upstream_model, str) or not upstream_model.strip():
-        upstream_model = None
-    else:
-        upstream_model = upstream_model.strip()[:120]
-    return answer.strip(), upstream_model
+    with urllib.request.urlopen(req, timeout=min(float(timeout), 120.0)) as response:
+        raw = response.read(MAX_RESPONSE_BYTES + 1)
+    return parse_chat_response(raw)
 
 
 def chat_with_metadata(messages, timeout=25, requirements=None):
