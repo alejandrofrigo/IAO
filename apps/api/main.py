@@ -99,6 +99,11 @@ def _get_device_authority():
 
 async def _read_bounded_service_body(request: Request):
     """Read API bodies incrementally and reject invalid or oversized requests."""
+    if request.headers.get("transfer-encoding"):
+        return None, JSONResponse(
+            status_code=400,
+            content={"error": "INVALID_TRANSFER_ENCODING", "correlation_id": uuid.uuid4().hex},
+        )
     raw_length = request.headers.get("content-length")
     if raw_length is not None:
         try:
