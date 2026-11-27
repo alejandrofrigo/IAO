@@ -11,7 +11,7 @@ Esta guía describe el comportamiento verificable del código de Fase 1. No cert
 
 ## Supervisión local
 
-El coordinador registra fases `starting`, `cycle_running` y `cycle_completed` en un heartbeat atómico. El estado se clasifica como:
+El coordinador registra fases `starting`, `cycle_running` y `cycle_completed` en un heartbeat atómico. Los lectores rechazan symlinks y archivos no regulares; el lock se abre con `O_NOFOLLOW`. El supervisor conserva `starttime` de `/proc/<pid>/stat` para detectar reutilización de PID, solo señaliza grupos de sesión aislada que coinciden con el PID del hijo, y conserva los hijos cuya parada no pudo verificarse. `STOP_INCOMPLETE` no equivale a parada exitosa. El estado se clasifica como:
 
 | Estado | Significado |
 |---|---|
@@ -22,7 +22,7 @@ El coordinador registra fases `starting`, `cycle_running` y `cycle_completed` en
 | `PROCESS_ALIVE_UNVERIFIED` | Hay PID de un motor, pero no existe protocolo de salud funcional para él |
 | `STALE` (heartbeat) | `read_heartbeat` detecta que el heartbeat superó el límite de frescura; el estado agregado del coordinador pasa a `DEGRADED_UNVERIFIED` |
 
-Los heartbeats y eventos operativos se guardan bajo directorios privados (0700) y archivos privados (0600). Los logs redactan texto libre, trazas, comandos y rutas; no deben ampliarse para incluir prompts, consultas, credenciales ni contenido de usuario. El barrido del árbol de trabajo no limpia commits anteriores ni artefactos históricos. Una reescritura de historial o force-push requiere autorización explícita y coordinación de la revisión; no se realiza automáticamente.
+Los heartbeats y eventos operativos se guardan bajo directorios privados (0700) y archivos privados (0600). El logger redacta prompts, consultas, trazas, comandos y rutas; los campos string desconocidos y listas de texto no confiables se convierten en digest por defecto. Solo conserva etiquetas de esquema/códigos acotados y nombres de capabilities validados. No deben añadirse prompts, consultas, credenciales ni contenido de usuario a los logs. El barrido del árbol de trabajo no limpia commits anteriores ni artefactos históricos. Una reescritura de historial o force-push requiere autorización explícita y coordinación de la revisión; no se realiza automáticamente.
 
 ## Persistencia y recuperación
 
@@ -49,7 +49,7 @@ Los eventos operativos son diagnósticos; no sustituyen la cadena HMAC de audito
 ## Puertas de aceptación antes de integrar
 
 - CI verde en el SHA exacto que se pretende integrar: Python 3.12/3.13, lint/quality gate, contrato API, construcción y arranque de contenedor, e integración Chromium.
-- Cobertura ruta por ruta de `/v1/*` y `/fed/v1/*` en ambos adaptadores, con autorización positiva/negativa y métodos incorrectos.
+- Cobertura ruta por ruta de `/v1/*` y `/fed/v1/*` en ambos adaptadores, con autorización positiva/negativa y métodos incorrectos. La matriz actual cubre métodos de 30 rutas `/v1` y cinco rutas federadas; aún falta cerrar cada caso positivo/negativo de autorización.
 - Barrido de privacidad del árbol, historial Git, logs de launchers, imágenes de contenedor y artefactos CI.
 - Heartbeat y recuperación verificables para cada motor habilitado; ningún estado funcional basado solo en PID.
 - Instalación reproducible con dependencias transitivas bloqueadas y comprobación de compatibilidad Python.
