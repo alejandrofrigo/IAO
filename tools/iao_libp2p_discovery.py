@@ -136,6 +136,21 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
             "remote_code_executed": False,
             "listener_exposed": False,
         }
+    # Tor is an independent discovery transport: a libp2p bootstrap failure
+    # must not disable configured onion-feed discovery.
+    try:
+        from omega.onion_discovery import run_configured_onion_discovery
+        report["tor_onion_discovery"] = run_configured_onion_discovery(
+            state_dir=state_dir()
+        )
+    except Exception as exc:
+        report["tor_onion_discovery"] = {
+            "status": "TOR_DISCOVERY_ERROR",
+            "error_class": type(exc).__name__,
+            "enrollment_performed": False,
+            "capabilities_granted": [],
+            "remote_code_executed": False,
+        }
     _atomic_report(state_dir() / "discovery-report.json", report)
     return report
 
@@ -153,7 +168,7 @@ def status() -> int:
     directory = state_dir()
     report_path = directory / "discovery-report.json"
     print("IAO_LIBP2P_DISCOVERY")
-    print("MODE=OUTBOUND_KADEMLIA_CLIENT")
+    print("MODE=OUTBOUND_KADEMLIA_PLUS_TOR_ONION_DISCOVERY")\n    print("TOR_ONION_DISCOVERY=CONFIGURED_FEEDS_VIA_LOOPBACK_SOCKS5")
     print("INTERVAL_SECONDS=" + str(read_interval()))
     print("REPORT_PRESENT=" + str(report_path.is_file()).lower())
     print("AUTO_ASSIMILATION=QUARANTINED_INVENTORY_ONLY")
