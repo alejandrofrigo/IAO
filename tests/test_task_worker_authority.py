@@ -258,3 +258,35 @@ def test_worker_honors_cancel_requested_during_read_only_tool_execution():
         "decision": "CANCELLED",
         "reason": "COOPERATIVE_CANCELLATION",
     }
+
+
+def test_worker_fails_closed_when_tool_call_budget_is_exhausted():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True,
+        "active_capabilities_for_session_digest": lambda self, *_args, **_kwargs: frozenset({"knowledge.search"}),
+    })())
+    store.consume_task_budget = lambda *_args: False
+
+    assert worker.run_once() is True
+
+    assert calls == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "TASK_BUDGET_EXCEEDED"
+
+
+def test_worker_does_not_persist_output_when_output_budget_is_exhausted():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True,
+        "active_capabilities_for_session_digest": lambda self, *_args, **_kwargs: frozenset({"knowledge.search"}),
+    })())
+
+    def consume(_task_id, _worker_id, _generation, kind, _amount):
+        return kind != "output_bytes"
+
+    store.consume_task_budget = consume
+    assert worker.run_once() is True
+
+    assert calls == [{"query": "safe test"}]
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "TASK_BUDGET_EXCEEDED"
+    assert store.executions[-1][0][3] == "FAILED"
