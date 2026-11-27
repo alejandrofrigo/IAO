@@ -300,7 +300,9 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     return
                 raw_length = self.headers.get("Content-Length")
                 try:
-                    length = int(raw_length) if raw_length is not None else -1
+                    if raw_length is None or not raw_length.isascii() or not raw_length.isdigit():
+                        raise ValueError
+                    length = int(raw_length)
                 except ValueError:
                     length = -1
                 if length < 0:
@@ -437,6 +439,8 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 n = 0
             else:
                 try:
+                    if not raw_length.isascii() or not raw_length.isdigit():
+                        raise ValueError
                     n = int(raw_length)
                 except ValueError:
                     self.close_connection = True
