@@ -95,7 +95,7 @@ jobs:
           enable-cache: true
 
       - name: Generate missing lockfile on the first-party Phase 1 branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'phase-1-core-foundation-20261127' && hashFiles('uv.lock') == ''
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'phase-1-core-foundation-20261127' && hashFiles('uv.lock') == ''
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
