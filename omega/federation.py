@@ -394,7 +394,7 @@ class Node:
             return 413, {"error": "PAYLOAD_TOO_LARGE"}
         try:
             request = json.loads(raw, object_pairs_hook=_unique_json_object)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return 400, {"error": "INVALID_CHALLENGE"}
         if not isinstance(request, dict) or set(request) != {"v", "from", "to", "nonce", "ts"}:
             return 400, {"error": "INVALID_CHALLENGE"}
