@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from omega.p2p_assimilation import assimilate_discovered_peers
 from tools import iao_libp2p_discovery as worker
 
 
@@ -18,11 +19,12 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         result = {
             "status": "DISCOVERY_COMPLETED",
             "connected_bootstrappers": 2,
-            "routing_peers_discovered": 7,
-            "persisted_new_peers": 4,
-            "enrollment_performed": False,
-            "capabilities_granted": [],
-            "remote_code_executed": False,
+            "routing_peers_discovered": 1,
+            "persisted_new_peers": 1,
+            "peers": [{
+                "peer_id": "Q" * 40,
+                "multiaddrs": ["/ip4/8.8.8.8/tcp/4001"],
+            }],
         }
         with patch.object(worker, "state_dir", return_value=self.state), patch.object(
             worker.libp2p_discovery, "discover_sync", return_value=result
@@ -31,11 +33,20 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
         stored = json.loads((self.state / "discovery-report.json").read_text())
         self.assertEqual(report, stored)
         self.assertEqual(report["status"], "DISCOVERY_COMPLETED")
-        self.assertEqual(report["routing_peers_discovered"], 7)
+        self.assertEqual(report["routing_peers_discovered"], 1)
+        self.assertEqual(report["auto_assimilated_new_peers"], 1)
+        self.assertEqual(report["auto_assimilation"], "QUARANTINED_INVENTORY_ONLY")
+        self.assertEqual(report["identity_verification"], "NOT_PERFORMED")
         self.assertFalse(report["enrollment_performed"])
         self.assertEqual(report["capabilities_granted"], [])
         self.assertFalse(report["remote_code_executed"])
         self.assertFalse(report["listener_exposed"])
+        inventory = json.loads(
+            (self.state / "p2p-assimilated-peers.json").read_text()
+        )["peers"]["Q" * 40]
+        self.assertEqual(inventory["assimilation_state"], "AUTO_ASSIMILATED_UNVERIFIED")
+        self.assertEqual(inventory["participation_state"], "CANDIDATE_ONLY")
+        self.assertEqual(inventory["capabilities"], [])
 
     def test_optional_dependency_failure_is_not_reported_as_success(self):
         def fail(**kwargs):
@@ -66,6 +77,42 @@ class Libp2pDiscoveryWorkerTests(unittest.TestCase):
             self.skipTest("symlinks unavailable")
         with self.assertRaisesRegex(RuntimeError, "SYMLINK"):
             worker._atomic_report(link, {"status": "x"})
+        self.assertEqual(target.read_text(), "{}")
+
+    def test_repeated_observations_merge_without_granting_trust(self):
+        peer = {"peer_id": "P" * 40, "multiaddrs": ["/ip4/9.9.9.9/tcp/4001"]}
+        first = assimilate_discovered_peers([peer], state_dir=self.state, now="t1")
+        second = assimilate_discovered_peers([peer], state_dir=self.state, now="t2")
+        saved = json.loads(
+            (self.state / "p2p-assimilated-peers.json").read_text()
+        )["peers"]["P" * 40]
+        self.assertEqual(first, {"new": 1, "observed": 1, "total": 1})
+        self.assertEqual(second, {"new": 0, "observed": 1, "total": 1})
+        self.assertEqual(saved["first_seen"], "t1")
+        self.assertEqual(saved["last_seen"], "t2")
+        self.assertEqual(saved["observations"], 2)
+        self.assertEqual(saved["identity_state"], "UNVERIFIED")
+        self.assertEqual(saved["granted_capabilities"], [])
+        self.assertFalse(saved["remote_code_execution"])
+        self.assertFalse(saved["control_authority"])
+
+    def test_malformed_peer_is_not_assimilated(self):
+        result = assimilate_discovered_peers(
+            [{"peer_id": "short", "multiaddrs": ["/ip4/1.1.1.1/tcp/1"]}],
+            state_dir=self.state,
+        )
+        self.assertEqual(result, {"new": 0, "observed": 0, "total": 0})
+
+    def test_assimilation_registry_refuses_symlink(self):
+        target = self.state / "outside"
+        target.write_text("{}")
+        link = self.state / "p2p-assimilated-peers.json"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        with self.assertRaisesRegex(RuntimeError, "SYMLINK"):
+            assimilate_discovered_peers([], state_dir=self.state)
         self.assertEqual(target.read_text(), "{}")
 
 
