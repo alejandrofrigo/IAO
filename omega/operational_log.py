@@ -18,7 +18,7 @@ _COUNT_FIELDS = {"files", "paths"}
 _SAFE_STRING_FIELDS = {
     "time", "timestamp", "event", "component", "phase", "status", "state",
     "method", "route_group", "cid", "decision", "policy_version",
-    "authority", "identity_verification", "enrollment", "motor", "engine",
+    "authority", "identity_verification", "enrollment", "motor", "engine", "error_type",
 }
 _SAFE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:+-]{1,128}\Z")
 _SAFE_CAPABILITY_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,127}\Z")
