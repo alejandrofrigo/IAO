@@ -34,7 +34,8 @@ button:disabled{opacity:.5}
 <label for="message">Mensaje</label>
 <textarea id="message" rows="3" maxlength="20000" placeholder="Escribe a IAO..." disabled></textarea>
 <button id="send" disabled>Enviar mensaje</button>
-<small>No compartas contraseñas, claves privadas ni datos sensibles.</small>
+<button id="send-chat-task" type="button" disabled>Enviar mensaje como tarea autorizada de solo lectura</button>
+<small>La segunda acción crea una tarea en cola y exige identidad de operador, dispositivo primario y autorización vigente. No compartas contraseñas, claves privadas ni datos sensibles.</small>
 </section>
 <section id="iao-task-intake-panel" class="panel" aria-labelledby="iao-task-intake-title">
 <h2 id="iao-task-intake-title">Tareas de solo lectura</h2>
@@ -215,6 +216,57 @@ button:disabled{opacity:.5}
       sendBtn.disabled = !conversationId || !apiConfigured;
       messageEl.focus();
     }
+  }
+
+  const sendChatTaskBtn = document.querySelector("#send-chat-task");
+  if (sendChatTaskBtn) {
+    sendChatTaskBtn.addEventListener("click", async () => {
+      const message = messageEl.value.trim();
+      if (!message || busy || !conversationId || !apiConfigured) return;
+      if (typeof window.iaoSubmitChatTask !== "function") {
+        status("La integración segura de tareas todavía no está disponible.");
+        return;
+      }
+      busy = true;
+      sendBtn.disabled = true;
+      sendChatTaskBtn.disabled = true;
+      status("Verificando identidad, dispositivo y autorización para crear la tarea...");
+      addMessage("user", message);
+      messageEl.value = "";
+      try {
+        const queued = await window.iaoSubmitChatTask(message);
+        addMessage("omega", "Tarea autorizada en cola. Identificador: " + queued.task_id);
+        status("Tarea aceptada. Esperando al worker...");
+        let latest = null;
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          latest = await request("/v1/tasks/" + encodeURIComponent(queued.task_id));
+          if (["SUCCEEDED", "FAILED", "EXPIRED", "DENIED"].includes(latest.state)) break;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (!latest) throw new Error("TASK_STATUS_UNAVAILABLE");
+        addMessage("omega", "Resultado de tarea (" + latest.state + "):\n" +
+          JSON.stringify(latest.result || latest, null, 2));
+        status(latest.state === "SUCCEEDED"
+          ? "Tarea ejecutada y evidencia verificada."
+          : "La tarea terminó en estado " + latest.state + ".");
+      } catch (error) {
+        addMessage("omega", "No se pudo completar la tarea: " + String(error.message || error));
+        status("Tarea no completada. No se concedieron permisos adicionales.");
+      } finally {
+        busy = false;
+        sendBtn.disabled = !conversationId || !apiConfigured;
+        if (sendChatTaskBtn) sendChatTaskBtn.disabled = true;
+        if (typeof window.IAOOperatorIdentity !== "undefined" &&
+            typeof window.IAOOperatorIdentity.capabilityGrantStatus === "function") {
+          try {
+            const grants = await window.IAOOperatorIdentity.capabilityGrantStatus();
+            sendChatTaskBtn.disabled = !Array.isArray(grants.active_capabilities) ||
+              !grants.active_capabilities.includes("knowledge.search");
+          } catch (_) { sendChatTaskBtn.disabled = true; }
+        }
+        messageEl.focus();
+      }
+    });
   }
 
   sendBtn.addEventListener("click", sendMessage);
