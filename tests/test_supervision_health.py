@@ -90,7 +90,6 @@ def test_coordinator_status_requires_lock_and_fresh_heartbeat(tmp_path, monkeypa
         phase="cycle_completed",
         interval_seconds=60,
         stale_after_seconds=1800,
-        now=1000,
     )
     assert coordinator.status() == 1
     assert "COORDINATOR_STATUS=STOPPED" in capsys.readouterr().out
@@ -128,7 +127,6 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
         phase="cycle_completed",
         interval_seconds=60,
         stale_after_seconds=1800,
-        now=1000,
     )
 
     supervisor.status()
