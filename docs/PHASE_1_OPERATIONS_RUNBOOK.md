@@ -20,7 +20,7 @@ El coordinador registra fases `starting`, `cycle_running` y `cycle_completed` en
 | `DEGRADED_UNVERIFIED` | Lock y heartbeat ausentes, caducados o no coincidentes |
 | `STOPPED` | No hay lock advisory activo |
 | `PROCESS_ALIVE_UNVERIFIED` | Hay PID de un motor, pero no existe protocolo de salud funcional para él |
-| `STALE_HEARTBEAT` | El coordinador conserva PID, pero el heartbeat superó el límite de frescura |
+| `STALE` (heartbeat) | `read_heartbeat` detecta que el heartbeat superó el límite de frescura; el estado agregado del coordinador pasa a `DEGRADED_UNVERIFIED` |
 
 Los heartbeats y eventos operativos se guardan bajo directorios privados (0700) y archivos privados (0600). Los logs redactan texto libre, trazas, comandos y rutas; no deben ampliarse para incluir prompts, consultas, credenciales ni contenido de usuario.
 
