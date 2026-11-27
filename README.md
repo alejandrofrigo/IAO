@@ -10,6 +10,10 @@ Verified state lives in `artifacts/` (status.json, runtime-report.json, test-res
 
 See [ChatGPT × IAO: collaboration of construction](docs/CHATGPT_IAO_COLLABORATION.md) for the engineering attribution, collaboration boundaries and target architecture.
 
+## Fase de construcción
+
+La hoja de ruta técnica activa está en [Fase 1 — Núcleo operativo y arquitectura](docs/PHASE_1_CORE_FOUNDATION.md). Cada fase se cierra con 20 objetivos verificables y evidencia; el código presente no se considera capacidad operativa hasta superar sus pruebas.
+
 ## Status honesty
 Dev bearer tokens are NOT OIDC (production start is refused). SQLite is the dev backend; PostgreSQL,
 FastAPI app (apps/api), pydantic contracts, Docker, CI, a real model adapter and all external
@@ -18,4 +22,3 @@ infrastructure (Annex S) are NOT executed in this sandbox (no network / credenti
 ## Project objectives and integration gaps
 
 See [IAO objectives, verified capabilities and integration gaps](docs/IAO_OBJECTIVES_GAP_ANALYSIS.md) for the repository-based inventory, current blockers, implementation order and acceptance criteria. This document distinguishes code presence from tested runtime capability.
-
