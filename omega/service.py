@@ -732,12 +732,12 @@ class OmegaService:
 
         if method == "POST" and p == "/v1/device/enroll":
             pr = self._auth(headers)
+            if pr.subject.startswith("guest:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
             if os.environ.get("IAO_DEVICE_ENROLLMENT_ENABLED", "").strip() != "1":
                 raise ApiError(403, "DEVICE_ENROLLMENT_DISABLED")
-            if pr.subject.startswith("guest:"):
-                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             data = self._json(body)
             try:
                 enrolled = self.device_authority.enroll(
