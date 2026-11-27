@@ -119,3 +119,79 @@ def test_provider_status_exposes_no_key_material(monkeypatch):
     assert result["configured"] == 1
     assert result["providers"][0]["id"] == "alpha"
     assert secret not in json.dumps(result)
+
+
+
+def test_route_filters_by_capability_modality_and_cost(monkeypatch):
+    cheap_text = {
+        **provider("cheap-text", 1),
+        "capabilities": ["chat.completion", "reasoning"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 0.2,
+    }
+    cheap_no_reasoning = {
+        **provider("cheap-basic", 0),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 0.01,
+    }
+    expensive_image = {
+        **provider("vision", 2),
+        "capabilities": ["chat.completion", "reasoning"],
+        "modalities": ["text", "image"],
+        "cost_per_1k_tokens": 0.8,
+    }
+    monkeypatch.setattr(router, "providers", lambda: [
+        expensive_image, cheap_no_reasoning, cheap_text
+    ])
+    monkeypatch.setattr(router, "health", lambda: {})
+    monkeypatch.setattr(router, "_write_json", lambda path, data: None)
+    calls = []
+
+    def request(candidate, messages, timeout):
+        calls.append(candidate["id"])
+        return "ok", candidate["model"]
+
+    monkeypatch.setattr(router, "_request", request)
+    result = router.chat_with_metadata(
+        [{"role": "user", "content": "test"}],
+        requirements={
+            "capabilities": ["reasoning"],
+            "modalities": ["text"],
+            "max_cost_per_1k_tokens": 0.5,
+        },
+    )
+    assert calls == ["cheap-text"]
+    assert result["model_identity"]["provider_id"] == "cheap-text"
+
+
+def test_route_rejects_unknown_or_invalid_requirements(monkeypatch):
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    with pytest.raises(ValueError, match="INVALID_ROUTE_REQUIREMENTS"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}],
+            requirements={"capabilities": ["reasoning"], "unexpected": True},
+        )
+    with pytest.raises(ValueError, match="INVALID_ROUTE_REQUIREMENTS"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}],
+            requirements={"max_cost_per_1k_tokens": float("nan")},
+        )
+
+
+def test_route_fails_closed_when_no_provider_meets_cost_or_capability(monkeypatch):
+    candidate = {
+        **provider("expensive"),
+        "capabilities": ["chat.completion"],
+        "modalities": ["text"],
+        "cost_per_1k_tokens": 2.0,
+    }
+    monkeypatch.setattr(router, "providers", lambda: [candidate])
+    with pytest.raises(RuntimeError, match="IAO_NO_COMPATIBLE_PROVIDERS"):
+        router.chat_with_metadata(
+            [{"role": "user", "content": "test"}],
+            requirements={
+                "capabilities": ["reasoning"],
+                "max_cost_per_1k_tokens": 1.0,
+            },
+        )
