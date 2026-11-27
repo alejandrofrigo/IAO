@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import math
 import pickle
 import shutil
 import subprocess
@@ -28,23 +29,37 @@ class ToolProcessError(RuntimeError):
 
 
 def _apply_child_limits(timeout_seconds: float) -> None:
+    """Apply mandatory POSIX limits; never silently continue without them.
+
+    This is defense-in-depth, not filesystem or network isolation. Deployments
+    that execute untrusted tools still require an OS/container sandbox.
+    """
     if os.name != "posix":
-        return
+        raise RuntimeError("OS_RESOURCE_LIMITS_UNAVAILABLE")
     try:
         import resource
 
-        cpu = max(1, int(timeout_seconds) + 1)
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-        resource.setrlimit(
-            resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE)
-        )
-        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESULT_BYTES, MAX_RESULT_BYTES))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        requested = {
+            resource.RLIMIT_CPU: (max(1, int(timeout_seconds) + 1), max(2, int(timeout_seconds) + 2)),
+            resource.RLIMIT_AS: (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE),
+            resource.RLIMIT_FSIZE: (MAX_RESULT_BYTES, MAX_RESULT_BYTES),
+            resource.RLIMIT_NOFILE: (64, 64),
+        }
         if hasattr(resource, "RLIMIT_CORE"):
-            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    except (ImportError, OSError, ValueError):
-        # Parent still enforces a wall-clock deadline and kills the process.
-        pass
+            requested[resource.RLIMIT_CORE] = (0, 0)
+        for limit, (soft, hard) in requested.items():
+            _current_soft, current_hard = resource.getrlimit(limit)
+            if current_hard != resource.RLIM_INFINITY:
+                hard = min(hard, current_hard)
+                soft = min(soft, hard)
+            if soft <= 0 and limit != getattr(resource, "RLIMIT_CORE", None):
+                raise RuntimeError("OS_RESOURCE_LIMIT_INVALID")
+            resource.setrlimit(limit, (soft, hard))
+            applied_soft, applied_hard = resource.getrlimit(limit)
+            if applied_soft > soft or applied_hard > hard:
+                raise RuntimeError("OS_RESOURCE_LIMIT_NOT_ENFORCED")
+    except (ImportError, OSError, ValueError) as exc:
+        raise RuntimeError("OS_RESOURCE_LIMITS_UNAVAILABLE") from exc
 
 
 def _child_entry(send_conn: Any, run: Callable[..., Any], verify: Callable[..., Any],
@@ -151,11 +166,19 @@ def _run_tool_bubblewrap(
 def run_tool_isolated(run: Callable[..., Any], verify: Callable[..., Any],
                       payload: dict[str, Any], timeout_seconds: float
                       ) -> tuple[dict[str, Any], str]:
-    if not 0 < timeout_seconds <= 300:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(float(timeout_seconds))
+        or not 0 < timeout_seconds <= 300
+    ):
         raise ValueError("INVALID_TOOL_TIMEOUT")
-    input_bytes = json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
+    try:
+        input_bytes = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ValueError("INVALID_TOOL_INPUT") from exc
     if len(input_bytes) > MAX_INPUT_BYTES:
         raise ValueError("TOOL_INPUT_TOO_LARGE")
     mode = os.environ.get("IAO_TOOL_SANDBOX_MODE")
