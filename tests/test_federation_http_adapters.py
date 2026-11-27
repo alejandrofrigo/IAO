@@ -293,3 +293,50 @@ def test_stdlib_federation_runtime_exception_is_non_disclosing():
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=3)
+
+
+def test_publication_runtime_failure_has_matching_safe_error(monkeypatch, tmp_path):
+    class BrokenPublicationNode:
+        served = {"knowledge.search"}
+
+        def identity_publication(self, *_args, **_kwargs):
+            raise RuntimeError("private-publication-runtime-marker")
+
+    monkeypatch.setenv("IAO_FEDERATION_PUBLIC_PEERING", "true")
+    monkeypatch.setenv("IAO_FEDERATION_PUBLIC_ORIGIN", "https://peer.example")
+
+    client = configured_client(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        main, "_get_federation_node", lambda: BrokenPublicationNode(),
+    )
+    fastapi_response = client.get("/fed/v1/publication")
+    assert fastapi_response.status_code == 503
+    assert fastapi_response.json()["error"] == "FEDERATION_UNAVAILABLE"
+    assert "private-publication-runtime-marker" not in fastapi_response.text
+
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        make_handler(object(), BrokenPublicationNode()),
+    )
+    thread = Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/publication",
+        method="GET",
+    )
+    try:
+        try:
+            urllib.request.urlopen(request, timeout=3)
+            raise AssertionError("publication exception must return 503")
+        except urllib.error.HTTPError as response:
+            payload = json.loads(response.read())
+            assert response.code == fastapi_response.status_code
+            assert payload["error"] == fastapi_response.json()["error"]
+            assert response.headers["X-Correlation-ID"] == payload["correlation_id"]
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert "private-publication-runtime-marker" not in json.dumps(payload)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=3)
