@@ -51,7 +51,7 @@ def _stop_background_workers() -> None:
         try:
             module = __import__(module_name, fromlist=[function_name])
             stop = getattr(module, function_name)
-            stopped = stop(timeout=5.0)
+            stopped = stop(timeout=15.0)
         except Exception as exc:
             logger.error(
                 "RUNTIME_WORKER_STOP_FAILED worker=%s error_type=%s",
