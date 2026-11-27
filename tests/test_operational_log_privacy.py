@@ -92,3 +92,28 @@ def test_operational_log_hashes_unknown_strings_and_untrusted_string_lists():
     assert "repository" not in safe
     assert "origin" not in safe
     assert "annotations" not in safe
+
+
+def test_operational_log_redacts_numeric_and_variant_sensitive_field_names():
+    safe = sanitize_log_data({
+        "client_ip": 3221226037,
+        "remote_addr": "192.0.2.44",
+        "x_forwarded_for": "198.51.100.8",
+        "identity_id": 184467,
+        "session_id": 987654,
+        "device_public_key": "private-public-key-marker",
+        "authorization_header": "Bearer private-token-marker",
+        "cookie": "private-cookie-marker",
+        "ordinary_count": 7,
+    })
+    serialized = str(safe)
+    for marker in (
+        "3221226037", "192.0.2.44", "198.51.100.8",
+        "184467", "987654", "private-public-key-marker",
+        "private-token-marker", "private-cookie-marker",
+    ):
+        assert marker not in serialized
+    assert safe["ordinary_count"] == 7
+    assert safe["client_ip_digest"] == "[REDACTED]"
+    assert safe["identity_id_digest"] == "[REDACTED]"
+    assert safe["session_id_digest"] == "[REDACTED]"
