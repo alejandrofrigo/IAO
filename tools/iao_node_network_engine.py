@@ -64,14 +64,16 @@ def cfg():
     return json.loads(CFG.read_text())
 
 def save_config(c):
-    CFG.parent.mkdir(parents=True, exist_ok=True)
+    CFG.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(CFG.parent, 0o700)
     tmp = CFG.with_suffix(".tmp")
     tmp.write_text(json.dumps(c, indent=2))
     os.chmod(tmp, 0o600)
     tmp.replace(CFG)
 
 def dbopen():
-    DATA.mkdir(parents=True, exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(DATA, 0o700)
     db = sqlite3.connect(DB, timeout=20)
     db.execute("PRAGMA journal_mode=WAL")
 
@@ -122,6 +124,9 @@ def dbopen():
     );
     """)
     db.commit()
+    for private_path in (DB, Path(str(DB) + "-wal"), Path(str(DB) + "-shm")):
+        if private_path.exists():
+            os.chmod(private_path, 0o600)
     return db
 
 def log_event(name, details=""):
