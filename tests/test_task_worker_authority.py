@@ -232,7 +232,8 @@ def test_worker_fails_closed_when_primary_device_or_session_was_revoked():
 
 def test_worker_honors_cancel_requested_during_read_only_tool_execution():
     worker, store, calls = _worker(type("ActiveAuthority", (), {
-        "verify_primary_device_for_session_digest": lambda self, *_args: True
+        "verify_primary_device_for_session_digest": lambda self, *_args: True,
+        "active_capabilities_for_session_digest": lambda self, *_args, **_kwargs: frozenset({"knowledge.search"}),
     })())
 
     def cancel_during_execution(run, verify, payload, _timeout):
