@@ -354,3 +354,86 @@ def test_five_motor_supervisor_does_not_mark_missing_task_worker_healthy(tmp_pat
     monkeypatch.setattr(supervisor, "adapters", lambda: {})
     supervisor.status()
     assert "TASK_WORKER: UNVERIFIED" in capsys.readouterr().out
+
+
+
+def test_supervisor_uses_process_bound_heartbeats_for_network_and_distributed_motors(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        supervisor,
+        "read_children",
+        lambda: {
+            "NODE_NETWORK": {
+                "pid": os.getpid(),
+                "process_start_ticks": supervisor.process_start_ticks(os.getpid()),
+            },
+            "DISTRIBUTED_INTELLIGENCE": {
+                "pid": os.getpid(),
+                "process_start_ticks": supervisor.process_start_ticks(os.getpid()),
+            },
+        },
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "adapters",
+        lambda: {
+            "NODE_NETWORK": {"enabled": True, "command": ["python", "nodes.py"]},
+            "DISTRIBUTED_INTELLIGENCE": {
+                "enabled": True, "command": ["python", "federation_worker.py"],
+            },
+        },
+    )
+    write_heartbeat(
+        tmp_path / "node-network-heartbeat.json",
+        component="NODE_NETWORK",
+        pid=os.getpid(),
+        phase="cycle_completed",
+        interval_seconds=60,
+        stale_after_seconds=180,
+    )
+    write_heartbeat(
+        tmp_path / "distributed-intelligence-heartbeat.json",
+        component="DISTRIBUTED_INTELLIGENCE",
+        pid=os.getpid(),
+        phase="cycle_completed",
+        interval_seconds=60,
+        stale_after_seconds=180,
+    )
+    supervisor.status()
+    output = capsys.readouterr().out
+    assert "NODE_NETWORK: HEALTHY" in output
+    assert "DISTRIBUTED_INTELLIGENCE: HEALTHY" in output
+
+
+def test_supervisor_rejects_stale_network_heartbeat(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        supervisor,
+        "read_children",
+        lambda: {
+            "NODE_NETWORK": {
+                "pid": os.getpid(),
+                "process_start_ticks": supervisor.process_start_ticks(os.getpid()),
+            },
+        },
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "adapters",
+        lambda: {"NODE_NETWORK": {"enabled": True, "command": ["python", "nodes.py"]}},
+    )
+    write_heartbeat(
+        tmp_path / "node-network-heartbeat.json",
+        component="NODE_NETWORK",
+        pid=os.getpid(),
+        phase="cycle_completed",
+        interval_seconds=60,
+        stale_after_seconds=180,
+        now=1,
+    )
+    supervisor.status()
+    assert "NODE_NETWORK: STALE_HEARTBEAT" in capsys.readouterr().out
