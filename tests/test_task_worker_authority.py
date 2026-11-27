@@ -13,7 +13,8 @@ from omega.tools.registry import ToolRegistry, ToolSpec
 class _ClaimedTaskStore:
     def __init__(self, intent: dict) -> None:
         self.task = {
-            "id": "queued-task-1",\n            "lease_generation": 1,
+            "id": "queued-task-1",
+            "lease_generation": 1,
             "owner": "operator:test-owner",
             "intent_json": json.dumps(intent),
         }
