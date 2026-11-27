@@ -9,6 +9,7 @@
 
   let latestTaskId = null;
   let busy = false;
+  let lastSessionToken = sessionToken();
 
   function sessionToken() {
     return typeof window.iaoGetSessionToken === "function"
@@ -157,7 +158,15 @@
 
   submitButton.addEventListener("click", submitTask);
   refreshButton.addEventListener("click", refreshTaskStatus);
-  window.addEventListener("iao-session-changed", () => { void refreshGate(); });
+  window.addEventListener("iao-session-changed", () => {
+    const token = sessionToken();
+    if (token !== lastSessionToken) {
+      latestTaskId = null;
+      resultEl.textContent = "";
+      lastSessionToken = token;
+    }
+    void refreshGate();
+  });
   window.addEventListener("iao-capabilities-changed", () => { void refreshGate(); });
   void refreshGate();
 })();
