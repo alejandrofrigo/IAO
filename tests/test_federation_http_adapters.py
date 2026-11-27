@@ -51,6 +51,14 @@ def _duplicate_message(node):
     signed = json.dumps(_sign(enrolled_peer.key, envelope), separators=(",", ":"))
     return (signed[:-1] + ',"nonce":"federation-duplicate-member-0002"}').encode("utf-8")
 
+def _duplicate_challenge(node):
+    challenge = {
+        "v": 1, "from": node.node_id, "to": node.node_id,
+        "nonce": "a" * 64, "ts": time.time(),
+    }
+    raw = json.dumps(challenge, separators=(",", ":"))
+    return (raw[:-1] + ',"ts":' + str(time.time()) + '}').encode("utf-8")
+
 def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tmp_path):
     client = configured_client(monkeypatch, tmp_path)
     service = main._get_service()
@@ -71,6 +79,12 @@ def test_fastapi_federation_message_rejects_forged_enrolled_peer(monkeypatch, tm
         )
         assert duplicate_response.status_code == 400
         assert duplicate_response.json()["error"] == "MALFORMED"
+        challenge_response = client.post(
+            "/fed/v1/handshake", content=_duplicate_challenge(node),
+            headers={"Content-Type": "application/json"},
+        )
+        assert challenge_response.status_code == 400
+        assert challenge_response.json()["error"] == "INVALID_CHALLENGE"
         assert any(
             event["event_type"] == "FED_REQUEST"
             and event["details"].get("reason") == "BAD_SIGNATURE"
@@ -126,6 +140,18 @@ def test_stdlib_federation_message_rejects_forged_enrolled_peer(tmp_path, monkey
             payload = json.loads(response.read())
             assert response.code == 400
             assert payload["error"] == "MALFORMED"
+        challenge_request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/fed/v1/handshake",
+            data=_duplicate_challenge(node), method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(challenge_request, timeout=3)
+            raise AssertionError("duplicate federation challenge members were accepted")
+        except urllib.error.HTTPError as response:
+            payload = json.loads(response.read())
+            assert response.code == 400
+            assert payload["error"] == "INVALID_CHALLENGE"
         assert any(
             event["event_type"] == "FED_REQUEST"
             and event["details"].get("reason") == "BAD_SIGNATURE"
