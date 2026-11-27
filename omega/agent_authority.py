@@ -238,8 +238,16 @@ class AgentAuthority:
         now = time.time()
         with self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT a.identity_id,a.key_version,a.expires_at,a.revoked_at,i.key_version,i.status,b.key_version FROM delegated_agents a JOIN operator_identities i ON i.identity_id=a.identity_id JOIN primary_device_bindings b ON b.identity_id=i.identity_id WHERE a.agent_id=?", (agent_id,)).fetchone()
-            if row is None or row[5] != "ACTIVE" or row[3] is not None or row[2] <= now or row[1] != row[4] or row[6] != row[4]:
+            row = db.execute("SELECT identity_id,key_version,expires_at,revoked_at FROM delegated_agents WHERE agent_id=?", (agent_id,)).fetchone()
+            if row is None or row[3] is not None or row[2] <= now:
+                db.execute("ROLLBACK")
+                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
+            try:
+                current_version = self._current_parent_key_version(row[0])
+            except AgentAuthorityError:
+                db.execute("ROLLBACK")
+                raise
+            if row[1] != current_version:
                 db.execute("ROLLBACK")
                 raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
             db.execute("DELETE FROM agent_request_challenges WHERE expires_at<=?", (now,))
@@ -264,17 +272,25 @@ class AgentAuthority:
         now = time.time()
         with self.lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT a.identity_id,a.key_version,a.public_key_pem,a.scopes_json,a.expires_at,a.revoked_at,i.key_version,i.status,b.key_version,c.expires_at,c.consumed_at FROM delegated_agents a JOIN operator_identities i ON i.identity_id=a.identity_id JOIN primary_device_bindings b ON b.identity_id=i.identity_id JOIN agent_request_challenges c ON c.agent_id=a.agent_id WHERE a.agent_id=? AND c.nonce=?", (agent_id, nonce)).fetchone()
-            if row is None or row[7] != "ACTIVE" or row[5] is not None or row[4] <= now or row[1] != row[6] or row[8] != row[6] or row[9] <= now or row[10] is not None:
+            row = db.execute("SELECT a.identity_id,a.key_version,a.public_key_pem,a.scopes_json,a.expires_at,a.revoked_at,c.expires_at,c.consumed_at FROM delegated_agents a JOIN agent_request_challenges c ON c.agent_id=a.agent_id WHERE a.agent_id=? AND c.nonce=?", (agent_id, nonce)).fetchone()
+            if row is None or row[5] is not None or row[4] <= now or row[6] <= now or row[7] is not None:
                 db.execute("ROLLBACK")
                 raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 401)
+            try:
+                current_version = self._current_parent_key_version(row[0])
+            except AgentAuthorityError:
+                db.execute("ROLLBACK")
+                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403) from None
+            if row[1] != current_version:
+                db.execute("ROLLBACK")
+                raise AgentAuthorityError("AGENT_NOT_ACTIVE", 403)
             if "agent.status.read" not in json.loads(row[3]):
                 db.execute("ROLLBACK")
                 raise AgentAuthorityError("AGENT_SCOPE_NOT_ALLOWED", 403)
             payload = self.canonical({"body_sha256": hashlib.sha256(body).hexdigest(), "method": method, "nonce": nonce, "path": path, "protocol": "IAO-AGENT-REQUEST-V1", "timestamp": timestamp})
             try:
                 key = serialization.load_pem_public_key(row[2].encode("ascii"))
-                key.verify(signature, b"IAO-AGENT-REQUEST-V1\x00" + payload, ec.ECDSA(hashes.SHA256()))
+                key.verify(signature, b"IAO-AGENT-REQUEST-V1\\x00" + payload, ec.ECDSA(hashes.SHA256()))
             except (InvalidSignature, ValueError, TypeError):
                 db.execute("ROLLBACK")
                 raise AgentAuthorityError("INVALID_AGENT_SIGNATURE", 401) from None
@@ -284,15 +300,18 @@ class AgentAuthority:
                 raise AgentAuthorityError("AGENT_CHALLENGE_EXPIRED_OR_REPLAYED", 401)
             db.execute("COMMIT")
         return {"agent_id": agent_id, "identity_id": row[0], "authority": "READ_ONLY"}
+
     def status_for_agent(self, agent_id: str) -> dict[str, Any]:
         now = time.time()
         with self._db() as db:
             row = db.execute("SELECT agent_id,scopes_json,created_at,expires_at,revoked_at,key_version,identity_id FROM delegated_agents WHERE agent_id=?", (agent_id,)).fetchone()
-            if row is None:
-                raise AgentAuthorityError("AGENT_NOT_FOUND", 404)
-            identity = db.execute("SELECT key_version,status FROM operator_identities WHERE identity_id=?", (row[6],)).fetchone()
-            binding = db.execute("SELECT key_version FROM primary_device_bindings WHERE identity_id=?", (row[6],)).fetchone()
-        active = bool(identity and binding and identity[1] == "ACTIVE" and identity[0] == binding[0] == row[5] and row[4] is None and row[3] > now)
+        if row is None:
+            raise AgentAuthorityError("AGENT_NOT_FOUND", 404)
+        try:
+            current_version = self._current_parent_key_version(row[6])
+        except AgentAuthorityError:
+            current_version = -1
+        active = bool(current_version == row[5] and row[4] is None and row[3] > now)
         return {"agent_id": row[0], "scopes": json.loads(row[1]), "created_at": int(row[2]), "expires_at": int(row[3]), "revoked": row[4] is not None, "active": active, "authority": "READ_ONLY"}
     def revoke(self, *, identity_id: str, key_version: int, agent_id: str,
                root_signature: bytes, primary_signature: bytes) -> dict[str, str]:
