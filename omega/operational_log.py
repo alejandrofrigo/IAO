@@ -20,8 +20,8 @@ _SAFE_STRING_FIELDS = {
     "method", "route_group", "cid", "decision", "policy_version",
     "authority", "identity_verification", "enrollment", "motor", "engine",
 }
-_SAFE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:+-]{1,128}\\Z")
-_SAFE_CAPABILITY_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,127}\\Z")
+_SAFE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:+-]{1,128}\Z")
+_SAFE_CAPABILITY_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,127}\Z")
 _SAFE_REASON_CODES = {
     "TIMEOUT",
     "NONZERO_EXIT",
