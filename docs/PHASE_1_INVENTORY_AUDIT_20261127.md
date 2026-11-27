@@ -1,6 +1,8 @@
 # Auditoría de inventario — Fase 1 (2026-11-27)
 
 **Estado:** evidencia documental adicional; no sustituye la verificación del HEAD ni de CI.
+**SHA base observado:** `0920643d05833a2a761f9168ae1e89ed9944fcc7`.
+**HEAD observado al actualizar:** `88f9cd5f878bb3fbe376f08ede806efc5e0c21b6` (359 ahead / 0 behind).
 **Rama destino:** `phase-1-core-foundation-20261127`
 **Alcance:** objetivo 01 de `PHASE_1_CORE_FOUNDATION.md`.
 
@@ -31,7 +33,7 @@ Las relaciones y distancias anteriores son las cifras registradas en el cuerpo d
 
 ## Discrepancia de inventario que debe resolverse
 
-El ledger de Fase 1 registra la rama como **317 commits ahead / 0 behind** de `iao-production-gates-20261127T0856Z`. Un resumen anterior registraba **2 commits ahead / 0 behind** antes de la ejecución técnica. Son cortes distintos o una cifra obsoleta; no deben mezclarse. El número definitivo requiere comparar los refs actuales y registrar los SHA de base y HEAD.
+El ledger de Fase 1 registra la rama como **359 commits ahead / 0 behind** de `iao-production-gates-20261127T0856Z`. Un resumen anterior registraba **2 commits ahead / 0 behind** antes de la ejecución técnica. Son cortes distintos o una cifra obsoleta; no deben mezclarse. El número definitivo requiere comparar los refs actuales y registrar los SHA de base y HEAD.
 
 ## Componentes y fuentes de verdad
 
