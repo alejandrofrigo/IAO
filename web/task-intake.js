@@ -38,15 +38,15 @@
     if (!configured || !token) {
       queryEl.disabled = true;
       submitButton.disabled = true;
-      refreshButton.disabled = !token || !latestTaskId;
-      setStatus("Inicia sesión como operador y vincula el dispositivo primario.");
+      refreshButton.disabled = true;
+      setAuthStatus("Inicia sesión como operador y vincula el dispositivo primario.");
       return false;
     }
     if (!window.IAOOperatorIdentity ||
         typeof window.IAOOperatorIdentity.capabilityGrantStatus !== "function") {
       queryEl.disabled = true;
       submitButton.disabled = true;
-      refreshButton.disabled = !latestTaskId;
+      refreshButton.disabled = true;
       setAuthStatus("La autoridad de capacidades no está disponible.");
       return false;
     }
@@ -64,7 +64,7 @@
     } catch (error) {
       queryEl.disabled = true;
       submitButton.disabled = true;
-      refreshButton.disabled = !latestTaskId || busy;
+      refreshButton.disabled = true;
       setAuthStatus("No se pudo verificar la autorización: " + String(error.message || error));
       return false;
     }
