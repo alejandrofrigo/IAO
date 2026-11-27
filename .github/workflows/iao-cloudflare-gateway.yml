@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/cloudflare-iao-gateway-foundation-20261127
+      - feat/cloudflare-iao-api-proxy-20261127
     paths:
       - "cloudflare/iao-gateway/**"
       - ".github/workflows/iao-cloudflare-gateway.yml"
@@ -26,5 +27,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Run gateway fail-closed tests
+      - name: Run gateway proxy security tests
         run: npm test
