@@ -163,3 +163,6 @@ No existe un directorio onion global que permita enumerar automáticamente todos
 - La recuperación es una operación explícita; descubrir o recibir un CID no descarga automáticamente el contenido ni lo convierte en código confiable.
 - `omega/p2p_assimilation.py` clasifica multiaddresses observadas como TCP, QUIC/UDP, relay libp2p u onion anunciado. Cada registro indica `connectivity_verified=false`: una dirección anunciada no demuestra que la ruta funcione ni que QUIC pueda circular por Tor.
 - Las direcciones onion y los CIDs permanecen como metadatos públicos no autenticados hasta que una fase posterior valide identidad, firma, origen y política de contenido.
+
+
+La configuración del transporte Tor usa por defecto SOCKS5 en `127.0.0.1:19050`, alineado con el puerto SOCKS del `torrc` del nodo IAO; puede cambiarse mediante `IAO_TOR_SOCKS_HOST` y `IAO_TOR_SOCKS_PORT`. El código no inicia Tor ni presupone que el socket esté activo.
