@@ -8,6 +8,7 @@ from apps.api import main
 
 def configured_client(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "test-token-key-" + "x" * 40)
     monkeypatch.setenv("AUDIT_HMAC_KEY", "test-audit-key-" + "y" * 48)
     monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
@@ -50,6 +51,7 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
 
 
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
+    monkeypatch.delenv("IAO_SESSION_SIGNING_KEY", raising=False)
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
     main._service = None
