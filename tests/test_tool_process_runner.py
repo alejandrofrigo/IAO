@@ -97,8 +97,10 @@ def test_bubblewrap_mode_uses_read_only_root_and_unshared_network(monkeypatch):
     assert "--unshare-all" in command
     assert command[command.index("--ro-bind") + 1:command.index("--ro-bind") + 3] == ["/", "/"]
     assert command[command.index("--tmpfs") + 1] == "/tmp"
-    assert ["--tmpfs", "/var/lib"] == command[command.index("--tmpfs", command.index("/home") - 2) + 0:command.index("--tmpfs", command.index("/home") - 2) + 2]
-    assert ["--cap-drop", "ALL"] == command[command.index("--cap-drop"):command.index("--cap-drop") + 2]
+    pairs = set(zip(command, command[1:]))
+    assert ("--tmpfs", "/var/lib") in pairs
+    assert ("--tmpfs", "/run") in pairs
+    assert ("--cap-drop", "ALL") in pairs
 
 
 @pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap not installed")
