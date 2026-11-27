@@ -24,6 +24,7 @@ def test_onion_feed_keeps_external_peers_unverified(monkeypatch, tmp_path):
         lambda url, **kwargs: calls.append((url, kwargs)) or payload,
     )
     monkeypatch.setattr(federation, "STATE", tmp_path)
+    monkeypatch.setattr(federation, "AUDIT", tmp_path / "audit" / "events.jsonl")
 
     found = federation.discover_onion_feed(
         f"http://{ONION_A}/public-directory.json"
