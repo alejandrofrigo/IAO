@@ -78,7 +78,8 @@ def sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
     """Redact free-form content and filesystem paths while retaining safe metrics."""
     safe: dict[str, Any] = {}
     for key, value in data.items():
-        normalized = str(key).lower()
+        raw_key = str(key)
+        normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw_key).lower()
         if _is_sensitive_field(normalized):
             safe[f"{normalized}_digest"] = _digest(value) if normalized in {
                 "content", "input", "message", "prompt", "query",
