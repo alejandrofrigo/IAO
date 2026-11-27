@@ -838,30 +838,38 @@ def handler_factory(c):
 
     return API
 
+
+def write_node_network_heartbeat(phase, *, interval_seconds=60, result=None):
+    from omega.supervision import write_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get(
+                "OMEGA_STATE_DIR",
+                str(Path(__file__).resolve().parents[1] / ".state"),
+            ),
+        )
+    )
+    return write_heartbeat(
+        state_dir / "node-network-heartbeat.json",
+        component="NODE_NETWORK",
+        pid=os.getpid(),
+        phase=phase,
+        interval_seconds=interval_seconds,
+        stale_after_seconds=max(180, interval_seconds * 3),
+        last_cycle_result=result,
+    )
+
+
 def serve():
     # ENGINE_CONFIG_RELOAD_V1
     server = None
-    from omega.supervision import write_heartbeat
-
-    heartbeat_state = Path(
-        os.environ.get(
-            "IAO_STATE_DIR",
-            os.environ.get("OMEGA_STATE_DIR", str(Path(__file__).resolve().parents[1] / ".state")),
-        )
-    )
-    heartbeat_path = heartbeat_state / "node-network-heartbeat.json"
     heartbeat_interval = 60
-    heartbeat_stale_after = 180
 
     def heartbeat(phase, result=None):
-        write_heartbeat(
-            heartbeat_path,
-            component="NODE_NETWORK",
-            pid=os.getpid(),
-            phase=phase,
-            interval_seconds=heartbeat_interval,
-            stale_after_seconds=heartbeat_stale_after,
-            last_cycle_result=result,
+        return write_node_network_heartbeat(
+            phase, interval_seconds=heartbeat_interval, result=result,
         )
 
     heartbeat("starting")
