@@ -79,3 +79,20 @@ def test_signed_presence_rejects_key_node_id_mismatch():
                              now=1_800_000_000)
     assert result["ok"] is False
     assert result["error"] == "PRESENCE_NODE_ID_KEY_MISMATCH"
+
+def test_signed_presence_rejects_malformed_onion_claim():
+    document = signed_presence()
+    document["libp2p_peer_id"] = None
+    document["onion_endpoint"] = "http://not-a-valid-onion.example/feed"
+    key = Ed25519PrivateKey.generate()
+    public = key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    document["public_key"] = public.hex()
+    document["node_id"] = node_id_of(public)
+    body = {name: value for name, value in document.items() if name != "signature"}
+    document["signature"] = base64.b64encode(key.sign(canonical_json(body))).decode("ascii")
+    result = verify_presence(document, expected_nonce="a" * 64,
+                             now=1_800_000_000)
+    assert result["ok"] is False
+    assert result["error"] == "INVALID_ONION_ENDPOINT_CLAIM"
