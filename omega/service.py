@@ -732,7 +732,7 @@ class OmegaService:
 
         if method == "POST" and p == "/v1/device/enroll":
             pr = self._auth(headers)
-            if pr.subject.startswith("guest:"):
+            if not pr.subject.startswith("operator:"):
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
@@ -755,7 +755,7 @@ class OmegaService:
 
         if method == "POST" and p == "/v1/device/command":
             pr = self._auth(headers)
-            if pr.subject.startswith("guest:"):
+            if not pr.subject.startswith("operator:"):
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
@@ -775,7 +775,7 @@ class OmegaService:
 
         pr = self._auth(headers)
         if method == "POST" and p == "/v1/device/challenge":
-            if pr.subject.startswith("guest:"):
+            if not pr.subject.startswith("operator:"):
                 raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
