@@ -21,8 +21,8 @@ MAX_SUBJECT_LENGTH = 256
 MAX_SCOPES = 64
 MAX_SCOPE_LENGTH = 128
 MAX_TOKEN_TTL_SECONDS = 86_400
-_SCOPE_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,127}\\Z")
-_B64URL_RE = re.compile(r"[A-Za-z0-9_-]+\\Z")
+_SCOPE_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,127}\Z")
+_B64URL_RE = re.compile(r"[A-Za-z0-9_-]+\Z")
 
 
 @dataclass(frozen=True)
