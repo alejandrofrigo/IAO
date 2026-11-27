@@ -138,20 +138,10 @@ def report_status(report):
 
 
 def coordinator_lock_held():
-    """Probe the advisory lock without treating a PID file as process health."""
-    if not LOCK.is_file():
-        return False
-    try:
-        with LOCK.open("r+", encoding="utf-8") as stream:
-            try:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return True
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-            return False
-    except OSError:
-        return False
+    """Check the advisory lock, not a PID file, before reporting active."""
+    from omega.supervision import read_lock_owner
 
+    return read_lock_owner(LOCK) is not None
 
 def write_coordinator_heartbeat(phase, interval, last_result=None):
     try:
@@ -192,12 +182,13 @@ def status():
     print("\nULTIMO RESULTADO PADGE:")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-    from omega.supervision import read_heartbeat
+    from omega.supervision import read_heartbeat, read_lock_owner
 
     heartbeat = read_heartbeat(
         HEARTBEAT, expected_component="PADGE_AUTONOMY",
     )
-    active = coordinator_lock_held()
+    lock_owner = read_lock_owner(LOCK)
+    active = lock_owner is not None
     if not active:
         state = "STOPPED"
     elif heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
@@ -206,6 +197,7 @@ def status():
         state = "DEGRADED_UNVERIFIED"
     print("\nCOORDINATOR_STATUS=" + state)
     print("COORDINATOR_LOCK_HELD=" + ("YES" if active else "NO"))
+    print("COORDINATOR_LOCK_OWNER_PID=" + (str(lock_owner) if lock_owner else "UNKNOWN"))
     print("COORDINATOR_HEARTBEAT=" + json.dumps(heartbeat, sort_keys=True))
     return 0 if state in {"HEALTHY", "CYCLE_IN_PROGRESS"} else 1
 
@@ -348,6 +340,11 @@ def acquire_lock():
     except BlockingIOError:
         stream.close()
         raise RuntimeError("Ya existe otro coordinador activo")
+    stream.seek(0)
+    stream.truncate()
+    stream.write(str(os.getpid()))
+    stream.flush()
+    os.fsync(stream.fileno())
     return stream
 
 
