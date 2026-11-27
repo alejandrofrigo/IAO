@@ -22,6 +22,8 @@ MAX_INTERVAL = 86400
 DEFAULT_INTERVAL = 900
 DEFAULT_TIMEOUT = 30.0
 MAX_TIMEOUT = 120.0
+MAX_BOOTSTRAPPERS = 8
+MAX_PEERS = 250
 
 
 def utc() -> str:
@@ -63,26 +65,57 @@ def cycle(*, timeout: float = DEFAULT_TIMEOUT) -> dict:
         result = libp2p_discovery.discover_sync(timeout=timeout)
         if not isinstance(result, dict):
             raise RuntimeError("DISCOVERY_RESULT_INVALID")
-        status = str(result.get("status", "UNKNOWN"))[:80]
+
+        status = result.get("status")
+        connected = result.get("connected_bootstrappers", 0)
         peers = result.get("routing_peers_discovered", 0)
         added = result.get("persisted_new_peers", 0)
-        if any(isinstance(x, bool) or not isinstance(x, int) or x < 0
-               for x in (peers, added)):
+        peer_records = result.get("peers", [])
+
+        if status not in {
+            "DISCOVERY_COMPLETED",
+            "BOOTSTRAP_UNAVAILABLE",
+            "NO_VALID_BOOTSTRAP_PEERS",
+        }:
+            raise RuntimeError("DISCOVERY_STATUS_INVALID")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (connected, peers, added)
+        ):
             raise RuntimeError("DISCOVERY_COUNTS_INVALID")
-        assimilation = assimilate_discovered_peers(
-            result.get("peers", []), state_dir=state_dir()
-        )
+        if connected > MAX_BOOTSTRAPPERS or peers > MAX_PEERS or added > MAX_PEERS:
+            raise RuntimeError("DISCOVERY_COUNTS_OUT_OF_RANGE")
+        if not isinstance(peer_records, list) or len(peer_records) > MAX_PEERS:
+            raise RuntimeError("DISCOVERY_PEER_LIST_INVALID")
+
+        # A successful-looking result without a real bootstrap connection is
+        # never allowed to populate IAO's public-peer inventory.
+        if status == "DISCOVERY_COMPLETED" and connected < 1:
+            raise RuntimeError("DISCOVERY_SUCCESS_WITHOUT_BOOTSTRAP")
+        if status != "DISCOVERY_COMPLETED" and (connected != 0 or peer_records):
+            raise RuntimeError("DISCOVERY_PEERS_WITHOUT_BOOTSTRAP")
+
+        if status == "DISCOVERY_COMPLETED":
+            assimilation = assimilate_discovered_peers(
+                peer_records, state_dir=state_dir()
+            )
+            assimilation_state = "QUARANTINED_INVENTORY_ONLY"
+        else:
+            assimilation = {"new": 0, "observed": 0, "total": 0}
+            assimilation_state = "SKIPPED_NO_BOOTSTRAP"
+
         report = {
             "schema": 1,
             "started_at": started,
             "completed_at": utc(),
             "status": status,
-            "connected_bootstrappers": int(result.get("connected_bootstrappers", 0)),
+            "connected_bootstrappers": connected,
+            "bootstrap_connection_confirmed": connected > 0,
             "routing_peers_discovered": peers,
             "persisted_new_peers": added,
-            "auto_assimilation": "QUARANTINED_INVENTORY_ONLY",
+            "auto_assimilation": assimilation_state,
             "auto_assimilated_new_peers": assimilation["new"],
-            "auto_assimilated_observations": assimilation["observed"],
+            "auto_assimililated_observations": assimilation["observed"],
             "assimilated_registry_total": assimilation["total"],
             "identity_verification": "NOT_PERFORMED",
             "enrollment_performed": False,
