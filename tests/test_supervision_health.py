@@ -95,6 +95,8 @@ def test_coordinator_status_requires_lock_and_fresh_heartbeat(tmp_path, monkeypa
     assert "COORDINATOR_STATUS=STOPPED" in capsys.readouterr().out
 
     with lock_path.open("a+", encoding="utf-8") as stream:
+        stream.write(str(os.getpid()))
+        stream.flush()
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert coordinator.status() == 0
         assert "COORDINATOR_STATUS=HEALTHY" in capsys.readouterr().out
@@ -129,8 +131,15 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
         stale_after_seconds=1800,
     )
 
-    supervisor.status()
-    output = capsys.readouterr().out
-    assert "PADGE: HEALTHY" in output
-    assert "GUARDIAN: PROCESS_ALIVE_UNVERIFIED" in output
-    assert "GUARDIAN: RUNNING" not in output
+    lock_path = tmp_path / ".state" / "iao-autonomy" / "coordinator.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as stream:
+        stream.write(str(os.getpid()))
+        stream.flush()
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        supervisor.status()
+        output = capsys.readouterr().out
+        assert "PADGE: HEALTHY" in output
+        assert "GUARDIAN: PROCESS_ALIVE_UNVERIFIED" in output
+        assert "GUARDIAN: RUNNING" not in output
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
