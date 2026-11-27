@@ -75,3 +75,15 @@ def test_framework_exception_handler_never_echoes_internal_detail():
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert len(response.headers["x-correlation-id"]) == 32
+
+def test_service_response_always_supplies_valid_correlation_header():
+    response = main._service_response(400, {"error": "INVALID_REQUEST"})
+    payload = response.body.decode("utf-8")
+    import json
+    decoded = json.loads(payload)
+    correlation_id = decoded["correlation_id"]
+    assert len(correlation_id) == 32
+    assert all(char in "0123456789abcdef" for char in correlation_id)
+    assert response.headers["x-correlation-id"] == correlation_id
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
