@@ -178,6 +178,22 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
             self.end_headers()
             self.wfile.write(data)
 
+        def _send_error_json(self, status: int, code: str) -> None:
+            """Emit a stable, non-disclosing JSON error for adapter-level failures."""
+            correlation_id = uuid.uuid4().hex
+            data = json.dumps({
+                "error": code,
+                "correlation_id": correlation_id,
+            }, separators=(",", ":")).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Correlation-ID", correlation_id)
+            self.end_headers()
+            self.wfile.write(data)
+
         def _do(self) -> None:
             # Identidad publica y reto firmado; estas rutas no enrolan peers.
             route = self.path.split("?", 1)[0]
@@ -188,7 +204,16 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 if fed_node is None:
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
-                self._send_fed_json(200, fed_node.contract_for_self(sorted(fed_node.served)))
+                try:
+                    payload = fed_node.contract_for_self(sorted(fed_node.served))
+                except Exception as exc:
+                    sys.stderr.write(json.dumps({
+                        "event": "FEDERATION_HTTP_ERROR",
+                        "error_type": type(exc).__name__,
+                    }) + "\\n")
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                self._send_fed_json(200, payload)
                 return
 
             if route == "/fed/v1/publication":
@@ -230,7 +255,16 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 if fed_node is None:
                     self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
                     return
-                self._send_fed_json(200, fed_node.identity_document())
+                try:
+                    payload = fed_node.identity_document()
+                except Exception as exc:
+                    sys.stderr.write(json.dumps({
+                        "event": "FEDERATION_HTTP_ERROR",
+                        "error_type": type(exc).__name__,
+                    }) + "\\n")
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
+                self._send_fed_json(200, payload)
                 return
 
             if route == "/fed/v1/handshake":
@@ -262,7 +296,15 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     self.close_connection = True
                     self._send_fed_json(400, {"error": "INCOMPLETE_BODY"})
                     return
-                status, payload = fed_node.answer_challenge(body)
+                try:
+                    status, payload = fed_node.answer_challenge(body)
+                except Exception as exc:
+                    sys.stderr.write(json.dumps({
+                        "event": "FEDERATION_HTTP_ERROR",
+                        "error_type": type(exc).__name__,
+                    }) + "\\n")
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
                 self._send_fed_json(status, payload)
                 return
 
@@ -296,7 +338,15 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     self.close_connection = True
                     self._send_fed_json(400, {"error": "INCOMPLETE_BODY"})
                     return
-                status, payload = fed_node.handle(body)
+                try:
+                    status, payload = fed_node.handle(body)
+                except Exception as exc:
+                    sys.stderr.write(json.dumps({
+                        "event": "FEDERATION_HTTP_ERROR",
+                        "error_type": type(exc).__name__,
+                    }) + "\\n")
+                    self._send_fed_json(503, {"error": "FEDERATION_UNAVAILABLE"})
+                    return
                 self._send_fed_json(status, payload)
                 return
 
@@ -329,11 +379,8 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                         {"authorization", "content-type", "x-iao-device-proof"}
                     )
                 ):
-                    self.send_response(403)
-                    self.send_header("Content-Length", "0")
-                    self.send_header("Connection", "close")
-                    self.end_headers()
                     self.close_connection = True
+                    self._send_error_json(403, "CORS_PREFLIGHT_DENIED")
                     return
                 self.send_response(204)
                 self._cors_headers()
@@ -349,7 +396,7 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                 try:
                     data = page.read_bytes()
                 except OSError:
-                    self.send_error(503, "WEB_INTERFACE_UNAVAILABLE")
+                    self._send_error_json(503, "WEB_INTERFACE_UNAVAILABLE")
                     return
                 self.send_response(200)
                 self._cors_headers()
