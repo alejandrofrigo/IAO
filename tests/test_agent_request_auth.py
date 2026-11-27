@@ -1,6 +1,8 @@
 import json
 import sqlite3
 import time
+import threading
+import hashlib
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -17,13 +19,31 @@ def _pem(key):
 class Identity:
     def __init__(self, path):
         self.database = path
+        self.lock = threading.RLock()
+        self.primary = ec.generate_private_key(ec.SECP256R1())
+        public_pem = _pem(self.primary)
+        public_der = self.primary.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        device_id = hashlib.sha256(public_der).hexdigest()
         with sqlite3.connect(path) as db:
-            db.executescript("CREATE TABLE operator_identities(identity_id TEXT PRIMARY KEY,key_version INTEGER,status TEXT); CREATE TABLE primary_device_bindings(identity_id TEXT PRIMARY KEY,key_version INTEGER);")
+            db.executescript(
+                "CREATE TABLE operator_identities(identity_id TEXT PRIMARY KEY,key_version INTEGER,status TEXT);"
+                "CREATE TABLE primary_device_bindings(identity_id TEXT PRIMARY KEY,key_version INTEGER,device_id TEXT,device_public_key_pem TEXT);"
+            )
             db.execute("INSERT INTO operator_identities VALUES('" + "a" * 32 + "',1,'ACTIVE')")
-            db.execute("INSERT INTO primary_device_bindings VALUES('" + "a" * 32 + "',1)")
+            db.execute(
+                "INSERT INTO primary_device_bindings VALUES(?,?,?,?)",
+                ("a" * 32, 1, device_id, public_pem),
+            )
+
     def primary_device_public_key(self):
-        return "unused"
+        return _pem(self.primary)
+
     def verify_primary_device(self, identity_id, public_key_pem):
+        assert identity_id == "a" * 32
+        assert public_key_pem == _pem(self.primary)
         return True
 
 
@@ -98,3 +118,16 @@ def test_origin_rejects_non_fixed_https_origin(value):
 
 def test_origin_accepts_https_host():
     assert _origin("https://api.example.org/") == "https://api.example.org"
+
+def test_agent_request_fails_closed_after_primary_binding_version_changes(tmp_path):
+    authority, key, agent_id = _agent(tmp_path)
+    challenge = authority.issue_agent_challenge(agent_id)
+    timestamp, signature = _signed_request(authority, key, agent_id, challenge["nonce"])
+    with sqlite3.connect(authority.operator_identity.database) as db:
+        db.execute("UPDATE primary_device_bindings SET key_version=2")
+    with pytest.raises(AgentAuthorityError, match="AGENT_NOT_ACTIVE"):
+        authority.verify_agent_request(
+            agent_id=agent_id, nonce=challenge["nonce"], timestamp=timestamp,
+            signature=signature, method="GET", path="/v1/agent/status", body=b"",
+        )
+
