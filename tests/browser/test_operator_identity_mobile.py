@@ -211,15 +211,48 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 bind.click()
                 page.get_by_text("DISPOSITIVO VINCULADO", exact=False).wait_for(timeout=15000)
 
-                task_panel = page.locator("#taskPanel")
-                task_panel.wait_for(state="visible", timeout=10000)
-                page.locator("#taskQuery").fill("buscar evidencia de auditoría")
+                page.on("dialog", lambda dialog: dialog.accept())
+                grant = panel.get_by_role(
+                    "button", name="Autorizar búsqueda local de solo lectura (15 min)"
+                )
+                assert not grant.is_disabled()
+                grant.click()
+                page.get_by_text("CAPACIDAD CONCEDIDA", exact=False).wait_for(timeout=15000)
+
+                task_panel = page.locator("#iao-task-intake-panel")
+                page.wait_for_function(
+                    "() => !document.querySelector('#iao-task-submit').disabled",
+                    timeout=10000,
+                )
+                page.locator("#iao-task-query").fill("verificar evidencia de auditoría local")
                 page.get_by_role(
-                    "button", name="Encolar consulta de solo lectura"
+                    "button", name="Enviar búsqueda a la cola de IAO"
                 ).click()
-                page.get_by_text("estado: QUEUED", exact=False).wait_for(timeout=15000)
-                page.get_by_role("button", name="Cancelar tarea").click()
-                page.get_by_text("cancelación: CANCELLED", exact=False).wait_for(timeout=15000)
+                page.wait_for_function(
+                    """() => {
+                      const result = document.querySelector('#iao-task-result');
+                      return result && result.textContent.includes('"state": "QUEUED"');
+                    }""",
+                    timeout=15000,
+                )
+                queued = page.locator("#iao-task-result").inner_text()
+                assert '"capability": "knowledge.search"' in queued, queued
+                task_panel.get_by_role(
+                    "button", name="Consultar estado de la última tarea"
+                ).click()
+                page.get_by_text("Estado consultado: QUEUED.", exact=True).wait_for(timeout=15000)
+                task_panel.get_by_role("button", name="Cancelar última tarea").click()
+                page.get_by_text("Cancelación: CANCELLED. Estado: CANCELLED.", exact=True).wait_for(timeout=15000)
+
+                revoke_grant = panel.get_by_role(
+                    "button", name="Revocar autorización de búsqueda"
+                )
+                revoke_grant.click()
+                page.get_by_text("CAPACIDAD REVOCADA", exact=False).wait_for(timeout=15000)
+                page.wait_for_function(
+                    "() => document.querySelector('#iao-task-submit').disabled",
+                    timeout=10000,
+                )
                 session = page.evaluate(
                     """async () => {
                       const token = window.iaoGetSessionToken();
