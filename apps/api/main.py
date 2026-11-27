@@ -344,10 +344,14 @@ async def _federation_body(request: Request):
         return None, _federation_json(411, {"error": "CONTENT_LENGTH_REQUIRED"})
     if length > MAX_MSG:
         return None, _federation_json(413, {"error": "PAYLOAD_TOO_LARGE"})
-    body = await request.body()
-    if len(body) != length:
+    chunks = bytearray()
+    async for chunk in request.stream():
+        chunks.extend(chunk)
+        if len(chunks) > MAX_MSG:
+            return None, _federation_json(413, {"error": "PAYLOAD_TOO_LARGE"})
+    if len(chunks) != length:
         return None, _federation_json(400, {"error": "INCOMPLETE_BODY"})
-    return body, None
+    return bytes(chunks), None
 
 
 @app.api_route("/fed/v1/contract", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
