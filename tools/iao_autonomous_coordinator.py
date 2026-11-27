@@ -338,8 +338,10 @@ def run_once():
     return True
 
 def acquire_lock():
-    STATE.mkdir(parents=True, exist_ok=True)
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(STATE, 0o700)
     stream = LOCK.open("a+", encoding="utf-8")
+    os.fchmod(stream.fileno(), 0o600)
     try:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
