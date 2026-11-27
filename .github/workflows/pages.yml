@@ -21,6 +21,43 @@ jobs:
           test -f web/index.html
           mkdir -p _site
           cp -a web/. _site/
+      - name: Inject validated HTTPS API origin when configured
+        env:
+          IAO_API_BASE: ${{ vars.IAO_API_BASE }}
+        run: |
+          python - <<'PY'
+          import html
+          import os
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          base = os.environ.get("IAO_API_BASE", "").strip()
+          if not base:
+              print("IAO_API_BASE absent: published chat will remain fail-closed")
+          else:
+              try:
+                  parsed = urlsplit(base)
+                  port = parsed.port
+              except ValueError:
+                  raise SystemExit("IAO_API_BASE_INVALID")
+              if (
+                  parsed.scheme != "https" or not parsed.hostname
+                  or parsed.username or parsed.password
+                  or parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+                  or (port is not None and port != 443)
+                  or parsed.path not in {"", "/"}
+                  or parsed.query or parsed.fragment
+              ):
+                  raise SystemExit("IAO_API_BASE_INVALID")
+              index = Path("_site/index.html")
+              source = index.read_text(encoding="utf-8")
+              if 'name="iao-api-base"' in source:
+                  raise SystemExit("IAO_API_BASE_META_ALREADY_PRESENT")
+              meta = '<meta name="iao-api-base" content="' + html.escape(base, quote=True) + '">'
+              if "<head>" not in source:
+                  raise SystemExit("HTML_HEAD_MISSING")
+              index.write_text(source.replace("<head>", "<head>\\n    " + meta, 1), encoding="utf-8")
+          PY
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
