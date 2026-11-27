@@ -66,3 +66,15 @@ Commit `367b96785cd283b1781866c02fea9570330e5872`:
 - The repository-wide legacy lint report still identifies 178 pre-existing lint findings in `tools/test_nostr_bridge.py`; the dedicated production integration lint and production-gate lint both pass. This legacy lint debt is not silently treated as clean.
 - Federation evidence is a two-node local integration with separately generated Ed25519 identities, signed handshake and messages, READ_ONLY grants, replay/revocation checks and partition/recovery. A genuinely independent public node remains unverified and blocked by absence of a verified peer endpoint and trusted public transport/enrollment prerequisites.
 - Router evidence is entirely mocked. No live provider credentials, connectivity or inference have been tested. The actual operator runtime inventory under `~/.config/iao/llm-providers.json` is not available to GitHub Actions and remains unverified here.
+
+## External bootstrap expansion: Tor onion directories (2026-11-27)
+
+- Added optional `onion_feeds` discovery sources to `tools/iao_federation_autonomous.py`. Directory JSON is fetched through the existing Tor SOCKS5 transport (`fetch_onion_json`), with response-size and timeout bounds.
+- Only v3 onion HTTP endpoint shapes are accepted. Candidates are deduplicated and persisted separately in `.state/iao-onion-candidates.json`; they remain `DISCOVERED_UNVERIFIED`, with no identity verification, enrollment, inbound grants, private-data access, or remote-code execution.
+- Added `tests/test_federation_onion_discovery.py` for validation, isolated persistence, unverified state and idempotency. These tests mock Tor transport; they do not contact a real onion service.
+- IAO Production Gates run #32: **success** on Python 3.12 and 3.13; 131 deterministic tests passed per matrix job and Ruff passed.
+- IAO CI run #1617: **success** on Python 3.12 and 3.13; full suite reported 452 passed, 1 skipped on each version. Quality gate #1617, container qualification #1271 (API contract tests and build/liveness; no publication), and mobile Chromium run #660 also passed.
+- These CI runs were triggered from workflow commit `3a34d7f4c9404935973ef93d1dc9297604c590be`. A subsequent test-only change `c1905d7fc3568cda960dca467579a607d146ce27` redirects test audit output into the temporary test directory; the CI evidence above predates that final test-isolation-only commit.
+- This is a discovery/bootstrap improvement, not proof of live Tor reachability or a usable external compute node. No onion feed has been configured or contacted in production, and no external candidate has been enrolled.
+- Remaining gap: libp2p DHT peers and onion/HTTPS feed entries are still discovery records. Most arbitrary external peers do not speak IAO's federation protocol. A safe adapter layer for genuinely open, documented, read-only services is still required before IAO can use them as workers or model endpoints. Do not describe discovery as assimilation or claim an active node count.
+
