@@ -553,7 +553,7 @@ class Node:
                     or (isinstance(ts, float) and not math.isfinite(ts))
                     or not isinstance(nonce, str) or not 16 <= len(nonce) <= 128
                     or not nonce.isascii() or not all(ch.isalnum() or ch in "_-" for ch in nonce)
-                    or not isinstance(capability, str) or not 1 <= len(capability) <= 128
+                    or not isinstance(capability, str) or len(capability) > 128
                     or not isinstance(env.get("body"), dict)):
                 raise FedDenied(400, "MALFORMED")
             if env.get("to") != self.node_id:
