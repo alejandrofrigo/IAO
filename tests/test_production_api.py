@@ -29,7 +29,10 @@ def configured_client(monkeypatch, tmp_path):
 def test_liveness_does_not_require_database_or_model() -> None:
     response = TestClient(main.app).get("/health/live")
     assert response.status_code == 200
-    assert response.json() == {"status": "live"}
+    assert response.json()["status"] == "live"
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_readiness_never_claims_full_production_before_security_gates(monkeypatch, tmp_path) -> None:
