@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from omega.policy import authorize
+from omega.effect_policy import authorize_effect
 from omega.server import build_service
 from omega.env_loader import load_env_files
 from omega.config import load_settings
@@ -128,7 +129,10 @@ class TaskWorker:
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "AUTHORIZATION_REVALIDATION_FAILED"},
                 )
-            if spec.effect_class != "READ_ONLY":
+            effect_decision = authorize_effect(
+                spec.effect_class, approved_effects={"READ_ONLY"}
+            )
+            if not effect_decision.allowed:
                 return self._finish(
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "WORKER_READ_ONLY_ONLY"},
