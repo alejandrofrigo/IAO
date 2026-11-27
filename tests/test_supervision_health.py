@@ -144,8 +144,8 @@ def test_supervisor_does_not_equate_pid_with_functional_health(tmp_path, monkeyp
         supervisor,
         "read_children",
         lambda: {
-            "PADGE": {"pid": os.getpid()},
-            "GUARDIAN": {"pid": os.getpid()},
+            "PADGE": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())},
+            "GUARDIAN": {"pid": os.getpid(), "process_start_ticks": supervisor.process_start_ticks(os.getpid())},
         },
     )
     monkeypatch.setattr(
@@ -288,3 +288,20 @@ def test_supervisor_surfaces_failed_cycle_as_degraded(tmp_path, monkeypatch, cap
         supervisor.status()
         assert "PADGE: DEGRADED" in capsys.readouterr().out
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+def test_supervisor_rejects_reused_pid_before_reporting_motor_health(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(supervisor, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        supervisor, "read_children",
+        lambda: {"PADGE": {"pid": os.getpid(), "process_start_ticks": "1"}},
+    )
+    monkeypatch.setattr(
+        supervisor, "adapters",
+        lambda: {"PADGE": {"enabled": True, "command": ["python", "coordinator.py"]}},
+    )
+    monkeypatch.setattr(supervisor, "process_alive", lambda _pid: True)
+    monkeypatch.setattr(supervisor, "process_start_ticks", lambda _pid: "2")
+    supervisor.status()
+    output = capsys.readouterr().out
+    assert "PADGE: STALE_PROCESS_IDENTITY" in output
+    assert "PADGE: HEALTHY" not in output
