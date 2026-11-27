@@ -238,7 +238,7 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
                 task_panel = page.locator("#iao-task-intake-panel")
                 task_query = task_panel.locator("#iao-task-query")
                 task_submit = task_panel.get_by_role(
-                    "button", name="Enviar búsqueda a la cola local"
+                    "button", name="Enviar búsqueda a la cola de IAO"
                 )
                 page.wait_for_function(
                     "() => !document.querySelector('#iao-task-submit').disabled",
