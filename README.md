@@ -18,6 +18,8 @@ La [matriz de autenticación y autorización](docs/AUTHORIZATION_MATRIX.md) desc
 
 El [contrato de arquitectura del núcleo](docs/CORE_ARCHITECTURE_CONTRACT.md) fija las responsabilidades de los adaptadores, el servicio, el Store, la identidad, la política, las herramientas y la cola persistente.
 
+Consulta también el [contrato HTTP](docs/HTTP_API_CONTRACT.md) y la [guía operativa y criterios de salida de Fase 1](docs/PHASE_1_OPERATIONS_RUNBOOK.md).
+
 ## Status honesty
 
 Dev bearer tokens are NOT OIDC (production start is refused). SQLite is the dev backend; PostgreSQL,
