@@ -616,6 +616,28 @@ def enroll_if_consented(node, protocol, candidate, verified, item, policy):
     return {"status": "ENROLLED", "peer_id": peer_id, "capabilities": sorted(requested)}
 
 
+def _public_candidate_origin(value):
+    """Normalize an advertised IAO origin or message endpoint without widening URL scope."""
+    from urllib.parse import urlsplit
+
+    if not isinstance(value, str) or not 1 <= len(value) <= 2048:
+        return None
+    try:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.path not in ("", "/", "/fed/v1/message")
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        from omega.federation_autonomous import _origin
+        return _origin("https://" + parsed.netloc)
+    except (TypeError, ValueError):
+        return None
+
+
 def run_trusted_public_enrollment(node, items):
     """Bridge public feed candidates into the pinned-HTTPS signed autojoin path."""
     from omega.federation_autonomous import _origin, run_discovered_cycle
@@ -646,9 +668,8 @@ def run_trusted_public_enrollment(node, items):
             or any(ch not in "0123456789abcdef" for ch in peer_id)
         ):
             continue
-        try:
-            origin = _origin(item["url"])
-        except ValueError:
+        origin = _public_candidate_origin(item["url"])
+        if origin is None:
             continue
         candidate_id = hashlib.sha256(origin.encode("utf-8")).hexdigest()
         existing = candidates.get(candidate_id)
