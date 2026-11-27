@@ -90,3 +90,46 @@ This is an intentional security boundary, not a reason to widen the operator tok
 - Tests prove that device proof without a capability grant is denied, a grant for one capability cannot authorize another, and revoked/expired grants cannot queue tasks.
 
 Do not solve this gap by assigning all registry capabilities to operator sessions or by adding an agent scope such as `agent.task.claim`. The initial worker continues to claim and execute tasks locally under the existing lease fencing.
+
+
+## Concrete API contract observed during source audit
+
+The existing service already routes:
+
+- `POST /v1/tasks` to task intake;
+- `GET /v1/tasks/{uuid}` through owner-scoped Store lookup;
+- queued intake through `x-iao-device-proof`, whose signature binds method, path, timestamp, one-use nonce and SHA-256 of the exact request body;
+- the active primary-device binding to the exact authenticated bearer session;
+- the capability decision to `authorize(capability, approved_capabilities=principal.scopes ∩ registry)`;
+- queued mode to a registered `READ_ONLY` tool and `QUEUED_TOOL_ALLOWLIST`;
+- task creation to the existing Store, with idempotency, quota, expiry and policy snapshot.
+
+The worker rechecks expiry, policy version, registry membership, read-only effect class, queued allowlist, input schema, operator-session digest and primary-device binding before calling the isolated tool runner.
+
+The operator login flow explicitly returns `OPERATOR_AUTHENTICATED_READ_ONLY` with an empty scope list. Therefore, current behavior is fail-closed: a correctly signed queued request still cannot authorize a capability unless a separately authorized scope is present. Do not alter this default.
+
+### Proposed capability-grant protocol (design only; not implemented)
+
+A future grant should use a challenge/complete protocol rather than trusting a browser-supplied scope list:
+
+1. `POST /v1/operator/capability-grant/challenge` requires a valid operator session bound to the active primary device. The server supplies a short-lived, single-use nonce and a canonical payload containing protocol version, identity ID, root key version, primary-device binding version/fingerprint, exact capability, policy version, expiry and grant purpose.
+2. The browser obtains a second explicit operator confirmation for the exact capability and expiry, then asks the root identity and primary device to sign the same canonical payload under distinct domain-separation prefixes.
+3. `POST /v1/operator/capability-grant/complete` verifies both signatures against the current active keys, consumes the nonce atomically, checks capability against a server-maintained grantable allowlist and checks that the current policy still matches the signed policy version.
+4. The server persists the grant in the existing operator-authority store, not in a client cookie or task record. The grant has a random opaque ID, exact capability, identity/key versions, device binding version, issue/expiry times, policy version, status and audit digest. Never persist signatures as bearer credentials.
+5. A narrowly scoped operator session may then be minted with only the currently active grantable scopes. Session authentication must intersect token scopes with live grants on every privileged request, or use a grant-version revocation check; a stale token must not outlive a revoked grant.
+6. Root rotation, device replacement/revocation, explicit grant revocation, expiry or policy version change invalidates the grant. Revocation is atomic with the authority-store update and audited without logging signatures or secrets.
+7. The task intake handler continues to enforce its existing signed request proof, primary-device session binding, policy gate, registry allowlist, idempotency and quota. The worker continues to revalidate authority immediately before execution.
+
+The challenge endpoint must be rate-limited and return no private key or grant secret. The complete endpoint must enforce strict payload/signature lengths, canonical encoding, constant-time comparisons where applicable, one-use nonce semantics and replay tests. Guest sessions, other devices, agent identities, model outputs and public peers cannot request or approve grants.
+
+### Required grant-specific tests
+
+- Login remains empty-scope by default.
+- Missing, malformed, expired, replayed and cross-identity grant challenges are rejected.
+- Root signature without primary-device signature is rejected, and vice versa.
+- A signature for capability A cannot grant capability B.
+- A capability outside the server allowlist or not currently grantable is rejected.
+- Root key rotation, primary-device replacement, explicit revocation, expiry and policy change invalidate existing grants and stale sessions.
+- A revoked grant cannot authorize a new queued task even with an unexpired bearer token.
+- Task intake with a valid device request proof but no active capability grant is denied and never transitions to `QUEUED`.
+- A grant cannot change task budget, timeout, tool schema, effect class, or queued allowlist.
