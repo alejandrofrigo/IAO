@@ -34,8 +34,11 @@ _EXEC = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool")
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str) -> None:
+    def __init__(
+        self, status: int, code: str, allowed_methods: tuple[str, ...] = ()
+    ) -> None:
         self.status, self.code = status, code
+        self.allowed_methods = allowed_methods
 
 
 def _digest(obj: Any) -> str:
@@ -122,6 +125,8 @@ class OmegaService:
                 status, payload = self._route(normalized_method, path, headers, body)
         except ApiError as e:
             status, payload = e.status, {"error": e.code}
+            if e.allowed_methods:
+                payload["allowed_methods"] = list(e.allowed_methods)
         except Exception as exc:  # never expose internals to the caller
             from omega.identity_rollback_anchor import IdentityRollbackAnchorError
             if isinstance(exc, IdentityRollbackAnchorError):
@@ -188,6 +193,29 @@ class OmegaService:
     def _route(self, method: str, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
         u = urlsplit(path)
         p = u.path.rstrip("/") or "/"
+        exact_methods = {
+            "/health/live": ("GET",),
+            "/health/ready": ("GET",),
+            "/v1/public/session": ("POST",),
+            "/v1/me": ("GET",),
+            "/v1/conversations": ("POST",),
+            "/v1/chat": ("POST",),
+            "/v1/tasks": ("POST",),
+            "/v1/audit/events": ("GET",),
+            "/v1/device/enroll": ("POST",),
+            "/v1/device/challenge": ("POST",),
+            "/v1/device/command": ("POST",),
+        }
+        allowed_methods = exact_methods.get(p, ())
+        if not allowed_methods:
+            if re.fullmatch(r"/v1/conversations/[0-9a-f-]{36}/messages", p):
+                allowed_methods = ("GET",)
+            elif re.fullmatch(r"/v1/tasks/[0-9a-f-]{36}", p):
+                allowed_methods = ("GET",)
+            elif p == "/v1/memory" or p.startswith("/v1/memory/"):
+                allowed_methods = ("GET", "POST", "PUT", "DELETE")
+        if allowed_methods and method not in allowed_methods:
+            raise ApiError(405, "METHOD_NOT_ALLOWED", allowed_methods)
         if method == "GET" and p == "/health/live":
             return 200, {"status": "live"}
         if method == "GET" and p == "/health/ready":
