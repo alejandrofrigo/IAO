@@ -1416,6 +1416,10 @@ class OperatorIdentityAuthority:
                         or grant["policy_version"] != policy_version
                     ):
                         raise OperatorIdentityError("CAPABILITY_GRANT_NOT_ACTIVE", 404)
+                db.execute(
+                    "DELETE FROM operator_capability_challenges WHERE expires_at<=?",
+                    (now,),
+                )
                 active = db.execute(
                     """SELECT COUNT(*) FROM operator_capability_challenges
                     WHERE identity_id=? AND consumed_at IS NULL AND expires_at>?""",
