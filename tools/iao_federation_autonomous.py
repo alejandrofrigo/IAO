@@ -13,6 +13,12 @@ from omega.store import Store
 from omega.tools.registry import ToolRegistry
 from omega.federation import Node, verify_identity_challenge
 from omega.federation_transport import fetch_public_json, fetch_onion_json
+from omega.onion_discovery import (
+    discover_onion_feed as _discover_onion_feed,
+    merge_onion_candidates as _merge_onion_candidates,
+)
+from omega.p2p_assimilation import assimilate_discovered_peers
+from omega.libp2p_discovery import _state_dir as _libp2p_state_dir
 import omega.federation_protocols.native  # noqa: F401
 import omega.federation_protocols.nostr   # noqa: F401
 from omega.federation_protocols import probe_any, get as get_adapter
@@ -142,86 +148,18 @@ def _validate_onion_peer_url(value):
 
 
 def discover_onion_feed(url, timeout=15):
-    """Read a bounded Tor v3 JSON directory; returned peers remain unverified."""
-    try:
-        data = fetch_onion_json(url, timeout=timeout, max_bytes=500_000)
-    except Exception as exc:
-        audit("onion_discovery_feed_failed", error_type=type(exc).__name__)
-        return []
-    if isinstance(data, list):
-        peers = data
-    elif isinstance(data, dict):
-        peers = data.get("peers", [])
-    else:
-        return []
-    if not isinstance(peers, list):
-        return []
-    out = []
-    seen = set()
-    for peer in peers[:500]:
-        if not isinstance(peer, dict):
-            continue
-        endpoint = peer.get("url")
-        if not _validate_onion_peer_url(endpoint) or endpoint in seen:
-            continue
-        peer_id = peer.get("id")
-        if peer_id is not None and (
-            not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 128
-        ):
-            continue
-        seen.add(endpoint)
-        out.append({
-            "url": endpoint,
-            "id": peer_id,
-            "capabilities": [],
-            "source": "onion_feed",
-            "status": "DISCOVERED_UNVERIFIED",
-            "granted_capabilities": [],
-        })
-    audit("onion_discovery_feed_ok", peers=len(out))
-    return out
+    """Use the strict Tor transport module; all results remain unverified."""
+    candidates = _discover_onion_feed(url, timeout=timeout)
+    audit("onion_discovery_feed_observed", candidates=len(candidates))
+    return candidates
 
 
 def merge_onion_candidates(candidates):
-    """Persist onion endpoints separately; never treat them as trusted IAO peers."""
-    path = STATE / "iao-onion-candidates.json"
-    data = load(path, {"schema": 1, "candidates": {}})
-    entries = data.get("candidates", {})
-    if not isinstance(entries, dict):
-        entries = {}
-    now = utc()
-    added = 0
-    for candidate in candidates:
-        if (
-            not isinstance(candidate, dict)
-            or candidate.get("source") != "onion_feed"
-            or not _validate_onion_peer_url(candidate.get("url"))
-        ):
-            continue
-        endpoint = candidate["url"]
-        candidate_id = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
-        old = entries.get(candidate_id, {})
-        entries[candidate_id] = {
-            "candidate_id": candidate_id,
-            "url": endpoint,
-            "remote_id": candidate.get("id"),
-            "source": "onion_feed",
-            "status": "DISCOVERED_UNVERIFIED",
-            "identity_verified": False,
-            "enrolled": False,
-            "granted_capabilities": [],
-            "first_seen": old.get("first_seen", now),
-            "last_seen": now,
-        }
-        if not old:
-            added += 1
-    ordered = sorted(
-        entries.values(), key=lambda item: item.get("last_seen", ""), reverse=True
-    )[:1000]
-    data["schema"] = 1
-    data["candidates"] = {item["candidate_id"]: item for item in ordered}
-    save(path, data)
-    return added
+    """Persist onion candidates in a private, atomic, untrusted inventory."""
+    result = _merge_onion_candidates(candidates, state_dir=STATE)
+    audit("onion_candidate_inventory_updated", **result)
+    return result
+
 
 def _validate_local_ipfs_api(value):
     """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
@@ -297,40 +235,25 @@ def discover_dht(ipfs_api):
     return out
 
 def merge_p2p_candidates(candidates):
-    """Persist discovered libp2p addresses separately from HTTP federation nodes."""
-    path = STATE / "iao-p2p-candidates.json"
-    data = load(path, {"schema": 1, "peers": {}})
-    peers = data.get("peers", {})
-    if not isinstance(peers, dict):
-        peers = {}
-    added = 0
-    now = utc()
+    """Assimilate observed Kubo peers into a private quarantine inventory only."""
+    peers = []
     for candidate in candidates:
-        if not isinstance(candidate, dict) or candidate.get("source") != "ipfs_swarm_peer":
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("source") != "ipfs_swarm_peer"
+            or not isinstance(candidate.get("peer_id"), str)
+            or not isinstance(candidate.get("multiaddr"), str)
+        ):
             continue
-        peer_id = candidate.get("peer_id")
-        multiaddr = candidate.get("multiaddr")
-        if not isinstance(peer_id, str) or not isinstance(multiaddr, str):
-            continue
-        existing = peers.get(peer_id, {})
-        peers[peer_id] = {
-            "peer_id": peer_id,
-            "multiaddr": multiaddr,
-            "source": "ipfs_swarm_peer",
-            "status": "DISCOVERED_UNVERIFIED",
-            "granted_capabilities": [],
-            "first_seen": existing.get("first_seen", now),
-            "last_seen": now,
-        }
-        if not existing:
-            added += 1
-    # Bounded registry: preserve most recently seen entries.
-    ordered = sorted(
-        peers.values(), key=lambda item: item.get("last_seen", ""), reverse=True
-    )[:1000]
-    data["peers"] = {item["peer_id"]: item for item in ordered}
-    save(path, data)
-    return added
+        peers.append({
+            "peer_id": candidate["peer_id"],
+            "multiaddrs": [candidate["multiaddr"]],
+        })
+    result = assimilate_discovered_peers(
+        peers, state_dir=_libp2p_state_dir(),
+    )
+    audit("p2p_peer_assimilation_completed", **result)
+    return result["new"]
 
 
 def run_discovery():
@@ -712,7 +635,9 @@ def run_cycle(dry_run=False, discover=True):
         candidates = run_discovery()
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
         discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
-        discovery_summary["onion_candidates_added"] = merge_onion_candidates(candidates)
+        onion_summary = merge_onion_candidates(candidates)
+        discovery_summary["onion_candidates_added"] = onion_summary["new"]
+        discovery_summary["onion_candidates_observed"] = onion_summary["observed"]
         discovery_summary["candidates_discovered"] = len(candidates)
         try:
             from omega.libp2p_discovery import discover_sync
