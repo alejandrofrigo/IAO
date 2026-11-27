@@ -18,6 +18,7 @@ services:
       - "8080:8080"
     volumes:
       - iao_state:/var/lib/iao
+      - iao_identity_trust:/var/lib/iao/identity-trust
     read_only: true
     tmpfs:
       - /tmp
@@ -29,3 +30,4 @@ services:
 
 volumes:
   iao_state: {}
+  iao_identity_trust: {}
