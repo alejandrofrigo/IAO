@@ -148,7 +148,8 @@ class OmegaService:
             else:
                 try:
                     self.store.audit(
-                        "system", "API_INTERNAL_ERROR", path,
+                        "system", "API_INTERNAL_ERROR", "request",
+                        method=str(method).upper()[:16],
                         error_type=type(exc).__name__,
                     )
                 except Exception:
