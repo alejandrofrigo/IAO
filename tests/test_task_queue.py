@@ -175,6 +175,7 @@ class DurableTaskQueueTests(unittest.TestCase):
             "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
             "UNIQUE(owner, idem_key))"
         )
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 2")
         connection.commit()
         connection.close()
 
