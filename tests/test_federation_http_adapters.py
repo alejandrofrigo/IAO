@@ -1,15 +1,18 @@
 """Both HTTP adapters must enforce the same signed federation-message boundary."""
+import asyncio
 import json
 import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from threading import Thread
+
+from starlette.requests import Request
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from apps.api import main
-from omega.federation import Node, _sign
+from omega.federation import MAX_MSG, Node, _sign
 from omega.server import make_handler
 from tests.test_production_api import configured_client
 
@@ -381,3 +384,35 @@ def test_both_adapters_replace_invalid_federation_correlation_id(monkeypatch, tm
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=3)
+
+
+def test_fastapi_federation_body_enforces_streamed_size_limit():
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/fed/v1/message",
+        "headers": [(b"content-length", b"1")],
+        "query_string": b"",
+        "server": ("test", 80),
+        "client": ("test", 123),
+        "scheme": "http",
+        "http_version": "1.1",
+        "root_path": "",
+    }
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b"x" * (MAX_MSG + 1),
+            "more_body": False,
+        }
+
+    request = Request(scope, receive)
+    body, error = asyncio.run(main._federation_body(request))
+    assert body is None
+    assert error.status_code == 413
+    payload = json.loads(error.body.decode("utf-8"))
+    assert payload["error"] == "PAYLOAD_TOO_LARGE"
+    assert error.headers["x-correlation-id"] == payload["correlation_id"]
+    assert error.headers["cache-control"] == "no-store"
+    assert error.headers["x-content-type-options"] == "nosniff"
