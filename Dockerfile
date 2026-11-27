@@ -8,7 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8080 \
     IAO_STATE_DIR=/var/lib/iao \
     IAO_CORPUS_DIR=/app/knowledge \
-    APP_ENV=production
+    APP_ENV=production \
+    IAO_TASK_WORKER_ENABLED=true \
+    IAO_IDENTITY_ROLLBACK_DIR=/var/lib/iao/identity-trust
 
 WORKDIR /app
 
