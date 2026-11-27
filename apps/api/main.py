@@ -169,8 +169,11 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
         exc.status_code,
         {"error": code, "correlation_id": correlation_id},
     )
-    if exc.headers and exc.headers.get("Allow"):
-        response.headers["Allow"] = exc.headers["Allow"]
+    raw_allow = exc.headers.get("Allow") if exc.headers else None
+    if isinstance(raw_allow, str):
+        allowed = [item.strip() for item in raw_allow.split(",")]
+        if allowed and all(item and item.isalpha() for item in allowed):
+            response.headers["Allow"] = ", ".join(allowed)
     response.headers["X-Correlation-ID"] = correlation_id
     return response
 
