@@ -303,3 +303,16 @@ def test_health_route_wrong_method_uses_shared_405_contract():
     assert response.status_code == 405
     assert response.json()["error"] == "METHOD_NOT_ALLOWED"
     assert response.headers["allow"] == "GET"
+
+
+def test_api_rejects_transfer_encoding_with_stable_error(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/v1/chat",
+        content=b"{}",
+        headers={"Transfer-Encoding": "chunked", "Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "INVALID_TRANSFER_ENCODING"
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
