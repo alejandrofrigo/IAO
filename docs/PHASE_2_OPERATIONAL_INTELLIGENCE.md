@@ -32,7 +32,7 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 | 14 | Reintentos y recuperación | Reintentos acotados, backoff, deduplicación y recuperación sin repetir efectos no idempotentes. | PENDIENTE |
 | 15 | Evidencia y procedencia | Registrar digest de entradas/salidas, versiones de modelos/herramientas, decisiones de policy y referencias de evidencia sin datos sensibles. | PENDIENTE |
 | 16 | Observabilidad de tareas | Estados, duración, causa pública acotada, métricas sin PII y correlación de extremo a extremo. | PENDIENTE |
-| 17 | Cancelación y pausa segura | Migración aditiva v4 `cancel_requested_at`; endpoint POST de cancelación con prueba criptográfica del dispositivo primario y verificación de sesión; cancelación atómica de QUEUED y solicitud cooperativa en RUNNING/VERIFYING; worker revisa checkpoints antes/después de herramienta y no puede completar si hay cancel pendiente. No promete matar instantáneamente el proceso hijo: la cancelación activa espera al retorno/timeout acotado de la herramienta. Pruebas de ownership, CAS, carrera y API. | IMPLEMENTADO — CI pendiente |
+| 17 | Cancelación y pausa segura | Cancelación cooperativa, checkpoints seguros y tratamiento explícito de tareas cuyo efecto quedó incierto. | PENDIENTE |
 | 18 | Integración con centro de mando | Protocolo de directivas desde Chat público IAO, autenticación del dispositivo autorizado, firma, nonce, deduplicación y recibos verificables. | PENDIENTE |
 | 19 | Pruebas adversariales | Pruebas de prompt injection, herramienta maliciosa, salida no confiable, SSRF, agotamiento de recursos y escalada de capacidades. | PENDIENTE |
 | 20 | Aceptación de Fase 2 | CI, pruebas de integración, runbook, inventario de brechas y evidencia reproducible en un SHA único. | PENDIENTE |
@@ -69,4 +69,4 @@ Cada objetivo requiere: implementación en código, pruebas positivas y negativa
 | Base de trabajo | HEAD de Fase 1 d5b011cff1b620b00a468a5bad84b720fbc8fec4 |
 | Estado Fase 1 | PR #20 abierto/draft; cuatro workflows del HEAD base completados con éxito. |
 | Bloqueos heredados | Lockfile generado como artefacto CI pero aún no incorporado; objetivos 13–16 y 20 con brechas documentadas; dependencias entre PRs aún requieren reconciliación. |
-| Estado de Fase 2 | Objetivos 01–10 y 17 implementados en código; objetivo 17 incorpora cancelación autenticada del dispositivo primario y checkpoints cooperativos. La verificación CI del HEAD actual sigue pendiente; objetivos 11–16 y 18–20 permanecen pendientes. |
+| Estado de Fase 2 | Objetivos 01–10 implementados en código; incluye fencing monotónico, routing multi-LLM, contrato de proveedor, evaluación no autoritativa, comparación multi-modelo y manifiesto de herramientas. La verificación CI del HEAD actual sigue pendiente; objetivos 11–20 permanecen pendientes. |
