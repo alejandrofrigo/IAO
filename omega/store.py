@@ -14,7 +14,7 @@ from typing import Any
 from omega.audit import GENESIS_HASH, make_event, verify_chain
 from omega.control import InvalidTransition, transition
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversation(
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS message(
 CREATE TABLE IF NOT EXISTS task(
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL, intent_json TEXT NOT NULL,
   result_json TEXT, idem_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  lease_owner TEXT, lease_until TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT, lease_until TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,\n  lease_generation INTEGER NOT NULL DEFAULT 0,
   UNIQUE(owner, idem_key));
 CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner, created_at);
 CREATE TABLE IF NOT EXISTS tool_execution(
@@ -141,6 +141,22 @@ class Store:
                         (now_iso(),),
                     )
                 elif not set(additions).issubset(columns):
+                    raise RuntimeError("DATABASE_SCHEMA_MIGRATION_STATE_INVALID")
+                columns = {
+                    row["name"]
+                    for row in self.db.execute("PRAGMA table_info(task)").fetchall()
+                }
+                if version < 3:
+                    if "lease_generation" not in columns:
+                        self.db.execute(
+                            "ALTER TABLE task ADD COLUMN lease_generation "
+                            "INTEGER NOT NULL DEFAULT 0"
+                        )
+                    self.db.execute(
+                        "INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)",
+                        (now_iso(),),
+                    )
+                elif "lease_generation" not in columns:
                     raise RuntimeError("DATABASE_SCHEMA_MIGRATION_STATE_INVALID")
                 self.db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_task_queue "
