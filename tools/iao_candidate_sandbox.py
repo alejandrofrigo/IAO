@@ -190,7 +190,7 @@ def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
         "--memory=1g",
         "--cpus=2",
         "--pids-limit=128",
-        "--ulimit=nofile=64:64",
+        "--ulimit=nofile=1024:1024",
         "--ulimit=core=0:0",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges:true",
