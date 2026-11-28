@@ -182,7 +182,7 @@ def _persist_candidate(state, manifest, repository):
     requested = manifest.get("capabilities", [])
     if not isinstance(requested, list):
         requested = []
-    requested = [item[:128] for item in requested if isinstance(item, str) and item and len(item) <= 128][:32]
+    requested = [item.strip()[:128] for item in requested if isinstance(item, str) and item.strip() and len(item.strip()) <= 128][:32]
     data["candidates"][candidate_id] = {
         "candidate_id": candidate_id, "node_id": node_id,
         "origin": origin, "public_key": manifest["public_key"],
