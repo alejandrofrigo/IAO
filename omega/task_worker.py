@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from omega.policy import authorize
+from omega.operator_identity import OperatorIdentityError
 from omega.server import build_service
 from omega.env_loader import load_env_files
 from omega.config import load_settings
@@ -197,6 +198,15 @@ class TaskWorker:
                     output, verdict = self.tool_executor(
                         spec.run, spec.verify, clean, timeout
                     )
+            except OperatorIdentityError:
+                self.store.audit(
+                    owner, "TASK_WORKER_OPERATOR_AUTHORITY_DENIED", task_id,
+                    decision="FAIL_CLOSED",
+                )
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_REVOKED"},
+                )
             except ToolProcessTimeout:
                 self.store.add_tool_execution(
                     task_id, spec.name, spec.version, "TIMED_OUT",
