@@ -60,6 +60,9 @@ def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
     response = TestClient(main.app).get("/health/ready")
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
+    assert response.json()["runtime_startup"] == {
+        "status": "blocked", "reason": "PERSISTENT_KEYS_NOT_CONFIGURED",
+    }
 
 
 def test_public_session_and_conversation_use_persistent_service(monkeypatch, tmp_path) -> None:
