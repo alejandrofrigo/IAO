@@ -46,6 +46,15 @@ worker is not evidence of autonomous code promotion, external-node trust,
 production readiness, or 24/7 availability. Code evolution remains a separate
 staging workflow and cannot deploy itself or grant authority to discovered peers.
 
+### Queued-tool process limits
+
+The queued-tool process runner now treats POSIX resource-limit setup as mandatory:
+if the child cannot apply CPU, address-space, file-size, file-descriptor, and core-dump
+limits, the tool call fails closed. Regression tests inspect the effective child
+limits. This remains a process boundary only: it does not isolate filesystem,
+network namespaces, host sockets, or kernel attack surface, and must not be used
+to execute untrusted evolution candidates.
+
 
 ### Recurring autonomous maintenance
 
