@@ -45,3 +45,18 @@ Set `IAO_AUTONOMY_WORKER_ENABLED=false` to disable it explicitly. A running
 worker is not evidence of autonomous code promotion, external-node trust,
 production readiness, or 24/7 availability. Code evolution remains a separate
 staging workflow and cannot deploy itself or grant authority to discovered peers.
+
+
+### Recurring autonomous maintenance
+
+The autonomous worker schedules three bounded local task classes without a new
+operator request: `self_check` hourly, `capability_scan` every six hours, and
+`improvement_plan` daily. It deduplicates queued/running work by task kind,
+persists each next-due timestamp, and retains at most the 1,000 most recent
+terminal task records while preserving all queued/running tasks. The append-only
+event stream records scheduling and history-pruning events.
+
+These jobs are local diagnostics and planning only. They do not generate or
+execute arbitrary code, enroll remote peers, grant network permissions, deploy
+changes, or claim external connectivity. Autonomous code evolution remains
+staged and requires functional, security, and integration verification.
