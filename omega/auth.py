@@ -19,7 +19,17 @@ def _b64(b: bytes) -> str:
 
 
 def _unb64(s: str) -> str:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4)).decode("utf-8")
+    if not isinstance(s, str) or not s:
+        raise ValueError("invalid base64url")
+    decoded = base64.b64decode(
+        s + "=" * (-len(s) % 4),
+        altchars=b"-_",
+        validate=True,
+    )
+    # Accept only the exact unpadded URL-safe representation emitted by _b64.
+    if _b64(decoded) != s:
+        raise ValueError("non-canonical base64url")
+    return decoded.decode("utf-8")
 
 
 def issue_token(key: str, subject: str, scopes: list[str], ttl: int = 3600, now: float | None = None) -> str:
