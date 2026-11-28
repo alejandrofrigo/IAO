@@ -503,3 +503,41 @@ class FederationCleartextBindTests(unittest.TestCase):
                     FedServer(node, host="0.0.0.0")
             finally:
                 node.store.close()
+
+
+class FederationTLSListenerConfigurationTests(unittest.TestCase):
+    def test_tls_listener_advertises_https_and_requires_tls12(self):
+        import ssl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "tls-url", lambda: 1_000_000.0)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            server = None
+            try:
+                server = FedServer(node, ssl_context=context)
+                self.assertTrue(server.url.startswith("https://"))
+                self.assertGreaterEqual(
+                    context.minimum_version, ssl.TLSVersion.TLSv1_2
+                )
+            finally:
+                if server is not None:
+                    server.httpd.server_close()
+                node.store.close()
+
+    def test_tls_listener_rejects_context_allowing_tls10(self):
+        import ssl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "tls-old", lambda: 1_000_000.0)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.minimum_version = ssl.TLSVersion.TLSv1
+            try:
+                with self.assertRaisesRegex(
+                    ValueError, "FEDERATION_MTLS_CLIENT_CERT_REQUIRED"
+                ):
+                    FedServer(node, ssl_context=context)
+            finally:
+                node.store.close()
