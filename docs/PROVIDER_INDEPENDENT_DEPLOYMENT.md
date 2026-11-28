@@ -22,7 +22,7 @@ El backend API se construye desde el `Dockerfile` raíz (FastAPI/ASGI) y se ejec
 Requisitos mínimos del backend:
 - proceso API persistente y accesible por HTTPS desde el navegador a través de un proxy inverso TLS (Compose solo enlaza localhost);
 - volumen persistente y respaldado para `IAO_STATE_DIR` (base de datos, identidad de nodo, claves y auditoría);
-- archivo `.env` local, no versionado, con `OMEGA_DEV_TOKEN_KEY` y `AUDIT_HMAC_KEY` de al menos 32 caracteres cada una; secretos persistentes inyectados fuera del repositorio;
+- secretos persistentes inyectados fuera del repositorio. `OMEGA_DEV_TOKEN_KEY` solo sirve para desarrollo/pruebas; la API de producción no acepta ese esquema. El Compose fuerza `APP_ENV=production` y queda bloqueado hasta implementar/configurar OIDC/JWKS;
 - TLS, proxy inverso y CORS limitado al origen real de Pages;
 - monitorización, copias de seguridad y restauración probada.
 
@@ -41,7 +41,7 @@ GitHub Actions es CI efímera, no un servidor persistente. No se debe desplegar 
 
 ## Estado de producción
 
-El Compose proporciona un modo de ejecución autocontrolado y persistencia local, no una configuración de producción aprobada: el runtime aún usa autenticación de desarrollo y la readiness informa `degraded`. La existencia del Dockerfile o de un workflow verde no certifica el backend. El contrato de producción de IAO mantiene el worker bloqueado hasta satisfacer los controles de identidad, aislamiento, persistencia y validación E2E. La API actual también debe superar su propia cualificación de producción antes de exponerse públicamente.
+El Compose proporciona persistencia local y endurecimiento del contenedor, pero fuerza `APP_ENV=production`: con el código actual la API rechaza el servicio porque OIDC/JWKS todavía no está implementado. `/health/live` puede responder mientras `/health/ready` devuelve 503 y las rutas de servicio permanecen bloqueadas. No cambies el entorno a desarrollo para eludir esta barrera en un host público. La existencia del Dockerfile o de un workflow verde no certifica el backend. El contrato de producción mantiene el worker bloqueado hasta satisfacer los controles de identidad, aislamiento, persistencia y validación E2E.
 
 ## Cambio de proveedor
 
