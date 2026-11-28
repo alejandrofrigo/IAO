@@ -19,6 +19,19 @@ from urllib.parse import urlsplit
 MAX_DISCOVERY_BYTES = 1_000_000
 
 
+def _json_without_duplicate_keys(raw: bytes):
+    """Decode JSON and reject duplicate keys at every object depth."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("DUPLICATE_JSON_KEY")
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=unique_object)
+
+
 def _certificate_node_id(certificate: dict | None) -> str | None:
     if not isinstance(certificate, dict):
         return None
@@ -359,7 +372,7 @@ def _request_json(
             if len(raw) > max_bytes:
                 raise FederationTransportError("RESPONSE_TOO_LARGE")
             try:
-                decoded = json.loads(raw.decode("utf-8"))
+                decoded = _json_without_duplicate_keys(raw.decode("utf-8").encode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
             return response.status, decoded
@@ -468,7 +481,7 @@ def fetch_onion_json(
         if len(raw) > max_bytes:
             raise FederationTransportError("RESPONSE_TOO_LARGE")
         try:
-            return json.loads(raw.decode("utf-8"))
+            return _json_without_duplicate_keys(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
     except FederationTransportError:
