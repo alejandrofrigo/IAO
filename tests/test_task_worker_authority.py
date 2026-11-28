@@ -226,3 +226,52 @@ def test_worker_fails_closed_when_authority_returns_false():
     assert store.executions == []
     assert store.final_state == "FAILED"
     assert store.final_result["error"] == "WORKER_OPERATOR_AUTHORITY_REVOKED"
+
+
+def test_worker_recovers_expired_leases_while_process_remains_alive():
+    class RecoveryStore:
+        def __init__(self):
+            self.recovery_calls = 0
+            self.events = []
+
+        def recover_interrupted_tasks(self):
+            self.recovery_calls += 1
+            if self.recovery_calls == 1:
+                return [{"id": "expired-secret-task-id", "owner": "private-owner"}]
+            return []
+
+        def claim_next_task(self, *_args, **_kwargs):
+            return None
+
+        def audit(self, *args, **kwargs):
+            self.events.append((args, kwargs))
+
+    class StopAfterWait:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, _seconds):
+            self.stopped = True
+
+        def set(self):
+            self.stopped = True
+
+    store = RecoveryStore()
+    worker = TaskWorker(store, ToolRegistry(), worker_id="recovery-test-worker")
+    worker._stop = StopAfterWait()
+
+    worker.run_forever()
+
+    assert store.recovery_calls == 1
+    recovery_events = [
+        (args, kwargs) for args, kwargs in store.events
+        if args and args[1] == "TASK_WORKER_INTERRUPTED_RECOVERED"
+    ]
+    assert len(recovery_events) == 1
+    assert recovery_events[0][1]["recovered_count"] == 1
+    assert recovery_events[0][1]["decision"] == "FAIL_CLOSED"
+    assert "expired-secret-task-id" not in repr(recovery_events)
+    assert "private-owner" not in repr(recovery_events)
