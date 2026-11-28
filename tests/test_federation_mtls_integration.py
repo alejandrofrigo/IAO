@@ -40,6 +40,7 @@ def _issue_certificate(
     *,
     node_id: str | None = None,
     server: bool = False,
+    expired: bool = False,
 ) -> tuple[Path, Path]:
     subject = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, "localhost" if server else name)
@@ -61,8 +62,8 @@ def _issue_certificate(
         .issuer_name(ca_cert.subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(minutes=1))
-        .not_valid_after(now + timedelta(days=1))
+        .not_valid_before(now - timedelta(days=2) if expired else now - timedelta(minutes=1))
+        .not_valid_after(now - timedelta(days=1) if expired else now + timedelta(days=1))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
         .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
@@ -253,6 +254,73 @@ class FederationMTLSIntegrationTests(unittest.TestCase):
             )
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "TLS_NODE_ID_MISMATCH")
+
+    def test_expired_server_certificate_fails_closed(self) -> None:
+        self.server.stop()
+        expired_cert, expired_key = _issue_certificate(
+            self.root, "expired-server", rsa.generate_private_key(
+                public_exponent=65537, key_size=2048
+            ), self.ca_key, self.ca_cert, node_id=self.b.node_id,
+            server=True, expired=True,
+        )
+        context = create_federation_server_ssl_context(
+            expired_cert, expired_key, self.ca_file
+        )
+        self.server = FedServer(
+            self.b, host="127.0.0.1", ssl_context=context
+        ).start()
+        endpoint = f"https://localhost:{self.server.port}/fed/v1/message"
+        self.a.bind_peer_endpoint(self.b.node_id, endpoint)
+        with patch(
+            "omega.federation_transport.resolve_public_addresses",
+            return_value=["127.0.0.1"],
+        ):
+            result = self.a.send(
+                self.b.node_id, endpoint, "knowledge.search",
+                {"query": "expired certificate must be rejected"},
+            )
+        self.assertFalse(result["ok"])
+        self.assertTrue(result.get("error"))
+
+    def test_server_certificate_from_unknown_ca_fails_closed(self) -> None:
+        unknown_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        unknown_name = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, "Untrusted IAO test CA")
+        ])
+        now = datetime.now(timezone.utc)
+        unknown_ca = (
+            x509.CertificateBuilder()
+            .subject_name(unknown_name)
+            .issuer_name(unknown_name)
+            .public_key(unknown_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(days=2))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(unknown_key.public_key()), critical=False)
+            .add_extension(x509.KeyUsage(
+                digital_signature=True, content_commitment=False,
+                key_encipherment=False, data_encipherment=False,
+                key_agreement=False, key_cert_sign=True, crl_sign=True,
+                encipher_only=None, decipher_only=None,
+            ), critical=True)
+            .sign(unknown_key, hashes.SHA256())
+        )
+        unknown_ca_file = self.root / "unknown-ca.crt"
+        unknown_ca_file.write_bytes(unknown_ca.public_bytes(serialization.Encoding.PEM))
+        os.environ["IAO_TLS_CA_FILE"] = str(unknown_ca_file)
+        with patch(
+            "omega.federation_transport.resolve_public_addresses",
+            return_value=["127.0.0.1"],
+        ):
+            result = self.a.send(
+                self.b.node_id,
+                self.a.peers[self.b.node_id]["endpoint"],
+                "knowledge.search",
+                {"query": "unknown CA must be rejected"},
+            )
+        self.assertFalse(result["ok"])
+        self.assertTrue(result.get("error"))
 
     def test_missing_client_certificate_fails_closed(self) -> None:
         os.environ.pop("IAO_TLS_CLIENT_CERT_FILE", None)
