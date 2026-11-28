@@ -385,3 +385,21 @@ def test_post_federation_json_routes_onion_through_tor_socks(monkeypatch):
     assert calls[0] == ("init", host, 5.0, "127.0.0.1", 9050)
     assert calls[1][0:3] == ("POST", "/fed/v1/message", host)
     assert calls[-1] == ("closed",)
+
+
+
+def test_public_federation_origin_accepts_https_and_v3_onion_only():
+    onion = "http://" + "g" * 56 + ".onion"
+    assert transport.validate_public_federation_origin(
+        "https://node.example.org"
+    ) == "https://node.example.org"
+    assert transport.validate_public_federation_origin(onion) == onion
+    for origin in (
+        "http://node.example.org",
+        "http://short.onion",
+        "https://node.example.org:8443",
+        "https://user@node.example.org",
+        "https://node.example.org/path",
+    ):
+        with pytest.raises(transport.FederationTransportError):
+            transport.validate_public_federation_origin(origin)
