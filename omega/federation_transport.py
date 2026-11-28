@@ -62,6 +62,29 @@ def validate_discovery_url(url: str) -> tuple[str, str, int, str]:
     return _parse_https_url(url)
 
 
+
+def validate_public_federation_origin(origin: str) -> str:
+    """Validate an exact HTTPS or Tor v3 onion origin for publication."""
+    if not isinstance(origin, str) or not 1 <= len(origin) <= 255:
+        raise FederationTransportError("INVALID_PUBLIC_ORIGIN")
+    try:
+        parsed = urlsplit(origin)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise FederationTransportError("INVALID_PUBLIC_ORIGIN") from exc
+    if (not host or parsed.username or parsed.password or parsed.path
+            or parsed.query or parsed.fragment):
+        raise FederationTransportError("INVALID_PUBLIC_ORIGIN")
+    if parsed.scheme == "https" and port in (None, 443):
+        return origin
+    if (parsed.scheme == "http" and host.endswith(".onion")
+            and len(host) == 62
+            and all(char in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
+            and port in (None, 80)):
+        return origin
+    raise FederationTransportError("INVALID_PUBLIC_ORIGIN")
+
 def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
     """Accept public HTTPS peers or literal-loopback HTTP integration peers."""
     if not isinstance(url, str) or not 1 <= len(url) <= 2048:
