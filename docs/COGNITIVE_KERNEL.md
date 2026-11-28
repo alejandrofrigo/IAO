@@ -26,7 +26,7 @@ model = CognitiveEngine(RouterModelAdapter())
 service = OmegaService(..., model_adapter=model)
 ```
 
-The constructor defaults to two-pass planning. Set `planning_enabled=False` for a single-pass deployment or tests. No new provider, secret, paid service or deployment is activated by this module.
+The constructor defaults to two-pass planning. Set `planning_enabled=False` for a single-pass deployment or tests. The production service wrapper is wired in `omega/server.py` but remains OFF by default; enable it only with `IAO_COGNITIVE_ENGINE_ENABLED=1`. Set `IAO_COGNITIVE_PLANNING_ENABLED=false` to retain the adapter wrapper while using one model pass. No new provider, secret, paid service or deployment is activated by this module.
 
 ## Limits and next gates
 
