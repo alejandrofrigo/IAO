@@ -394,7 +394,12 @@ class Node:
             if publication.get("version") != 1:
                 return False
             pub = bytes.fromhex(publication["public_key"])
-            if len(pub) != 32:
+            peer_id = publication.get("node_id")
+            if (len(pub) != 32
+                    or not isinstance(peer_id, str)
+                    or len(peer_id) != 16
+                    or any(ch not in "0123456789abcdef" for ch in peer_id)
+                    or node_id_of(pub) != peer_id):
                 return False
             sig = base64.b64decode(publication["sig"], validate=True)
             body = {k: v for k, v in publication.items() if k != "sig"}
