@@ -39,25 +39,25 @@ La presencia de un módulo, un PID, un workflow en verde o un artefacto históri
 | 14 | Privacidad operacional | Minimizar datos, redactar logs, evitar identificadores del operador en artefactos y aplicar no-store donde corresponda. | EN CURSO |
 | 15 | Supervisión funcional | TaskWorker API y motor NODE_NETWORK publican heartbeats atómicos ligados a PID/starttime; el supervisor valida freshness/identidad del proceso, distingue HEALTHY/CYCLE_IN_PROGRESS/DEGRADED/STALE y no confunde PID con salud. PADGE conserva heartbeat+lock; Guardian y DISTRIBUTED_INTELLIGENCE siguen pendientes. | EN CURSO |
 | 16 | Manejo uniforme de errores | Errores internos tipados, códigos públicos estables, no filtración de excepciones ni secretos. | EN CURSO |
-| 17 | Empaquetado reproducible | Dependencias fijadas, instalación limpia y build reproducible en versiones Python soportadas. | PENDIENTE |
-| 18 | Contrato de contenedor | Imagen construible, usuario/permisos adecuados, healthcheck y configuración explícita; sin secretos en capas. | IMPLEMENTADO |
+| 17 | Empaquetado reproducible | Dependencias fijadas, instalación limpia y build reproducible en versiones Python soportadas. | VERIFICADO — `uv.lock` y locked install en Python 3.12/3.13 |
+| 18 | Contrato de contenedor | Imagen construible, usuario/permisos adecuados, healthcheck y configuración explícita; sin secretos en capas. | VERIFICADO — build, liveness y sandbox en ambas imágenes |
 | 19 | Puertas de calidad y regresión | CI ejecuta compilación, tests, lint, contratos y gates críticos en Python soportado; fallos bloquean integración. | EN CURSO |
 | 20 | Cierre de fase y guía operativa | Informe de evidencia por objetivo, brechas restantes, procedimiento de recuperación y criterios para iniciar Fase 2. | EN CURSO |
 
 ## Resumen consolidado de los 20 objetivos
 
-Corte documental del HEAD inspeccionado: `9582a9570704277a11ab5dadbb15732322f055f5`. Los estados describen el grado de implementación, no la aceptación final.
+Corte documental del HEAD inspeccionado: `107dd7bec53c12784be91b6c41542accca472d61`. Los estados describen el grado de implementación, no la aceptación final.
 
 | Estado | Cantidad | Objetivos |
 |---|---:|---|
-| IMPLEMENTADO (pendiente de evidencia de aceptación) | 12 | 02–12 y 18 |
+| IMPLEMENTADO (pendiente de evidencia de aceptación) | 11 | 02–12 |
 | EN CURSO | 7 | 01, 13, 14, 15, 16, 19 y 20 |
-| PENDIENTE | 1 | 17 |
-| VERIFICADO | 0 | Ninguno todavía |
+| PENDIENTE | 0 | Ninguno |
+| VERIFICADO | 2 | 17 y 18 |
 
-**Resultado global:** 0/20 objetivos verificados; 12/20 tienen implementación documentada, 7/20 siguen en curso y 1/20 está pendiente. Por tanto, la Fase 1 permanece **EN CURSO**. No se inicia formalmente la Fase 2 hasta que cada objetivo tenga evidencia aceptada en el HEAD final, CI completo y las dependencias entre PRs resueltas explícitamente.
+**Resultado global:** 2/20 objetivos verificados; 11/20 tienen implementación documentada, 7/20 siguen en curso y 0/20 están pendientes. Por tanto, la Fase 1 permanece **EN CURSO**. No se inicia formalmente la Fase 2 hasta que cada objetivo tenga evidencia aceptada en el HEAD final, CI completo y las dependencias entre PRs resueltas explícitamente.
 
-Los objetivos 02–12 y 18 no se elevan a VERIFICADO por su sola implementación. Los objetivos 01 y 13–16 requieren completar sus brechas de inventario, autorización, privacidad, supervisión y contratos de error. El 17 requiere un `uv.lock` revisado e incorporado y una instalación bloqueada reproducible. El 19 requiere que todas las puertas pasen sobre el mismo SHA final. El 20 requiere reconciliar la evidencia, ejecutar el runbook y aprobar el cierre sin afirmar despliegue o capacidades externas no probadas.
+Los objetivos 02–12 no se elevan a VERIFICADO por su sola implementación. Los objetivos 01 y 13–16 requieren completar sus brechas de inventario, autorización, privacidad, supervisión y contratos de error. El 17 queda VERIFICADO: `uv.lock` está incorporado y la instalación bloqueada pasó en Python 3.12 y 3.13 sobre el HEAD `107dd7b`. El 19 sigue EN CURSO: CI, Quality Gate, API contract y Mobile Chromium pasaron sobre `107dd7b`, pero el informe Ruff de todo el repositorio conserva 147 incidencias heredadas no bloqueantes; no se declara lint global limpio. El 20 requiere reconciliar la evidencia, ejecutar el runbook y aprobar el cierre sin afirmar despliegue o capacidades externas no probadas.
 
 ## Inventario inicial conocido — no equivale a verificación actual
 
@@ -66,8 +66,8 @@ Los objetivos 02–12 y 18 no se elevan a VERIFICADO por su sola implementación
 - `omega/store.py` implementa SQLite para el piloto. La dependencia psycopg en `pyproject.toml` no demuestra un Store PostgreSQL funcional.
 - El README declara que la autenticación de desarrollo no es OIDC y que SQLite es el backend de desarrollo; también advierte que FastAPI, Docker e infraestructura externa no se ejecutan en el entorno offline de validación.
 - PR #16 contiene el lifecycle opt-in del TaskWorker; PR #19 aporta diagnósticos de readiness apilados sobre #16. PR #17 contiene gates de producción; PR #18 agrega IPFS read-only. Son líneas independientes y no están incorporadas automáticamente en esta rama.
-- PR #20 (esta hoja de ruta) se basa en `iao-production-gates-20261127T0856Z`; la rama estaba 2 commits por delante y 0 por detrás de esa base antes de la ejecución técnica de esta continuación.
-- El informe `docs/IAO_OBJECTIVES_GAP_ANALYSIS.md` tiene un corte estático anterior y no sustituye una inspección de la revisión actual.
+- PR #20 (esta hoja de ruta) se basa en `iao-production-gates-20261127T0856Z`; comparación actual: 566 commits por delante y 0 por detrás, con base `0920643d05833a2a761f9168ae1e89ed9944fcc7` y HEAD `107dd7bec53c12784be91b6c41542accca472d61`.
+- El informe `docs/IAO_OBJECTIVES_GAP_ANALYSIS.md` tiene un corte estático anterior y no sustituye una inspección de la revisión actual. La auditoría de proveedores y modelos vigente está en `docs/IAO_PROVIDER_INVENTORY_AUDIT_20261128.md`.
 - No se afirma que exista un runtime persistente mundial ni que los workers estén activos en producción.
 
 ## Secuencia de ejecución
@@ -84,7 +84,7 @@ Los objetivos 02–12 y 18 no se elevan a VERIFICADO por su sola implementación
 
 | Objetivo | Evidencia | Resultado / brecha |
 |---:|---|---|
-| 01 | Rama `phase-1-core-foundation-20261127`: 359 commits ahead / 0 behind de `iao-production-gates-20261127T0856Z`. Inventario detallado en `docs/PHASE_1_INVENTORY_AUDIT_20261127.md`; incluye límites de los dos adaptadores, SQLite local/piloto, fuentes de verdad y relaciones PR. Inventario de entrypoints, servicio, Store, auditoría, workers y PRs apilados: PR #16 (`feat/api-task-worker-lifecycle-v1-20261127`) diverge de la base (132 ahead / 40 behind); PR #19 (`feat/task-worker-readiness-diagnostics-v1-20261127`) está apilada sobre #16 (4 ahead / 0 behind); PR #18 (IPFS) es independiente (8 ahead / 0 behind). PR #17 proporciona la base `iao-production-gates`. | Dependencias identificadas; no se fusionaron ni cherry-pickearon ramas divergentes. Falta decidir integración explícita de #16/#19 y comprobar CI exacto de la rama actual. |
+| 01 | Rama `phase-1-core-foundation-20261127`: 566 commits ahead / 0 behind de `iao-production-gates-20261127T0856Z` en la comparación del HEAD `107dd7b`. Inventario detallado en `docs/PHASE_1_INVENTORY_AUDIT_20261127.md`; incluye límites de los dos adaptadores, SQLite local/piloto, fuentes de verdad y relaciones PR. Inventario de entrypoints, servicio, Store, auditoría, workers y PRs apilados: PR #16 (`feat/api-task-worker-lifecycle-v1-20261127`) diverge de la base (132 ahead / 40 behind); PR #19 (`feat/task-worker-readiness-diagnostics-v1-20261127`) está apilada sobre #16 (4 ahead / 0 behind); PR #18 (IPFS) es independiente (8 ahead / 0 behind). PR #17 proporciona la base `iao-production-gates`. | Dependencias identificadas; no se fusionaron ni cherry-pickearon ramas divergentes. Falta decidir integración explícita de #16/#19 y comprobar CI exacto de la rama actual. |
 | 02 | `docs/CORE_ARCHITECTURE_CONTRACT.md`, enlazado desde README. | Límites y fuentes de verdad documentados; falta prueba de integración de ambos adaptadores. |
 | 03 | `omega/config.py` y `tests/test_config.py`; validación de APP_ENV, PORT, HOST, adaptador y URL pública; casos inválidos y representación sin datos de configuración. | Implementado; pendiente CI Python 3.12/3.13 y verificación del contrato en los entrypoints. |
 | 04 | `validate_persistent_keys` en `omega/config.py`; FastAPI `_get_service` y `omega.server.build_service` validan claves de 32+ caracteres, formato y no reutilización. El entrypoint stdlib carga la clave de auditoría persistente desde `AUDIT_HMAC_KEY` o el archivo local existente; no genera una clave alternativa. `tests/test_config.py` y `tests/test_server_persistent_keys.py` cubren reglas y rechazo antes de crear Store. | Aplicado a ambos entrypoints. Estado IMPLEMENTADO; pendiente ejecución CI y pruebas integrales de arranque con almacenamiento real antes de VERIFICADO. |
@@ -147,3 +147,43 @@ Corte: HEAD de la rama `phase-1-core-foundation-20261127` posterior a los cambio
 Los cambios de esta continuación afectan a `omega/operational_log.py`, `tests/test_operational_log_privacy.py`, `tools/iao_five_motor_supervisor.py`, `tests/test_supervision_health.py`, `omega/supervision.py`, `apps/api/main.py`, `omega/task_worker.py`, `tests/test_api_readiness_diagnostics.py`, `tests/test_service.py`, `tools/iao_node_network_engine.py`, `tools/iao_federation_worker.py`, `tests/test_node_network_privacy.py` y `tests/test_federation_worker_privacy.py`.
 
 En el último SHA consultado, los checks Python 3.12/3.13, instalación bloqueada, contrato API, Mobile Chromium, Docker y quality gate estaban **QUEUED**. No se declara ningún test nuevo aprobado. No fusionar ni desplegar hasta que los checks terminen y se revisen sus logs.
+
+
+## Actualización de ejecución y evidencia — 2026-11-28
+
+**HEAD validado:** `107dd7bec53c12784be91b6c41542accca472d61`  
+**Base:** `0920643d05833a2a761f9168ae1e89ed9944fcc7`  
+**Comparación:** 566 commits ahead / 0 behind. PR #20 continúa abierto en modo draft; no se fusionó ni se desplegó.
+
+### Cambios de esta ejecución
+
+- Se reforzó `omega/llm_router.py` para distinguir proveedor declarado, credencial resuelta y conectividad demostrada por una llamada real exitosa. La configuración por sí sola permanece como `unverified`.
+- Se eliminaron del ciclo de auto-enrollment las llamadas a una clase `CandidateRegistry` inexistente/incompatible que se ocultaban mediante `except Exception`; el inventario durable existente sigue siendo la fuente de observaciones.
+- Se corrigieron pruebas obsoletas de readiness, asimilación libp2p y registro onion para verificar los contratos actuales: observaciones no equivalen a enrolamiento ni a concesión de capacidades.
+- Se corrigió el fixture de navegador móvil para usar el mecanismo real de configuración HTTPS/API y el contrato fail-closed.
+- Se ajustó `deploy/Dockerfile`: estado, HOME y ancla de rollback de identidad viven en el volumen; ambos adaptadores comparten rutas de estado/corpus; ejecución como UID no privilegiado.
+- Se corrigió el workflow Docker para usar el UID numérico de la imagen de despliegue y para generar claves sintéticas de cualificación dentro del shell, sin escribirlas en `GITHUB_ENV` ni publicarlas en el resumen de entorno.
+
+### Evidencia CI sobre el HEAD indicado
+
+| Workflow | Run | Resultado |
+|---|---:|---|
+| IAO CI — Python 3.12 | 46148045882 | SUCCESS — 663 passed, 1 skipped |
+| IAO CI — Python 3.13 | 46148045882 | SUCCESS — 663 passed, 1 skipped |
+| Quality Gate | 46148045867 | SUCCESS |
+| Mobile Chromium | 46148045881 | SUCCESS |
+| Container qualification | 46148045834 | SUCCESS — API contract, build, liveness y sandbox OS en las dos imágenes; no se publicó imagen |
+
+El lint de integración enfocado pasó. El reporte no bloqueante de Ruff a todo el repositorio sigue mostrando 147 incidencias heredadas; se conserva como deuda explícita.
+
+### Estado actualizado de aceptación
+
+- **17 VERIFICADO:** instalación bloqueada con `uv.lock` completada en Python 3.12 y 3.13.
+- **18 VERIFICADO:** ambas imágenes se construyeron; liveness, corpus y sandbox OS pasaron; no hubo publicación.
+- **19 EN CURSO:** las puertas principales pasan en el HEAD actual, pero queda deuda de lint global y reconciliación final de gates.
+- **01 EN CURSO:** refs y comparación actuales reconciliados; faltan cerrar dependencias de PRs apiladas y el inventario de proveedores externos.
+- **Federación/P2P:** el workflow Tor+Kubo permanece en ejecución; no se afirma un nodo IAO externo independiente ni enrolado.
+
+### Riesgo y siguiente cambio prioritario
+
+La auditoría de proveedores confirma que el router OpenAI-compatible dinámico todavía realiza POST mediante `urllib.request.urlopen`, que sigue redirects y no usa el egress fijado por DNS/allowlist. Antes de habilitar proveedores configurados, el siguiente cambio debe integrar ese router con transporte HTTPS de egress seguro, sin redirects, con DNS/IP pública fijada, límites y pruebas mock. No se añadieron proveedores ni se probaron credenciales reales.
