@@ -36,21 +36,41 @@ jobs:
       - name: Build API container (no publication)
         run: docker build --pull --tag iao-api:qualification .
 
-      - name: Verify container starts and serves liveness
+      - name: Verify runtime, corpus and resource-limited tool process boundary
+        shell: bash
         run: |
+          set -euo pipefail
           docker run --detach --rm --name iao-api-qualification \
             --publish 127.0.0.1:18080:8080 iao-api:qualification
-          trap 'docker stop iao-api-qualification >/dev/null 2>&1 || true' EXIT
+          cleanup() {
+            docker stop iao-api-qualification >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          ready=0
           for attempt in $(seq 1 20); do
-            if curl --fail --silent http://127.0.0.1:18080/health/live; then
+            if curl --fail --silent http://127.0.0.1:18080/health/live >/dev/null; then
+              ready=1
               break
             fi
             sleep 2
           done
+          test "$ready" = 1
           curl --fail --silent http://127.0.0.1:18080/health/live
           docker exec iao-api-qualification python -c "from pathlib import Path; p=Path('/app/knowledge'); files=sorted(p.glob('*.txt')); assert len(files) >= 1, 'production knowledge corpus missing'; assert (p/'omega-overview.txt').is_file(), 'required corpus document missing'; print('knowledge_corpus_files=' + str(len(files)))"
-          docker logs iao-api-qualification
+          docker exec iao-api-qualification sh -c 'cat > /tmp/iao-process-boundary-check.py <<'"'PY'
+          from omega.tools.knowledge_search import KnowledgeCorpus
+          from omega.tools.process_runner import run_tool_isolated
 
-      - name: Verify production OS sandbox inside the built image
-        run: |
-          docker exec iao-api-qualification env APP_ENV=production IAO_TOOL_SANDBOX_MODE=bubblewrap python -c "from omega.tools.knowledge_search import KnowledgeCorpus; from omega.tools.process_runner import run_tool_isolated; corpus=KnowledgeCorpus('/app/knowledge'); payload=corpus.validate_input({'query':'IAO','limit':1}); output, verdict=run_tool_isolated(corpus.run, corpus.verify, payload, 5); assert verdict == 'PASS'; assert output.get('tool') == 'knowledge.search'; print('production_os_sandbox=PASS')"
+          def main():
+              corpus = KnowledgeCorpus("/app/knowledge")
+              payload = corpus.validate_input({"query": "IAO", "limit": 1})
+              output, verdict = run_tool_isolated(corpus.run, corpus.verify, payload, 5)
+              assert verdict == "PASS", verdict
+              assert output.get("tool") == "knowledge.search"
+              print("resource_limited_tool_process=PASS")
+
+          if __name__ == "__main__":
+              main()
+          PY'
+          docker exec iao-api-qualification python /tmp/iao-process-boundary-check.py
+          docker logs iao-api-qualification
