@@ -701,6 +701,8 @@ class Node:
                 "LOOPBACK_RESOLUTION_FAILED",
             }:
                 return {"ok": False, "error": "PEER_UNREACHABLE"}
+            if exc.code == "TLS_HANDSHAKE_FAILED":
+                return {"ok": False, "error": "TLS_HANDSHAKE_FAILED"}
             return {"ok": False, "error": "TRANSPORT_BLOCKED"}
 
         if status != 200:
