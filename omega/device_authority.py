@@ -29,6 +29,20 @@ MAX_ACTIVE_CHALLENGES_PER_DEVICE = 5
 CHALLENGE_TTL_SECONDS = 60
 
 
+def _decode_canonical_signature(value: str) -> bytes:
+    """Decode one canonical unpadded Base64URL ECDSA signature."""
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{80,160}", value):
+        raise DeviceAuthorityError("INVALID_SIGNATURE", 401)
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (ValueError, TypeError):
+        raise DeviceAuthorityError("INVALID_SIGNATURE", 401) from None
+    canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
+    if not decoded or not hmac.compare_digest(canonical, value):
+        raise DeviceAuthorityError("INVALID_SIGNATURE", 401)
+    return decoded
+
+
 class DeviceAuthorityError(RuntimeError):
     def __init__(self, code: str, status: int = 400) -> None:
         super().__init__(code)
@@ -636,12 +650,7 @@ class DeviceAuthority:
         now = time.time()
         if abs(now - timestamp) > 60:
             raise DeviceAuthorityError("DEVICE_TIMESTAMP_EXPIRED", 401)
-        try:
-            raw_signature = base64.urlsafe_b64decode(
-                signature + "=" * (-len(signature) % 4)
-            )
-        except (ValueError, TypeError):
-            raise DeviceAuthorityError("INVALID_SIGNATURE", 401) from None
+        raw_signature = _decode_canonical_signature(signature)
 
         signed_text = "\n".join(
             [method, path, str(timestamp), nonce, request_digest]
@@ -714,12 +723,7 @@ class DeviceAuthority:
         now = time.time()
         if abs(now - timestamp) > 60:
             raise DeviceAuthorityError("DEVICE_TIMESTAMP_EXPIRED", 401)
-        try:
-            raw_signature = base64.urlsafe_b64decode(
-                signature + "=" * (-len(signature) % 4)
-            )
-        except (ValueError, TypeError):
-            raise DeviceAuthorityError("INVALID_SIGNATURE", 401) from None
+        raw_signature = _decode_canonical_signature(signature)
 
         canonical = json.dumps(
             {"action": action}, separators=(",", ":"), ensure_ascii=False
@@ -754,7 +758,9 @@ class DeviceAuthority:
                 public_key = serialization.load_pem_public_key(
                     row["public_key_pem"].encode("ascii")
                 )
-                if not isinstance(public_key, ec.EllipticCurvePublicKey):
+                if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(
+                    public_key.curve, ec.SECP256R1
+                ):
                     raise ValueError("wrong key type")
                 public_key.verify(
                     raw_signature,
