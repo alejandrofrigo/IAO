@@ -136,9 +136,13 @@ class TaskWorker:
                     {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_UNAVAILABLE"},
                 )
             try:
-                self.operator_identity_authority.verify_primary_device_for_session_digest(
-                    owner, session_digest, device_id,
+                authority_valid = (
+                    self.operator_identity_authority.verify_primary_device_for_session_digest(
+                        owner, session_digest, device_id,
+                    )
                 )
+                if authority_valid is not True:
+                    raise RuntimeError("OPERATOR_DEVICE_AUTHORITY_NOT_CONFIRMED")
             except Exception:
                 self.store.audit(
                     owner, "TASK_WORKER_OPERATOR_AUTHORITY_DENIED", task_id,
