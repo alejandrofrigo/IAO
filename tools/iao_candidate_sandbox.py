@@ -122,25 +122,39 @@ def _parse_summary(output: str) -> dict[str, int] | None:
     return totals
 
 
+def _valid_summary(value: Any) -> bool:
+    required = {"passed", "failed", "errors", "skipped", "xfailed", "xpassed"}
+    return (
+        isinstance(value, dict)
+        and required.issubset(value)
+        and all(
+            isinstance(value[key], int) and not isinstance(value[key], bool) and value[key] >= 0
+            for key in required
+        )
+    )
+
+
 def _compare_results(
     baseline_result: dict[str, Any], candidate_result: dict[str, Any]
 ) -> dict[str, bool]:
     """Require complete successful runs and no regression in every non-pass outcome."""
     baseline = baseline_result.get("summary")
     candidate = candidate_result.get("summary")
+    baseline_valid = _valid_summary(baseline)
+    candidate_valid = _valid_summary(candidate)
     baseline_ok = (
         baseline_result.get("returncode") == 0
-        and isinstance(baseline, dict)
-        and baseline.get("failed") == 0
-        and baseline.get("errors") == 0
+        and baseline_valid
+        and baseline["failed"] == 0
+        and baseline["errors"] == 0
     )
     candidate_ok = (
         candidate_result.get("returncode") == 0
-        and isinstance(candidate, dict)
-        and candidate.get("failed") == 0
-        and candidate.get("errors") == 0
+        and candidate_valid
+        and candidate["failed"] == 0
+        and candidate["errors"] == 0
     )
-    comparable = isinstance(baseline, dict) and isinstance(candidate, dict)
+    comparable = baseline_valid and candidate_valid
     no_regression = bool(
         comparable
         and candidate["passed"] >= baseline["passed"]
