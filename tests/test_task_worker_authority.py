@@ -315,7 +315,7 @@ def test_worker_rejects_invalid_lease_configuration(lease_seconds):
         TaskWorker(_ClaimedTaskStore({}), ToolRegistry(), lease_seconds=lease_seconds)
 
 
-@pytest.mark.parametrize("poll_seconds", [True, 0, -1, float("inf"), float("nan"), "1"])
+@pytest.mark.parametrize("poll_seconds", [True, 0, -1, float("inf"), float("nan"), 10**400, "1"])
 def test_worker_rejects_invalid_poll_configuration(poll_seconds):
     with pytest.raises(ValueError, match="INVALID_WORKER_POLL_SECONDS"):
         TaskWorker(_ClaimedTaskStore({}), ToolRegistry(), poll_seconds=poll_seconds)
