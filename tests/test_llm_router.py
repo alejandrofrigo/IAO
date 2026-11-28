@@ -118,4 +118,17 @@ def test_provider_status_exposes_no_key_material(monkeypatch):
 
     assert result["configured"] == 1
     assert result["providers"][0]["id"] == "alpha"
+    assert result["providers"][0]["declared"] is True
+    assert result["providers"][0]["credential_present"] is True
+    assert result["providers"][0]["connectivity"] == "unverified"
     assert secret not in json.dumps(result)
+
+
+
+def test_status_marks_successful_provider_connectivity_without_claiming_probe(monkeypatch):
+    monkeypatch.setenv("ALPHA_API_KEY", "synthetic-secret")
+    monkeypatch.setattr(router, "providers", lambda: [provider("alpha")])
+    monkeypatch.setattr(router, "health", lambda: {"alpha": {"last_success": 1700000000, "failures": 0}})
+    result = router.status()
+    assert result["providers"][0]["credential_present"] is True
+    assert result["providers"][0]["connectivity"] == "confirmed"
