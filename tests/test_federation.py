@@ -541,3 +541,32 @@ class FederationTLSListenerConfigurationTests(unittest.TestCase):
                     FedServer(node, ssl_context=context)
             finally:
                 node.store.close()
+
+
+class FederationServerTLSContextFactoryTests(unittest.TestCase):
+    def test_server_context_factory_refuses_missing_files(self):
+        from omega.federation import create_federation_server_ssl_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, "FEDERATION_TLS_FILE_REFUSED"):
+                create_federation_server_ssl_context(
+                    root / "server.crt", root / "server.key", root / "client-ca.crt"
+                )
+
+    def test_server_context_factory_refuses_world_readable_private_key(self):
+        from omega.federation import create_federation_server_ssl_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cert = root / "server.crt"
+            key = root / "server.key"
+            ca = root / "client-ca.crt"
+            cert.write_text("not-a-certificate")
+            key.write_text("not-a-private-key")
+            ca.write_text("not-a-ca")
+            key.chmod(0o644)
+            with self.assertRaisesRegex(
+                ValueError, "FEDERATION_TLS_PRIVATE_KEY_PERMISSIONS_TOO_OPEN"
+            ):
+                create_federation_server_ssl_context(cert, key, ca)
