@@ -116,6 +116,19 @@ def _verify(pub_raw: bytes, env: dict[str, Any]) -> bool:
         return False
 
 
+def _json_without_duplicate_keys(raw: bytes) -> Any:
+    """Decode JSON while rejecting duplicate keys at every object depth."""
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("DUPLICATE_JSON_KEY")
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=unique_object)
+
+
 def verify_identity_challenge(
     identity: dict[str, Any],
     response: dict[str, Any],
@@ -415,7 +428,7 @@ class Node:
         if not isinstance(raw, bytes) or len(raw) > MAX_MSG:
             return 413, {"error": "PAYLOAD_TOO_LARGE"}
         try:
-            request = json.loads(raw)
+            request = _json_without_duplicate_keys(raw)
         except (ValueError, UnicodeDecodeError):
             return 400, {"error": "INVALID_CHALLENGE"}
         if not isinstance(request, dict):
@@ -556,7 +569,7 @@ class Node:
             if len(raw) > MAX_MSG:
                 raise FedDenied(413, "PAYLOAD_TOO_LARGE")
             try:
-                env = json.loads(raw)
+                env = _json_without_duplicate_keys(raw)
             except (ValueError, UnicodeDecodeError):
                 raise FedDenied(400, "MALFORMED") from None
             if not isinstance(env, dict):
