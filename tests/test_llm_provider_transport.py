@@ -53,6 +53,45 @@ def setup_transport(monkeypatch, response):
     monkeypatch.setattr(transport, "_SConn", FakeConnection)
 
 
+def _dns_result(*addresses):
+    return [
+        (2, 1, 6, "", (address, 443))
+        for address in addresses
+    ]
+
+
+def test_real_egress_resolver_rejects_loopback_and_private_dns(monkeypatch):
+    from omega.egress import EgressDenied, EgressPolicy
+
+    policy = EgressPolicy(
+        allow_hosts=frozenset({"gateway.example"}),
+        resolver=lambda host, port, type: _dns_result("127.0.0.1"),
+    )
+    with pytest.raises(EgressDenied, match="PRIVATE_ADDRESS"):
+        transport._resolve("gateway.example", 443, policy)
+
+
+def test_real_egress_resolver_rejects_mixed_public_and_private_dns(monkeypatch):
+    from omega.egress import EgressDenied, EgressPolicy
+
+    policy = EgressPolicy(
+        allow_hosts=frozenset({"gateway.example"}),
+        resolver=lambda host, port, type: _dns_result("93.184.216.34", "10.0.0.8"),
+    )
+    with pytest.raises(EgressDenied, match="PRIVATE_ADDRESS"):
+        transport._resolve("gateway.example", 443, policy)
+
+
+def test_real_egress_resolver_accepts_public_dns_and_pins_one_ip():
+    from omega.egress import EgressPolicy
+
+    policy = EgressPolicy(
+        allow_hosts=frozenset({"gateway.example"}),
+        resolver=lambda host, port, type: _dns_result("93.184.216.34"),
+    )
+    assert transport._resolve("gateway.example", 443, policy) == "93.184.216.34"
+
+
 def test_post_json_uses_pinned_https_and_posts_payload(monkeypatch):
     body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
     setup_transport(monkeypatch, FakeResponse(body))
