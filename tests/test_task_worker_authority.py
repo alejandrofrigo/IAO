@@ -417,3 +417,25 @@ def test_tool_completion_and_task_success_commit_in_one_transaction(tmp_path):
     assert final["lease_owner"] is None
     assert final["lease_until"] is None
     store.close()
+
+
+def test_tool_completion_does_not_create_execution_for_missing_task(tmp_path):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-missing-task.db", b"worker-test-audit-key-0123456789")
+    task_id = "removed-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    with store.lock:
+        store.db.execute("DELETE FROM task WHERE id=?", (task_id,))
+
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "SUCCEEDED",
+        {"decision": "ALLOW", "verification": "PASS", "result": {}},
+        "knowledge.search", "1", "a" * 64, "b" * 64,
+        datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+    )
+    assert committed is False
+    assert store.tool_executions(task_id) == []
+    store.close()
