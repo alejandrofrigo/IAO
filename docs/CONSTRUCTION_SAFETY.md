@@ -29,3 +29,19 @@ External build/deployment systems are not the source of truth for IAO's source i
 ## Current release posture
 
 The construction branch and PR remain isolated from `main`. Production deployment and PR merge remain disabled until the security gates, persistent runtime, recovery procedure, and independent end-to-end checks are demonstrated. Any component that has not passed those checks remains explicitly restricted.
+
+
+## Persistent autonomous task worker
+
+The production API starts the existing `omega.autonomous_core.AutonomousCore`
+worker during application lifespan after the persistent authentication and audit
+keys have passed the runtime gate. The worker stores its queue under
+`IAO_STATE_DIR/autonomous-core`, recovers tasks left in `RUNNING` after a
+process interruption, and resumes only the existing deterministic read-only
+task allowlist. Its polling interval is controlled by
+`IAO_AUTONOMY_INTERVAL_SECONDS` (10–3600 seconds; default 30).
+
+Set `IAO_AUTONOMY_WORKER_ENABLED=false` to disable it explicitly. A running
+worker is not evidence of autonomous code promotion, external-node trust,
+production readiness, or 24/7 availability. Code evolution remains a separate
+staging workflow and cannot deploy itself or grant authority to discovered peers.
