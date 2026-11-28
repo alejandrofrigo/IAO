@@ -45,7 +45,7 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert body["status"] == "degraded"
     assert body["production_gates"]["device_identity_verification"] == "integrated_read_only"
     assert body["production_gates"]["privileged_device_commands"] == "disabled"
-    assert body["production_gates"]["identity_provider"] == "dev_hmac_not_oidc"
+    assert body["production_gates"]["identity_provider"] == "hmac_token_auth_oidc_unconfigured"
     assert body["production_gates"]["independent_federation"] == "not_started_or_unavailable"
     assert body["production_gates"]["model_provider"] == "not_configured"
     assert body["production_gates"]["network_discovery"]["status"] == "unknown"
@@ -317,3 +317,31 @@ def test_runtime_startup_reports_missing_keys_as_blocked(monkeypatch):
         "status": "blocked", "reason": "PERSISTENT_KEYS_NOT_CONFIGURED",
     }
 
+
+
+
+def test_production_runtime_rejects_development_token_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "d" * 64)
+    monkeypatch.delenv("OMEGA_TOKEN_SIGNING_KEY", raising=False)
+    try:
+        main._runtime_token_key()
+    except RuntimeError as exc:
+        assert str(exc) == "PRODUCTION_TOKEN_SIGNING_KEY_REQUIRED"
+    else:
+        raise AssertionError("production must not accept the development token key")
+
+
+def test_production_runtime_uses_dedicated_token_signing_key(monkeypatch):
+    dedicated = "production-signing-key-" + "p" * 48
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "d" * 64)
+    monkeypatch.setenv("OMEGA_TOKEN_SIGNING_KEY", dedicated)
+    assert main._runtime_token_key() == dedicated
+
+
+def test_nonproduction_runtime_keeps_development_key_compatibility(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("OMEGA_TOKEN_SIGNING_KEY", raising=False)
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "dev-key-" + "x" * 40)
+    assert main._runtime_token_key() == "dev-key-" + "x" * 40
