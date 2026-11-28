@@ -229,7 +229,11 @@ class IPFSSwarmDiscovery:
                 method="POST",
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(request, timeout=8) as response:
+            class _NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, new_url):
+                    return None
+            opener = urllib.request.build_opener(_NoRedirect)
+            with opener.open(request, timeout=8) as response:
                 payload = json.loads(response.read(500_001))
             if not isinstance(payload, dict):
                 return []
