@@ -193,6 +193,8 @@ def _enroll_one(fed_node, candidate: dict[str, Any]) -> dict[str, Any]:
 
 def _append_cycle_audit(state_dir: Path, summary: dict[str, Any]) -> None:
     """Append a private audit record without following symlinked paths."""
+    import stat
+
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     absolute_dir = state_dir.absolute()
@@ -201,5 +203,67 @@ def _append_cycle_audit(state_dir: Path, summary: dict[str, Any]) -> None:
         for component in (absolute_dir, *absolute_dir.parents)
     ):
         raise RuntimeError("FEDERATION_AUDIT_DIRECTORY_REFUSED")
+    audit_path = state_dir / "federation-autonomous.jsonl"
+    if audit_path.is_symlink():
+        raise RuntimeError("FEDERATION_AUDIT_FILE_REFUSED")
+    flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(audit_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError("FEDERATION_AUDIT_FILE_REFUSED")
+        os.fchmod(fd, 0o600)
+        record = {
+            "timestamp": time.time(),
+            "event": "FEDERATION_AUTOJOIN_CYCLE",
+            **summary,
+        }
+        os.write(fd, (json.dumps(record, sort_keys=True) + "\n").encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def run_discovered_cycle(fed_node, state_dir: Path, registry_path: Path) -> dict[str, Any]:
+    """Automatically verify and enroll only discovered peers explicitly offering federation."""
+    if registry_path.is_symlink():
+        raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
+    if not registry_path.is_file():
+        return {"status": "NO_INVENTORY", "checked": 0, "enrolled": 0}
+    data = json.loads(registry_path.read_text(encoding="utf-8"))
+    if (not isinstance(data, dict) or data.get("schema") != 1
+            or not isinstance(data.get("candidates"), dict)):
+        raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_INVALID")
+    candidates = [
+        item for item in data["candidates"].values()
+        if isinstance(item, dict)
+        and item.get("status") in {"DISCOVERED_UNVERIFIED", "STALE_UNVERIFIED"}
+        and item.get("identity_verified") is not True
+    ][:MAX_PEERS_PER_CYCLE]
+    checked = enrolled = failed = 0
+    for item in candidates:
+        checked += 1
+        try:
+            result = _enroll_one(fed_node, item)
+            item["status"] = "ENROLLED" if result["status"] in {
+                "ENROLLED", "ALREADY_ENROLLED"
+            } else item.get("status", "DISCOVERED_UNVERIFIED")
+            item["identity_verified"] = True
+            item["enrolled"] = True
+            item["verified_at"] = time.time()
+            item["granted_capabilities"] = []
+            item["remote_code_execution"] = False
+            item["private_data_access"] = False
+            item["federation_capabilities"] = result.get("capabilities", [])
+            enrolled += result["status"] == "ENROLLED"
+        except Exception as exc:
+            item["last_federation_error"] = type(exc).__name__
+            failed += 1
+    _write_registry(registry_path, data)
+    summary = {
+        "status": "COMPLETED", "checked": checked,
+        "enrolled": enrolled, "failed": failed,
+        "inbound_capabilities_granted": 0,
+    }
     _append_cycle_audit(state_dir, summary)
     return summary
