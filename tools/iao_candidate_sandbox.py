@@ -155,6 +155,7 @@ def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
         "--security-opt=no-new-privileges:true",
         "--user=65534:65534",
         "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m",
+        "--tmpfs=/workspace/.state:rw,noexec,nosuid,nodev,size=256m",
         "--mount", f"type=bind,src={workspace},dst=/workspace,readonly",
         "--workdir=/workspace",
         "--env=PYTHONPATH=/workspace",
