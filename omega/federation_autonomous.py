@@ -28,7 +28,11 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
     if path.is_symlink():
         raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
     parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if parent.is_symlink() or not parent.is_dir():
+    absolute_parent = parent.absolute()
+    if not parent.is_dir() or any(
+        component.is_symlink()
+        for component in (absolute_parent, *absolute_parent.parents)
+    ):
         raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_PARENT_REFUSED")
     fd, temporary_name = tempfile.mkstemp(
         prefix=".iao-federation-registry-", dir=str(parent)
