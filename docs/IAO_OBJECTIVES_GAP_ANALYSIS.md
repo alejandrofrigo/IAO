@@ -184,3 +184,57 @@ Esta evidencia confirma los controles automatizados de esa revisión concreta. N
 8. Ejecutar despliegue de cualificación con persistencia, TLS, copias y restauración; solo entonces reconsiderar el estado NORMAL.
 
 **Conclusión actualizada:** la rama tiene una base sustancial y los seis controles automatizados del HEAD revisado están verdes. IAO todavía no cumple producción: identidad externa OIDC, worker seguro de producción, proveedor LLM comprobado, federación independiente autenticada y despliegue persistente siguen siendo puertas explícitas. Ninguna de estas brechas debe ocultarse mediante etiquetas, estados de UI o simples procesos activos.
+
+
+## 6. Actualización de auditoría — 2026-11-28, HEAD e8226fe
+
+**Rama:** `codex/iao-node-factory-20261127` · **PR:** #22 (draft, no fusionada).  
+**Alcance:** revisión del código de esa rama y de CI. Esta actualización sustituye las afirmaciones anteriores sobre ausencia de Tor en el código; no certifica conectividad de producción.
+
+### 6.1 Evidencia CI del HEAD e8226fe
+
+- IAO CI: Python 3.12 y 3.13, cada uno con **615 passed, 1 skipped, 2 warnings**.
+- Quality gate: success.
+- Candidate sandbox qualification: success.
+- Container build qualification: success; pruebas de contrato API: **23 passed**.
+- Node factory safety tests: success.
+- Mobile browser integration: success.
+
+La imagen Docker se construyó en CI; no se desplegó como servicio persistente ni se conectó a un backend público.
+
+### 6.2 Corrección del inventario de transportes
+
+En esta rama sí existe implementación de transporte Tor v3 onion:
+- `omega/federation_transport.py` contiene cliente SOCKS5 con resolución remota onion, límites de respuesta/tiempo, rechazo de redirecciones y publicación/intercambio federativo firmado por onion.
+- El proxy SOCKS está restringido a loopback; la dependencia PySocks es opcional.
+- `omega/external_network.py` incluye descubrimiento de directorios onion y adaptador opcional de descubrimiento libp2p Kademlia.
+- `tests/test_federation_transport.py` y `tests/test_external_network.py` cubren contratos simulados, validación y rutas onion/libp2p.
+
+Por tanto, la afirmación de la sección 2.5 sobre ausencia total de adaptadores Tor ya no describe el HEAD actual y debe leerse como observación histórica de la revisión de `main` del 24 de noviembre.
+
+### 6.3 Límites que siguen abiertos
+
+- Las pruebas Tor son pruebas de contrato con proxy simulado; no prueban una conexión real a un servicio onion remoto.
+- El descubrimiento libp2p/IPFS registra peers de transporte, pero no acredita que sean nodos IAO, que tengan identidad federativa verificada ni que hayan aceptado tareas.
+- No se encontró en esta revisión un transporte I2P SAMv3 integrado.
+- No hay evidencia actual de un peer IAO externo independiente admitido, de una tarea distribuida ni de replicación externa verificada.
+- El router LLM aún requiere una prueba conectada que identifique proveedor/modelo upstream; el modo fallback no satisface ese criterio.
+- OIDC sigue sin estar configurado; HMAC no es OIDC. El worker de ejecución privilegiada permanece bloqueado en producción.
+- La plantilla de producción deja secretos y origen CORS vacíos deliberadamente. El backend no está desplegado ni conectado al sitio público.
+
+### 6.4 Estado de aceptación
+
+| Gate | Estado en esta revisión |
+|---|---|
+| CI Python 3.12/3.13 | **APROBADO en CI** |
+| Quality gate y sandbox | **APROBADO en CI** |
+| Build Docker y contrato API | **APROBADO en CI** |
+| Transporte Tor onion | **Implementado; E2E real pendiente** |
+| Descubrimiento libp2p/IPFS | **Adaptadores presentes; peer IAO confiable no demostrado** |
+| Identidad OIDC | **Bloqueado / no configurado** |
+| Ejecución privilegiada de tareas | **Bloqueada en producción** |
+| Proveedor LLM upstream | **No verificado** |
+| Backend público persistente | **No desplegado** |
+| Federación externa y replicación | **No demostradas** |
+
+No se debe cambiar ningún gate a aprobado por la mera existencia del adaptador o por CI verde. La siguiente cualificación de red debe ejecutarse entre dos instalaciones independientes y voluntarias, primero mediante Tor onion, verificando identidad, challenge, capabilities mínimas, revocación y auditoría en ambos extremos.
