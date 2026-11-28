@@ -490,3 +490,16 @@ class FederationTLSNodeIdentityTests(unittest.TestCase):
             {"subjectAltName": (("URI", "urn:iao:node:0123456789ABCDEf"),)},
         ):
             self.assertIsNone(_peer_certificate_node_id(certificate))
+
+
+class FederationCleartextBindTests(unittest.TestCase):
+    def test_non_loopback_listener_requires_tls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "public-bind", lambda: 1_000_000.0)
+            try:
+                with self.assertRaisesRegex(
+                    ValueError, "FEDERATION_TLS_REQUIRED_FOR_NON_LOOPBACK_BIND"
+                ):
+                    FedServer(node, host="0.0.0.0")
+            finally:
+                node.store.close()
