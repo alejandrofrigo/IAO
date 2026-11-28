@@ -50,7 +50,7 @@ jobs:
                 origin.search || origin.hash) {
               throw new Error("IAO_API_ENDPOINT_INVALID");
             }
-            return new URL(String(path || "").replace(/^\\/+/, ""),
+            return new URL(String(path || "").split("/").filter(Boolean).join("/"),
               origin.origin + "/").toString();
           };
           """ % json.dumps(value)
