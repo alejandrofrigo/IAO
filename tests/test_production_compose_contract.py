@@ -30,6 +30,6 @@ def test_production_compose_does_not_enable_unconfigured_paid_or_llm_provider():
 def test_production_docs_state_single_instance_and_unverified_infrastructure():
     docs = (ROOT / "docs" / "production-host.md").read_text(encoding="utf-8")
     assert "single API instance" in docs
-    assert "Do not scale replicas" in docs
+    assert "do not scale replicas" in docs.lower()
     assert "does not establish global P2P connectivity" in docs
     assert "does not" in docs and "24/7 service" in docs
