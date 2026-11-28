@@ -245,8 +245,26 @@ class TaskWorker:
         )
         return True
 
+    def recover_interrupted(self) -> int:
+        """Fail closed expired in-flight tasks without re-enqueueing or replaying them."""
+        recovered = self.store.recover_interrupted_tasks()
+        if recovered:
+            # Keep owner subjects and task identifiers out of audit metadata.
+            self.store.audit(
+                "system",
+                "TASK_WORKER_INTERRUPTED_RECOVERED",
+                "task_worker",
+                recovered_count=len(recovered),
+                decision="FAIL_CLOSED",
+            )
+        return len(recovered)
+
     def run_forever(self) -> None:
         while not self._stop.is_set():
+            # Recovery must run periodically, not only at process startup:
+            # otherwise an expired lease can remain RUNNING indefinitely
+            # while this worker stays alive.
+            self.recover_interrupted()
             if not self.run_once():
                 self._stop.wait(self.poll_seconds)
 
@@ -274,18 +292,9 @@ def main() -> None:
         poll_seconds=float(os.environ.get("IAO_WORKER_POLL_SECONDS", "1")),
         operator_identity_authority=service.operator_identity_authority,
     )
-    # Startup reconciliation is fail-closed: expired RUNNING and VERIFYING
-    # leases are marked FAILED and are never automatically re-enqueued.
-    recovered = service.store.recover_interrupted_tasks()
-    if recovered:
-        # Keep owner subjects and per-task identifiers out of audit metadata.
-        service.store.audit(
-            "system",
-            "TASK_WORKER_INTERRUPTED_RECOVERED",
-            "task_worker",
-            recovered_count=len(recovered),
-            decision="FAIL_CLOSED",
-        )
+    # Initial reconciliation; run_forever repeats it to catch leases expiring
+    # while this process remains alive.
+    worker.recover_interrupted()
 
     def request_stop(*_: object) -> None:
         worker.stop()
