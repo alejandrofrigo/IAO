@@ -58,10 +58,10 @@ def supervise(
         now = time.monotonic()
         restarts = [t for t in restarts if now - t < window] + [now]
         sys.stderr.write(
-            f'{{"event":"runtime_exit","code":{code},"restarts_in_window":{len(restarts)}}}\\n'
+            f'{{"event":"runtime_exit","code":{code},"restarts_in_window":{len(restarts)}}}\n'
         )
         if len(restarts) > max_restarts:
-            sys.stderr.write('{"event":"HALT","reason":"restart_limit"}\\n')
+            sys.stderr.write('{"event":"HALT","reason":"restart_limit"}\n')
             return 1
         delay = min(0.25 * 2 ** len(restarts), 5)
         deadline = time.monotonic() + delay
