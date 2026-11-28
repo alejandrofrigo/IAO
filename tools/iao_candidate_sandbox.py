@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -100,8 +101,11 @@ def _parse_summary(output: str) -> dict[str, int] | None:
 def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
     if "," in str(workspace):
         raise ValueError("SANDBOX_PATH_CONTAINS_COMMA")
+    container_name = "iao-candidate-" + uuid.uuid4().hex
     command = [
         "docker", "run", "--rm",
+        f"--name={container_name}",
+        "--label=iao.candidate.sandbox=true",
         "--network=none",
         "--read-only",
         "--ipc=none",
@@ -138,11 +142,16 @@ def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
             "timed_out": False,
         }
     except subprocess.TimeoutExpired as exc:
+        cleanup = subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
         return {
             "returncode": None,
             "summary": None,
             "output_tail": str(exc)[:1000],
             "timed_out": True,
+            "container_cleanup_returncode": cleanup.returncode,
         }
     except OSError as exc:
         return {
