@@ -241,6 +241,6 @@ def test_cycle_audit_rejects_symlinked_parent_before_creating_outside(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable")
 
-    with pytest.raises(RuntimeError, match="AUDIT_DIRECTORY_REFUSED"):
+    with pytest.raises(RuntimeError, match="FEDERATION_AUDIT_DIRECTORY_REFUSED"):
         _append_cycle_audit(link / "nested", {"checked": 1})
     assert list(outside.iterdir()) == []
