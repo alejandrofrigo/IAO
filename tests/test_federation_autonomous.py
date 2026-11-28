@@ -172,7 +172,7 @@ def test_discovered_origin_accepts_only_tor_v3_onion_http():
     import hashlib
 
     public_key = bytes(range(32))
-    version = b"\\x03"
+    version = b"\x03"
     checksum = hashlib.sha3_256(
         b".onion checksum" + public_key + version
     ).digest()[:2]
