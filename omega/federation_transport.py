@@ -378,7 +378,9 @@ def _request_json(
             return response.status, decoded
         except FederationTransportError:
             raise
-        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+        except ssl.SSLError as exc:
+            raise FederationTransportError("TLS_HANDSHAKE_FAILED") from exc
+        except (OSError, http.client.HTTPException) as exc:
             last_error = exc
         finally:
             connection.close()
