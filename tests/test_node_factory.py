@@ -2,6 +2,9 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pathlib import Path
 
 from omega.node_factory import (
@@ -69,6 +72,24 @@ class NodeFactoryTests(unittest.TestCase):
             except (OSError, NotImplementedError):
                 self.skipTest("symlinks unavailable")
             self.assertEqual(inspect_nodes(Path(tmp) / "nodes"), [])
+
+    def test_batch_rolls_back_if_a_later_node_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "nodes"
+            generated_key = Ed25519PrivateKey.generate()
+            with patch(
+                "omega.node_factory.load_or_create_key",
+                side_effect=[
+                    generated_key,
+                    OSError("simulated key storage failure"),
+                ],
+            ):
+                with self.assertRaisesRegex(OSError, "simulated key storage failure"):
+                    create_nodes(2, output_dir=output)
+
+            self.assertEqual(inspect_nodes(output), [])
+            self.assertEqual(list(output.glob("node-*")), [])
+            self.assertEqual(list(output.glob(".staging-*")), [])
 
     def test_status_ignores_modified_or_incomplete_manifests(self):
         with tempfile.TemporaryDirectory() as tmp:
