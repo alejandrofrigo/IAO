@@ -98,6 +98,43 @@ def _parse_summary(output: str) -> dict[str, int] | None:
     return totals
 
 
+def _compare_results(
+    baseline_result: dict[str, Any], candidate_result: dict[str, Any]
+) -> dict[str, bool]:
+    """Require complete successful runs and no regression in every non-pass outcome."""
+    baseline = baseline_result.get("summary")
+    candidate = candidate_result.get("summary")
+    baseline_ok = (
+        baseline_result.get("returncode") == 0
+        and isinstance(baseline, dict)
+        and baseline.get("failed") == 0
+        and baseline.get("errors") == 0
+    )
+    candidate_ok = (
+        candidate_result.get("returncode") == 0
+        and isinstance(candidate, dict)
+        and candidate.get("failed") == 0
+        and candidate.get("errors") == 0
+    )
+    comparable = isinstance(baseline, dict) and isinstance(candidate, dict)
+    no_regression = bool(
+        comparable
+        and candidate["passed"] >= baseline["passed"]
+        and candidate["skipped"] <= baseline["skipped"]
+        and candidate["xfailed"] <= baseline["xfailed"]
+        and candidate["xpassed"] <= baseline["xpassed"]
+        and candidate["failed"] == 0
+        and candidate["errors"] == 0
+    )
+    return {
+        "baseline_ok": baseline_ok,
+        "candidate_ok": candidate_ok,
+        "comparable": comparable,
+        "no_regression": no_regression,
+        "passed": baseline_ok and candidate_ok and no_regression,
+    }
+
+
 def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
     if "," in str(workspace):
         raise ValueError("SANDBOX_PATH_CONTAINS_COMMA")
@@ -213,28 +250,9 @@ def evaluate_in_sandbox(
 
         baseline_result = _docker_suite(baseline, image)
         candidate_result = _docker_suite(candidate, image)
-        base_summary = baseline_result["summary"]
-        candidate_summary = candidate_result["summary"]
-        baseline_ok = (
-            baseline_result["returncode"] == 0
-            and base_summary is not None
-            and base_summary["failed"] == 0
-            and base_summary["errors"] == 0
-        )
-        candidate_ok = (
-            candidate_result["returncode"] == 0
-            and candidate_summary is not None
-            and candidate_summary["failed"] == 0
-            and candidate_summary["errors"] == 0
-        )
-        comparable = bool(base_summary and candidate_summary)
-        no_regression = bool(
-            comparable
-            and candidate_summary["passed"] >= base_summary["passed"]
-            and candidate_summary["skipped"] <= base_summary["skipped"]
-            and candidate_summary["xpassed"] <= base_summary["xpassed"]
-        )
-        passed = baseline_ok and candidate_ok and no_regression
+        comparison = _compare_results(baseline_result, candidate_result)
+        no_regression = comparison["no_regression"]
+        passed = comparison["passed"]
         return {
             "status": "FUNCTIONAL_TESTS_PASSED" if passed else "FUNCTIONAL_TESTS_FAILED",
             "promotion_eligible": False,
@@ -256,6 +274,7 @@ def evaluate_in_sandbox(
             "overlay": overlay,
             "baseline": baseline_result,
             "candidate": candidate_result,
+            "comparison": comparison,
             "no_regression": no_regression,
             "notice": (
                 "Las pruebas funcionales se ejecutaron en contenedores Docker "
