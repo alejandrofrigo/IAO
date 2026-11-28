@@ -14,6 +14,23 @@ the availability of the global Internet or bypass local law, censorship,
 provider outages, geoblocking, or remote rate limits. It must report observed
 reachability and degraded paths truthfully.
 
+## Implemented application-layer egress mode
+
+`omega.egress.EgressPolicy` now supports an explicit
+`allow_public_hosts=True` mode for globally addressed public hostnames. It
+retains HTTPS-only behavior by default, the configured port set (443 by
+default), DNS pinning, rejection of any private/non-global DNS answer,
+redirect revalidation, TLS certificate verification, response limits, and
+timeouts. The default remains deny-by-hostname unless the caller opts in.
+The existing `web.fetch` tool can be constructed with this policy; it is not
+automatically enabled or added to the queued-tool allowlist.
+
+This is an application-layer HTTP(S) capability, not a transparent network
+interface for arbitrary protocols. It does not create a persistent tunnel,
+route all sandbox sockets, provide redundant gateways, or prove continuous
+Internet availability. Those deployment/runtime capabilities remain
+unimplemented and are mandatory production gates.
+
 ## Network architecture
 
 - Keep sandbox workloads on a dedicated network segment/namespace with
