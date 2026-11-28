@@ -403,3 +403,18 @@ def test_public_federation_origin_accepts_https_and_v3_onion_only():
     ):
         with pytest.raises(transport.FederationTransportError):
             transport.validate_public_federation_origin(origin)
+
+
+def test_outbound_https_federation_requires_client_certificate(monkeypatch):
+    monkeypatch.delenv("IAO_TLS_REQUIRE_CLIENT_CERT", raising=False)
+    monkeypatch.delenv("IAO_TLS_CLIENT_CERT_FILE", raising=False)
+    monkeypatch.delenv("IAO_TLS_CLIENT_KEY_FILE", raising=False)
+    monkeypatch.setattr(
+        transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"]
+    )
+    with pytest.raises(
+        transport.FederationTransportError, match="CLIENT_CERT_REQUIRED"
+    ):
+        transport.post_federation_json(
+            "https://peer.example.org/fed/v1/message", {"signed": True}
+        )
