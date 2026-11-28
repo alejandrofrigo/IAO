@@ -210,3 +210,19 @@ def test_worker_fails_closed_when_primary_device_or_session_was_revoked():
     assert denied[0][1]["decision"] == "FAIL_CLOSED"
     assert "session_digest" not in denied[0][1]
     assert "device_id" not in denied[0][1]
+
+
+class _FalseAuthority:
+    def verify_primary_device_for_session_digest(self, *_args):
+        return False
+
+
+def test_worker_fails_closed_when_authority_returns_false():
+    worker, store, calls = _worker(_FalseAuthority())
+
+    assert worker.run_once() is True
+
+    assert calls == []
+    assert store.executions == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "WORKER_OPERATOR_AUTHORITY_REVOKED"
