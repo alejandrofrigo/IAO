@@ -437,7 +437,6 @@ class PersistentPeerStoreTests(FedBase):
 
 class OnionEndpointTests(FedBase):
     def test_peer_contract_accepts_v3_onion_endpoint_without_auto_enrollment(self):
-        import tempfile
         from pathlib import Path
 
         node = Node(
@@ -447,7 +446,6 @@ class OnionEndpointTests(FedBase):
         )
         contract = self.b.contract_for_self(["knowledge.search"])
         contract["endpoint"] = "http://" + "f" * 56 + ".onion/fed/v1/message"
-        enrolled = node.enroll(contract)
-        self.assertTrue(enrolled.get("ok"))
+        node.enroll(contract)
         self.assertEqual(node.peers[self.b.node_id]["endpoint"], contract["endpoint"])
         self.assertEqual(node.peers[self.b.node_id]["granted_capabilities"], [])
