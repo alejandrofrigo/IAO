@@ -83,3 +83,36 @@ def test_docker_suite_kills_container_after_timeout(tmp_path, monkeypatch):
     assert result["container_cleanup_returncode"] == 0
     assert calls[1][:4] == ["docker", "rm", "-f", calls[1][3]]
     assert calls[1][3].startswith("iao-candidate-")
+
+
+
+def test_comparison_rejects_increased_xfailed_and_xpassed_counts():
+    baseline = {
+        "returncode": 0,
+        "summary": {"passed": 10, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 1, "xpassed": 0},
+    }
+    candidate_xfailed = {
+        "returncode": 0,
+        "summary": {"passed": 10, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 2, "xpassed": 0},
+    }
+    candidate_xpassed = {
+        "returncode": 0,
+        "summary": {"passed": 10, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 1, "xpassed": 1},
+    }
+
+    assert sandbox._compare_results(baseline, candidate_xfailed)["passed"] is False
+    assert sandbox._compare_results(baseline, candidate_xpassed)["passed"] is False
+
+
+def test_comparison_requires_both_complete_successful_summaries():
+    baseline = {"returncode": 0, "summary": None}
+    candidate = {
+        "returncode": 0,
+        "summary": {"passed": 1, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 0, "xpassed": 0},
+    }
+
+    result = sandbox._compare_results(baseline, candidate)
+
+    assert result["comparable"] is False
+    assert result["baseline_ok"] is False
+    assert result["passed"] is False
