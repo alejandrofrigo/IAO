@@ -11,7 +11,10 @@ class FakeResponse:
 
     def __init__(self, body=b'{"choices": []}', headers=None):
         self.body = body
-        self.headers = headers or {"Content-Type": "application/json", "Content-Length": str(len(body))}
+        self.headers = headers or {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+        }
 
     def getheader(self, name):
         return self.headers.get(name)
@@ -63,6 +66,11 @@ def test_post_json_uses_pinned_https_and_posts_payload(monkeypatch):
 ])
 def test_post_json_rejects_unsafe_url(monkeypatch, url):
     setup_transport(monkeypatch, FakeResponse())
+    if "127.0.0.1" in url:
+        monkeypatch.setattr(
+            transport, "_resolve",
+            lambda host, port, policy: "127.0.0.1",
+        )
     with pytest.raises(transport.ProviderTransportError):
         transport.post_json(url, {})
 
