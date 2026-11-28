@@ -155,13 +155,22 @@ def test_discovered_origin_rejects_non_public_or_ambiguous_urls():
     for value in (
         "http://peer.example.org", "https://user:pass@peer.example.org",
         "https://peer.example.org:8443", "https://peer.example.org/path",
-        "https://127.0.0.1",
+        "https://127.0.0.1", "http://short.onion",
+        "https://" + "a" * 56 + ".onion",
+        "http://" + "a" * 56 + ".onion:8080",
+        "http://user@" + "a" * 56 + ".onion",
     ):
         try:
             autonomous._origin(value)
         except ValueError:
             continue
         raise AssertionError("unsafe origin accepted: " + value)
+
+
+def test_discovered_origin_accepts_only_tor_v3_onion_http():
+    onion = "b" * 56 + ".onion"
+    assert autonomous._origin("http://" + onion) == "http://" + onion
+    assert autonomous._origin("http://" + onion + "/") == "http://" + onion
 
 
 def test_registry_write_is_atomic_private_and_rejects_symlink_target(tmp_path):
