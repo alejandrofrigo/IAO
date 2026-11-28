@@ -1,7 +1,11 @@
 """Killable process boundary for queued, explicitly approved read-only tools.
 
 This limits execution time and selected POSIX resources. It is not an OS
-sandbox: filesystem and network isolation must be supplied by deployment.
+sandbox: filesystem isolation and controlled global outbound networking must
+be supplied by deployment. The child inherits the host network namespace;
+this module neither provides persistent connectivity nor qualifies egress
+policy, route failover, or isolation from private/control-plane networks.
+See docs/SANDBOX_GLOBAL_NETWORK.md before production use.
 """
 from __future__ import annotations
 
