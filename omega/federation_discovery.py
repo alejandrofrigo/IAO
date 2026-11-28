@@ -87,6 +87,7 @@ def _append(state, event):
     if any(component.is_symlink() for component in (absolute, *absolute.parents)):
         raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(state, 0o700)
     if not state.is_dir() or any(
         component.is_symlink() for component in (absolute, *absolute.parents)
     ):
@@ -178,6 +179,7 @@ def _persist_candidate(state, manifest, repository):
         existing["last_seen"] = now
         existing["last_seen_repository"] = repository
         _write_registry(registry_path, data)
+        os.chmod(registry_path.parent, 0o700)
         return candidate_id, False
     requested = manifest.get("capabilities", [])
     if not isinstance(requested, list):
@@ -194,6 +196,7 @@ def _persist_candidate(state, manifest, repository):
         "remote_code_execution": False, "private_data_access": False,
     }
     _write_registry(registry_path, data)
+    os.chmod(registry_path.parent, 0o700)
     return candidate_id, True
 
 def _inspect_repo(repo, state):
