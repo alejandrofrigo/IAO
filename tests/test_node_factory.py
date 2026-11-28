@@ -91,6 +91,15 @@ class NodeFactoryTests(unittest.TestCase):
             self.assertEqual(list(output.glob("node-*")), [])
             self.assertEqual(list(output.glob(".staging-*")), [])
 
+    def test_status_ignores_manifest_with_unhashable_role(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            node = create_nodes(1, output_dir=tmp)[0]
+            manifest_path = Path(node["directory"]) / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["role"] = []
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(inspect_nodes(tmp), [])
+
     def test_status_ignores_valid_json_that_is_not_an_object(self):
         with tempfile.TemporaryDirectory() as tmp:
             nodes = create_nodes(2, output_dir=tmp)
