@@ -76,3 +76,29 @@ def test_maintenance_scheduler_rejects_naive_clock():
             assert "SCHEDULER_TIME" in str(exc)
         else:
             raise AssertionError("naive scheduler time accepted")
+
+
+def test_maintenance_scheduler_bounds_terminal_task_history():
+    import json
+    from datetime import datetime, timezone
+
+    with tempfile.TemporaryDirectory() as tmp:
+        core = AutonomousCore(tmp)
+        now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+        with core.lock:
+            data = json.loads(core.tasks_path.read_text("utf-8"))
+            for index in range(1005):
+                data["tasks"].append({
+                    "id": f"finished-{index}", "kind": "self_check",
+                    "status": "COMPLETED", "updated_at": f"2026-01-{(index % 28) + 1:02d}",
+                })
+            data["tasks"].append({
+                "id": "still-active", "kind": "capability_scan",
+                "status": "RUNNING", "updated_at": now.isoformat(),
+            })
+            core._save(data)
+        core.schedule_maintenance(now)
+        data = json.loads(core.tasks_path.read_text("utf-8"))
+        finished = [task for task in data["tasks"] if task.get("status") == "COMPLETED"]
+        assert len(finished) == 1000
+        assert any(task.get("id") == "still-active" for task in data["tasks"])
