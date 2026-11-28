@@ -267,26 +267,10 @@ class TaskWorker:
                 spec.name, spec.version, digest_in, _digest(output),
                 started, datetime.now(timezone.utc).isoformat(),
             )
-            if not committed:
-                self.store.audit(
-                    "system", "TASK_WORKER_STALE_COMPLETION", task_id,
-                    worker=self.worker_id,
-                    decision="REJECT",
-                    reason="LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
-                )
-                return True
-            self.store.audit(
-                owner, "TASK_STATE", task_id, to=final_state,
-                worker=self.worker_id,
-                error=result.get("error"),
-                verification=result.get("verification"),
-            )
-            self.store.audit(
-                owner, "EVIDENCE", task_id,
-                decision=verdict,
-                method="schema+source_hash+snippet_provenance",
-                output_digest=_digest(output),
-            )
+            # The store commits terminal task state, truthful execution status,
+            # and the corresponding audit events in one SQLite transaction.
+            # It also records stale completion (including a missing task), so
+            # the worker must not append a second, non-atomic audit event here.
             return True
         except Exception:
             # No automatic retry: an unexpected worker failure leaves the lease
