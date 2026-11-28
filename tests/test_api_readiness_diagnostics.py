@@ -51,7 +51,7 @@ def test_readiness_reports_local_scope_without_claiming_production(monkeypatch):
         "external_network": "start_reported_unverified",
     }
     assert payload["checks"]["model_adapter"] == "configured_unverified"
-    assert payload["checks"]["task_worker"] == "heartbeat_unverified"
+    assert payload["checks"]["task_worker"] == "disabled_by_default"
     assert payload["production_gates"]["independent_federation"] == "not_verified"
     assert len(calls) == 1
 
