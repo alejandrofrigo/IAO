@@ -63,3 +63,22 @@ def test_docker_suite_reports_missing_docker_without_claiming_pass(tmp_path, mon
     assert result["returncode"] is None
     assert result["summary"] is None
     assert result["timed_out"] is False
+
+
+def test_docker_suite_kills_container_after_timeout(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[1] == "run":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox.subprocess, "run", fake_run)
+
+    result = sandbox._docker_suite(tmp_path, "iao-candidate-sandbox:test")
+
+    assert result["timed_out"] is True
+    assert result["container_cleanup_returncode"] == 0
+    assert calls[1][:4] == ["docker", "rm", "-f", calls[1][3]]
+    assert calls[1][3].startswith("iao-candidate-")
