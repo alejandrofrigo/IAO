@@ -2,7 +2,16 @@
 """Federacion autonoma externa de IAO - pipeline con validacion mutua."""
 from __future__ import annotations
 import ssl
-import argparse, asyncio, base64, hashlib, json, os, secrets, sys, time, urllib.request
+import argparse
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import secrets
+import sys
+import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
