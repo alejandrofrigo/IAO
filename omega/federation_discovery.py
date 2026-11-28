@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import re
+import stat
 import sys
 import threading
 import time
@@ -78,17 +79,39 @@ def _request_manifest(full_name, branch, path):
 
 
 def _append(state, event):
-    state.mkdir(parents=True, exist_ok=True)
+    """Append a private discovery record without following symlink paths."""
+    state = Path(state)
+    absolute = state.absolute()
+    if any(component.is_symlink() for component in (absolute, *absolute.parents)):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not state.is_dir() or any(
+        component.is_symlink() for component in (absolute, *absolute.parents)
+    ):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+
     path = state / "federation-discovery.jsonl"
+    if path.is_symlink():
+        raise RuntimeError("FEDERATION_DISCOVERY_AUDIT_FILE_REFUSED")
     record = dict(event)
     record["timestamp"] = _now()
-    data = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n").encode()
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    data = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\\n").encode()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(path), flags, 0o600)
     try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError("FEDERATION_DISCOVERY_AUDIT_FILE_REFUSED")
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "ab") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
 
 
 def _valid_manifest(obj):
