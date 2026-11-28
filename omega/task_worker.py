@@ -195,6 +195,21 @@ class TaskWorker:
                 ) as authority_valid:
                     if authority_valid is not True:
                         raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                    # A worker can wait for the identity DB write reservation.
+                    # Recheck the actual task lease after acquiring that gate,
+                    # not just the configured lease duration, before invoking
+                    # any tool. Leave enough time for the bounded call and reap.
+                    try:
+                        lease_until = datetime.fromisoformat(task["lease_until"])
+                        if lease_until.tzinfo is None:
+                            raise ValueError("naive lease timestamp")
+                        remaining_lease = (
+                            lease_until - datetime.now(timezone.utc)
+                        ).total_seconds()
+                    except (KeyError, TypeError, ValueError):
+                        remaining_lease = 0.0
+                    if remaining_lease <= timeout + 5:
+                        raise TimeoutError("WORKER_LEASE_EXPIRING_BEFORE_TOOL")
                     output, verdict = self.tool_executor(
                         spec.run, spec.verify, clean, timeout
                     )
