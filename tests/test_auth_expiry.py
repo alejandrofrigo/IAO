@@ -59,3 +59,12 @@ def test_verifier_rejects_unknown_claims_and_malformed_scopes():
         _signed_payload({"sub": "operator:test", "scopes": [1], "exp": 200}),
         now=100,
     ) is None
+
+
+def test_verifier_rejects_noncanonical_or_invalid_base64url_even_with_valid_hmac():
+    key = "k" * 32
+    for payload in ("***", "eyJzdWIiOiJ4In0=", "eyJzdWJpOiJ4In0"):
+        signature = base64.urlsafe_b64encode(
+            hmac.new(key.encode(), payload.encode(), hashlib.sha256).digest()
+        ).rstrip(b"=").decode()
+        assert verify_token(key, payload + "." + signature, now=100) is None
