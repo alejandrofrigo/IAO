@@ -37,7 +37,7 @@ def supervise(
     while True:
         if stopping["v"]:
             return 0
-        p = subprocess.Popen(cmd, env={**os.environ, "IAO_LLM_ROUTER": "1"})
+        p = subprocess.Popen(cmd, env=os.environ.copy())
         child["p"] = p
         shutdown_deadline: float | None = None
         try:
