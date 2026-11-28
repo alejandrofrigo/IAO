@@ -260,7 +260,7 @@ class TaskWorker:
             final_state = "SUCCEEDED" if verdict == "PASS" else "FAILED"
             if final_state == "FAILED":
                 result["error"] = "VERIFICATION_" + str(verdict)
-            committed = self.store.finalize_claimed_tool_execution(
+            self.store.finalize_claimed_tool_execution(
                 task_id, self.worker_id, owner, final_state, result,
                 spec.name, spec.version, digest_in, _digest(output),
                 started, datetime.now(timezone.utc).isoformat(),
