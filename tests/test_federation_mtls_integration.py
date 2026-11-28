@@ -207,6 +207,32 @@ class FederationMTLSIntegrationTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result.get("error"), "TLS_NODE_ID_MISMATCH")
 
+    def test_server_certificate_node_id_mismatch_is_rejected(self) -> None:
+        self.server.stop()
+        wrong_cert, wrong_key = _issue_certificate(
+            self.root, "wrong-server", rsa.generate_private_key(
+                public_exponent=65537, key_size=2048
+            ), self.ca_key, self.ca_cert, node_id="f" * 16, server=True,
+        )
+        wrong_context = create_federation_server_ssl_context(
+            wrong_cert, wrong_key, self.ca_file
+        )
+        self.server = FedServer(
+            self.b, host="127.0.0.1", ssl_context=wrong_context
+        ).start()
+        endpoint = f"https://localhost:{self.server.port}/fed/v1/message"
+        self.a.bind_peer_endpoint(self.b.node_id, endpoint)
+        with patch(
+            "omega.federation_transport.resolve_public_addresses",
+            return_value=["127.0.0.1"],
+        ):
+            result = self.a.send(
+                self.b.node_id, endpoint, "knowledge.search",
+                {"query": "server certificate identity mismatch"},
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "TRANSPORT_BLOCKED")
+
     def test_missing_client_certificate_fails_closed(self) -> None:
         os.environ.pop("IAO_TLS_CLIENT_CERT_FILE", None)
         os.environ.pop("IAO_TLS_CLIENT_KEY_FILE", None)
