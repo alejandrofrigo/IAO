@@ -39,6 +39,7 @@ def test_docker_suite_uses_offline_read_only_restricted_container(tmp_path, monk
     result = sandbox._docker_suite(tmp_path, "iao-candidate-sandbox:test")
 
     command = captured["command"]
+    assert "--pull=never" in command
     assert "--network=none" in command
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
