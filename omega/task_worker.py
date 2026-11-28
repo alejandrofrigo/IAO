@@ -162,14 +162,19 @@ class TaskWorker:
                 if isinstance(budget, dict) else None
             )
             spec_timeout = spec.timeout_seconds
-            valid_timeout_values = all(
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and math.isfinite(value)
-                and value > 0
-                for value in (budget_timeout, spec_timeout)
-            )
-            if not valid_timeout_values:
+            def valid_timeout(value: Any) -> bool:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                ):
+                    return False
+                try:
+                    numeric = float(value)
+                except (OverflowError, TypeError, ValueError):
+                    return False
+                return math.isfinite(numeric) and numeric > 0
+
+            if not all(valid_timeout(value) for value in (budget_timeout, spec_timeout)):
                 return self._finish(
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "INVALID_TOOL_TIMEOUT_POLICY"},
