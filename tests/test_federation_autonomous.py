@@ -122,11 +122,12 @@ def test_discovered_peer_is_not_enrolled_without_connection_bound_mtls(monkeypat
     saved = json.loads(registry.read_text())["candidates"][candidate["candidate_id"]]
     assert result["checked"] == 1
     assert result["enrolled"] == 0
-    assert result["failed"] == 1
+    assert result["failed"] == 0
+    assert result["blocked"] == 1
     assert peer_id not in node.peers
     assert saved["status"] == "DISCOVERED_UNVERIFIED"
     assert saved["identity_verified"] is False
-    assert saved["last_federation_error"] == "RuntimeError"
+    assert saved["enrollment_status"] == "BLOCKED_TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
     assert saved.get("remote_code_execution") is not True
 
 
