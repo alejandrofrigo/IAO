@@ -356,6 +356,41 @@ class PartitionAndHostilePeerTests(FedBase):
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual(r["error"], "REPLAYED_OR_MISROUTED_RESPONSE")
 
+    def test_signed_response_boolean_timestamp_is_rejected(self) -> None:
+        self.t[0] = 1.0
+        hostile = self._hostile(lambda req: _sign(
+            self.b.key,
+            {
+                "v": 1, "from": self.b.node_id, "to": self.a.node_id,
+                "ts": True, "in_reply_to": req["nonce"],
+                "result": {"items": []}, "verification": "PASS",
+            },
+        ))
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(
+            self.b.node_id, hostile.url, "knowledge.search", Q
+        )
+        self.assertEqual(
+            (result["ok"], result["error"]), (False, "CLOCK_SKEW")
+        )
+
+    def test_signed_response_boolean_version_is_rejected(self) -> None:
+        hostile = self._hostile(lambda req: _sign(
+            self.b.key,
+            {
+                "v": True, "from": self.b.node_id, "to": self.a.node_id,
+                "ts": self.clock(), "in_reply_to": req["nonce"],
+                "result": {"items": []}, "verification": "PASS",
+            },
+        ))
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(
+            self.b.node_id, hostile.url, "knowledge.search", Q
+        )
+        self.assertEqual(
+            (result["ok"], result["error"]), (False, "BAD_RESPONSE")
+        )
+
     def test_garbage_and_oversized_responses_handled(self) -> None:
         hostile = self._hostile(lambda req: {"x": "not an envelope"})
         self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
