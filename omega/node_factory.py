@@ -90,71 +90,89 @@ def create_nodes(
 
     root = _safe_output_dir(output_dir)
     created: list[dict[str, str]] = []
-    for _ in range(count):
-        nonce = secrets.token_hex(4)
-        staging = root / (".staging-" + nonce)
-        staging.mkdir(mode=0o700)
-        try:
-            identity_dir = staging / "identity"
-            identity_dir.mkdir(mode=0o700)
-            key_path = identity_dir / "private.key"
-            key = load_or_create_key(key_path)
-            node_id, public_key_hex = public_identity(key)
-            node_dir = root / f"node-{node_id}"
-            if node_dir.exists() or node_dir.is_symlink():
-                raise NodeFactoryError("NODE_DIRECTORY_ALREADY_EXISTS")
-
-            identity = {
-                "protocol": "iao-federation",
-                "version": 1,
-                "node_id": node_id,
-                "public_key": public_key_hex,
-            }
-            manifest = {
-                "schema": 1,
-                "protocol": "iao-federation",
-                "node_id": node_id,
-                "role": role,
-                "status": "CREATED_UNENROLLED",
-                "authority": "NONE",
-                "capabilities": [],
-                "endpoint": None,
-                "enrollment": "NOT_REQUESTED",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            _write_json_private(staging / "identity" / "public.json", identity)
-            _write_json_private(staging / "manifest.json", manifest)
-            readme = (
-                "# IAO node workspace\n\n"
-                f"- Node ID: `{node_id}`\n"
-                f"- Role: `{role}`\n"
-                "- State: `CREATED_UNENROLLED`\n"
-                "- Authority: `NONE`\n"
-                "- Capabilities: none\n\n"
-                "This workspace is not a running server and is not trusted or "
-                "enrolled. Deploy only on infrastructure you control. Configure "
-                "a real authenticated transport and complete the federation "
-                "verification/enrollment protocol before granting even read-only "
-                "capabilities. Never commit identity/private.key.\n"
-            )
-            (staging / "README.md").write_text(readme, encoding="utf-8")
-            os.chmod(staging / "README.md", 0o600)
-            os.replace(staging, node_dir)
+    created_paths: list[Path] = []
+    try:
+        for _ in range(count):
+            nonce = secrets.token_hex(4)
+            staging = root / (".staging-" + nonce)
+            staging.mkdir(mode=0o700)
             try:
-                os.chmod(node_dir, 0o700)
-            except OSError:
-                pass
-            created.append({
-                "node_id": node_id,
-                "role": role,
-                "status": "CREATED_UNENROLLED",
-                "directory": str(node_dir),
-            })
-        except Exception:
-            if staging.exists() and not staging.is_symlink():
-                import shutil
-                shutil.rmtree(staging, ignore_errors=True)
-            raise
+                identity_dir = staging / "identity"
+                identity_dir.mkdir(mode=0o700)
+                key_path = identity_dir / "private.key"
+                key = load_or_create_key(key_path)
+                node_id, public_key_hex = public_identity(key)
+                node_dir = root / f"node-{node_id}"
+                if node_dir.exists() or node_dir.is_symlink():
+                    raise NodeFactoryError("NODE_DIRECTORY_ALREADY_EXISTS")
+
+                identity = {
+                    "protocol": "iao-federation",
+                    "version": 1,
+                    "node_id": node_id,
+                    "public_key": public_key_hex,
+                }
+                manifest = {
+                    "schema": 1,
+                    "protocol": "iao-federation",
+                    "node_id": node_id,
+                    "role": role,
+                    "status": "CREATED_UNENROLLED",
+                    "authority": "NONE",
+                    "capabilities": [],
+                    "endpoint": None,
+                    "enrollment": "NOT_REQUESTED",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                _write_json_private(staging / "identity" / "public.json", identity)
+                _write_json_private(staging / "manifest.json", manifest)
+                readme = (
+                    "# IAO node workspace\\n\\n"
+                    f"- Node ID: `{node_id}`\\n"
+                    f"- Role: `{role}`\\n"
+                    "- State: `CREATED_UNENROLLED`\\n"
+                    "- Authority: `NONE`\\n"
+                    "- Capabilities: none\\n\\n"
+                    "This workspace is not a running server and is not trusted or "
+                    "enrolled. Deploy only on infrastructure you control. Configure "
+                    "a real authenticated transport and complete the federation "
+                    "verification/enrollment protocol before granting even read-only "
+                    "capabilities. Never commit identity/private.key.\\n"
+                )
+                (staging / "README.md").write_text(readme, encoding="utf-8")
+                os.chmod(staging / "README.md", 0o600)
+                os.replace(staging, node_dir)
+                created_paths.append(node_dir)
+                try:
+                    os.chmod(node_dir, 0o700)
+                except OSError:
+                    pass
+                created.append({
+                    "node_id": node_id,
+                    "role": role,
+                    "status": "CREATED_UNENROLLED",
+                    "directory": str(node_dir),
+                })
+            except Exception:
+                if staging.exists() and not staging.is_symlink():
+                    import shutil
+                    shutil.rmtree(staging, ignore_errors=True)
+                raise
+    except Exception as exc:
+        import shutil
+        rollback_failed = False
+        for node_dir in reversed(created_paths):
+            if node_dir.is_symlink():
+                rollback_failed = True
+                continue
+            if node_dir.exists():
+                try:
+                    shutil.rmtree(node_dir)
+                except OSError:
+                    rollback_failed = True
+        if rollback_failed:
+            raise NodeFactoryError("NODE_BATCH_ROLLBACK_INCOMPLETE") from exc
+        raise
     return created
 
 
