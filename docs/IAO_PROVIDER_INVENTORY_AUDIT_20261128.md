@@ -78,3 +78,14 @@ El adaptador fijo limita el proveedor a hosts definidos en código y rechaza red
 El riesgo más alto está en el router OpenAI-compatible dinámico: `omega/llm_router.py::_request` construye el endpoint desde `url` del inventario y usa `urllib.request.urlopen` directamente. No aplica el allowlist/DNS pinning de `omega/egress.py` y el opener predeterminado puede seguir redirects. Esto debe corregirse antes de activar proveedores configurados: HTTPS estricto, host explícito del inventario, DNS fijado, rechazo de IPs privadas/no globales, redirects rechazados, límite de bytes/tiempo y transporte mockeable. Los secretos deben permanecer solo en referencias de entorno y nunca en logs, artefactos, mensajes de error o documentación.
 
 **Siguiente aceptación:** integrar el POST del router con transporte de egress seguro y añadir pruebas deterministas de SSRF/DNS/redirect/timeout/tamaño/secret-redaction. Después, y solo con autorización explícita, verificar presencia de credenciales y hacer una llamada real controlada por proveedor.
+
+
+## 6. Remediación del transporte OpenAI-compatible — 2026-11-28
+
+La brecha de egress identificada en la sección 5 recibió una implementación en esta rama:
+
+- `omega/llm_provider_transport.py` implementa POST JSON sobre HTTPS con DNS resuelto y fijado a IP global, validación TLS del hostname, puerto 443, límites de tiempo y tamaño, y rechazo de redirects.
+- `omega/llm_router.py::_request` ya delega en ese transporte; deja de usar `urllib.request.urlopen` directamente.
+- `tests/test_llm_provider_transport.py` añade pruebas deterministas para HTTPS obligatorio, IP loopback, credenciales en URL, puertos no autorizados, redirects, respuestas excesivas y tipo/JSON inválidos.
+
+**Estado:** IMPLEMENTADO EN RAMA; VERIFICACIÓN CI PENDIENTE. La presencia de este código y sus pruebas no demuestra conectividad real con proveedores. No se ejecutaron credenciales reales ni llamadas externas. No activar proveedores de pago por esta modificación.
