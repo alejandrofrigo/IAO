@@ -6,8 +6,6 @@ import os
 import random
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 CONFIG = Path.home() / ".config" / "iao" / "llm-providers.json"
@@ -83,17 +81,14 @@ def _request(provider, messages, timeout):
         "messages": messages,
         "stream": False,
     }
-    req = urllib.request.Request(
+    from omega.llm_provider_transport import post_json
+
+    data = post_json(
         url,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            **({"Authorization": "Bearer " + key} if key else {}),
-        },
-        method="POST",
+        payload,
+        headers=({"Authorization": "Bearer " + key} if key else {}),
+        timeout=timeout,
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        data = json.loads(response.read(2_000_000).decode("utf-8"))
     answer = data["choices"][0]["message"]["content"]
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError("empty response")
