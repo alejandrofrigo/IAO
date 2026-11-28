@@ -12,7 +12,8 @@ separate candidate workspace, overlays only the manifest-listed files that
 passed static integrity checks, and runs the existing test suite twice: once
 against baseline and once against candidate. Each suite runs in its own Docker
 container with network disabled, read-only root filesystem, read-only workspace
-mount, non-root UID, dropped Linux capabilities, no-new-privileges, bounded
+mount, an ephemeral writable tmpfs only at `/workspace/.state` for tests that need
+runtime state, non-root UID, dropped Linux capabilities, no-new-privileges, bounded
 memory/CPU/PIDs/file descriptors, and a small no-exec temporary filesystem.
 
 The baseline must pass before a candidate can receive
