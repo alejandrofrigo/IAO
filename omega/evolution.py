@@ -32,12 +32,9 @@ FORBIDDEN_PATHS = {
 
 def _assert_no_symlink(path: Path) -> None:
     """Reject symlinked storage roots and every existing path component."""
-    try:
-        relative = path.relative_to(ROOT)
-    except ValueError as exc:
-        raise ValueError("EVOLUTION_PATH_OUTSIDE_ROOT") from exc
-    cursor = ROOT
-    for part in relative.parts:
+    absolute = Path(os.path.abspath(path))
+    cursor = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
         cursor = cursor / part
         if cursor.is_symlink():
             raise ValueError("EVOLUTION_SYMLINK_PATH_REFUSED")
