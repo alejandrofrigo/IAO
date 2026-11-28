@@ -33,6 +33,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate production Compose contract without real secrets
+        env:
+          OMEGA_TOKEN_SIGNING_KEY: qualification-only-token-signing-key-0123456789
+          AUDIT_HMAC_KEY: qualification-only-audit-hmac-key-0123456789
+          IAO_CORS_ORIGINS: https://example.invalid
+        run: |
+          docker compose -f compose.production.yaml config --quiet
+          echo "production_compose_schema=PASS"
+
       - name: Build API container (no publication)
         run: docker build --pull --tag iao-api:qualification .
 
