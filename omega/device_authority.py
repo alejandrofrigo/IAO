@@ -673,7 +673,7 @@ class DeviceAuthority:
             ):
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("DEVICE_OWNER_MISMATCH", 403)
-            if row["consumed_at"] is not None or row["expires_at"] < now:
+            if row["consumed_at"] is not None or row["expires_at"] <= now:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("CHALLENGE_EXPIRED_OR_REPLAYED", 401)
             try:
@@ -751,7 +751,7 @@ class DeviceAuthority:
             ):
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("DEVICE_OWNER_MISMATCH", 403)
-            if row["consumed_at"] is not None or row["expires_at"] < now:
+            if row["consumed_at"] is not None or row["expires_at"] <= now:
                 db.execute("ROLLBACK")
                 raise DeviceAuthorityError("CHALLENGE_EXPIRED_OR_REPLAYED", 401)
             try:
