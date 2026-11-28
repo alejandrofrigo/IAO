@@ -234,12 +234,16 @@ class ReplayAndTimeTests(FedBase):
     def test_duplicate_nested_json_key_is_rejected(self) -> None:
         envelope = _sign(self.a.key, self.env(nonce="duplicate-key-nest-01"))
         raw = json.dumps(envelope).encode()
-        raw = raw.replace(
-            b'"query": "audit chain restore"',
-            b'"query": "audit chain restore", "query": "other"',
-        )
-        status, payload = self.b.handle(raw)
-        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+        original = b'"query": "audit chain restore"'
+        duplicate = b'"query": "audit chain restore", "query": "other"'
+        self.assertIn(original, raw)
+        raw = raw.replace(original, duplicate, 1)
+        self.assertIn(duplicate, raw)
+        status, _payload = self.b.handle(raw)
+        self.assertEqual(status, 400)
+        from omega.federation import _json_without_duplicate_keys
+        with self.assertRaisesRegex(ValueError, "DUPLICATE_JSON_KEY"):
+            _json_without_duplicate_keys(raw)
 
     def test_boolean_protocol_version_is_rejected_even_when_signed(self) -> None:
         status, payload = self.raw(self.env(v=True, nonce="boolean-version-0001"))
