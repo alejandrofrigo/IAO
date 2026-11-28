@@ -51,3 +51,26 @@ def test_identity_get_rejects_non_object_json(fetch):
 def test_request_json_rejects_unsupported_method():
     with pytest.raises(ValueError, match="FEDERATION_METHOD_NOT_ALLOWED"):
         request_json("https://peer.example/fed/v1/identity", "DELETE")
+
+
+def test_load_nodes_preserves_authorization_for_filtered_nodes(tmp_path, monkeypatch):
+    import json
+    from tools import iao_federation_agent as agent
+
+    config = tmp_path / "nodes.json"
+    config.write_text(json.dumps({
+        "nodes": [
+            {"authorized": True, "id": "0123456789abcdef",
+             "url": "https://peer.example"},
+            {"authorized": False, "id": "fedcba9876543210",
+             "url": "https://ignored.example"},
+        ]
+    }), encoding="utf-8")
+    monkeypatch.setattr(agent, "NODES", config)
+
+    loaded = agent.load_nodes()
+    assert loaded["status"] == "VALID"
+    assert len(loaded["nodes"]) == 1
+    assert loaded["nodes"][0]["authorized"] is True
+    assert loaded["nodes"][0]["precheck"] == "URL_ACCEPTED"
+    assert loaded["ignored"] == 1
