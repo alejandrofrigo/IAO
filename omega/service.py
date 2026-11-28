@@ -970,6 +970,8 @@ class OmegaService:
                 output_digest=hashlib.sha256(reply.encode()).hexdigest(),
                 knowledge_status=knowledge_status,
                 knowledge_sources=knowledge_sources,
+                memory_status=memory_status,
+                memory_count=memory_count,
             )
             return 200, {
                 "status": "OK",
@@ -980,6 +982,10 @@ class OmegaService:
                 "knowledge": {
                     "status": knowledge_status,
                     "sources": knowledge_sources,
+                },
+                "memory": {
+                    "status": memory_status,
+                    "items_used": memory_count,
                 },
             }
         if p == "/v1/memory" or p.startswith("/v1/memory/"):
