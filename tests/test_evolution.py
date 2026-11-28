@@ -8,6 +8,7 @@ from omega import evolution
 @pytest.fixture
 def isolated_evolution_state(tmp_path, monkeypatch):
     state = tmp_path / "evolution"
+    state.mkdir()
     monkeypatch.setattr(evolution, "STATE", state)
     monkeypatch.setattr(evolution, "CANDIDATES", state / "candidates")
     monkeypatch.setattr(evolution, "EVENTS", state / "events.jsonl")
@@ -56,10 +57,8 @@ def test_tampered_manifest_is_rejected(isolated_evolution_state):
     value["files"] = ["omega/other.py"]
     metadata.write_text(json.dumps(value), encoding="utf-8")
 
-    evaluated = evolution.evaluate(created["id"])
-
-    assert evaluated["status"] == "REJECTED"
-    assert any("MANIFEST_INVALID" in item for item in evaluated["failures"])
+    with pytest.raises(ValueError, match="MANIFEST_INVALID"):
+        evolution.evaluate(created["id"])
 
 
 def test_candidate_symlink_is_rejected(isolated_evolution_state, tmp_path):
