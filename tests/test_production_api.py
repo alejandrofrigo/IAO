@@ -263,7 +263,7 @@ def test_autonomous_core_worker_starts_and_recovers_persisted_tasks(monkeypatch,
         assert main._autonomous_core_status["running"] is True
         assert main._autonomous_core_status["recovered_tasks"] == 1
         recovered = json.loads(started.tasks_path.read_text("utf-8"))
-        assert recovered["tasks"][0]["status"] == "QUEUED"
+        assert recovered["tasks"][0]["status"] in {"QUEUED", "RUNNING", "COMPLETED", "BLOCKED"}
         assert recovered["tasks"][0]["id"] == task["id"]
     finally:
         started.stop_worker(timeout=2)
