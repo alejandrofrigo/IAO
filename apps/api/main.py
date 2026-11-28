@@ -15,12 +15,30 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+
+def _runtime_token_key() -> str:
+    """Use a dedicated signing secret in production; keep the dev key dev-only."""
+    app_env = os.environ.get("APP_ENV", "development").strip().lower()
+    production_key = os.environ.get("OMEGA_TOKEN_SIGNING_KEY", "")
+    if app_env == "production":
+        if len(production_key) < 32:
+            raise RuntimeError("PRODUCTION_TOKEN_SIGNING_KEY_REQUIRED")
+        return production_key
+    return production_key or os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+
+
 @asynccontextmanager
 async def _runtime_lifespan(_app):
     # Liveness-only qualification may omit secrets; in that case the API remains
     # live but readiness and service routes stay fail-closed.
     global _runtime_startup_status
-    if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
+    try:
+        token_key = _runtime_token_key()
+    except RuntimeError as exc:
+        _runtime_startup_status = {"status": "blocked", "reason": str(exc)}
+        yield
+        return
+    if (len(token_key) >= 32
             and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
         try:
             _get_service()
@@ -196,7 +214,7 @@ def _get_service():
     if _service is None:
         with _service_lock:
             if _service is None:
-                token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+                token_key = _runtime_token_key()
                 audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
                 if len(token_key) < 32 or len(audit_key) < 32:
                     raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
@@ -356,7 +374,7 @@ def ready():
         "operator_session_association": "api_available_read_only",
         "operator_root_bootstrap": "out_of_band_configurable_not_verified",
         "privileged_device_commands": "disabled",
-        "identity_provider": "dev_hmac_not_oidc",
+        "identity_provider": "hmac_token_auth_oidc_unconfigured",
         "independent_federation": (
             "discovery_workers_started_unverified"
             if any(_federation_worker_status.values())
