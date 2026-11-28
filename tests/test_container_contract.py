@@ -18,6 +18,8 @@ def test_dockerfile_declares_non_root_persistent_runtime_and_healthcheck():
     deploy_dockerfile = (ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")
     assert 'VOLUME ["/var/lib/iao"]' in deploy_dockerfile
     assert "OMEGA_STATE_DIR=/var/lib/iao" in deploy_dockerfile
+    assert "HOME=/var/lib/iao/home" in deploy_dockerfile
+    assert "IAO_STATE_DIR=/var/lib/iao" in deploy_dockerfile
     assert "OMEGA_CORPUS_DIR=/app/docs/corpus" in deploy_dockerfile
     assert "PORT=8080" in deploy_dockerfile
     assert "COPY .env" not in deploy_dockerfile
