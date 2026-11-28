@@ -42,7 +42,7 @@ class _ClaimedTaskStore:
     def add_tool_execution(self, *args, **kwargs):
         self.executions.append((args, kwargs))
 
-    def finalize_claimed_tool_execution(self, *args):
+    def finalize_claimed_tool_execution(self, *args, **kwargs):
         self.final_state = args[3]
         self.final_result = args[4]
         self.executions.append((args, {}))
