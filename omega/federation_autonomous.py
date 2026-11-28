@@ -21,18 +21,43 @@ MAX_LEASE_SECONDS = 24 * 60 * 60
 
 
 def _write_registry(path: Path, data: dict[str, Any]) -> None:
+    """Atomically persist the candidate registry without following symlinks."""
+    path = Path(path)
+    parent = path.parent
     if path.is_symlink():
         raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".autojoin.tmp")
-    fd = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if parent.is_symlink() or not parent.is_dir():
+        raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_PARENT_REFUSED")
+    fd, temporary_name = __import__("tempfile").mkstemp(
+        prefix=".iao-federation-registry-", dir=str(parent)
+    )
+    temporary = Path(temporary_name)
     try:
-        payload = (json.dumps(data, sort_keys=True, ensure_ascii=False) + "\n").encode()
-        os.write(fd, payload)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(temporary, path)
+        os.fchmod(fd, 0o600)
+        payload = (json.dumps(data, sort_keys=True, ensure_ascii=False) + "\\n").encode()
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.is_symlink():
+            raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+        try:
+            dir_fd = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    except Exception:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _origin(value: Any) -> str:
