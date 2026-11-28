@@ -57,7 +57,8 @@ def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
     main._service = None
-    response = TestClient(main.app).get("/health/ready")
+    with TestClient(main.app) as client:
+        response = client.get("/health/ready")
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
     assert response.json()["runtime_startup"] == {
