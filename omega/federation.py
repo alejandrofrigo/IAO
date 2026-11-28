@@ -195,46 +195,11 @@ class Node:
             if not isinstance(endpoint, str) or len(endpoint) > 2048:
                 raise ValueError("INVALID_PEER_ENDPOINT")
             try:
-                u = urlsplit(endpoint)
-                # Validación estricta (producción): HTTPS, puerto 443 o vacío,
-                # path exacto /fed/v1/message, sin credenciales ni query.
-                tls_test_mode = bool(os.environ.get("IAO_TLS_CA_FILE"))
-                # Permitir puerto no-443 en hosts de túnel reconocidos.
-                # En producción con dominio propio se mantiene la regla 443.
-                _TUNNEL_HOSTS = {"bore.pub", "loca.lt"}
-                _TUNNEL_SUFFIXES = (
-                    ".ngrok-free.app", ".ngrok.io",
-                    ".trycloudflare.com", ".loca.lt",
-                )
-                _host = (u.hostname or "").lower()
-                is_tunnel_host = (
-                    _host in _TUNNEL_HOSTS
-                    or any(_host.endswith(_sfx) for _sfx in _TUNNEL_SUFFIXES)
-                )
-                strict_valid = (
-                    u.scheme == "https" and bool(u.hostname)
-                    and not u.username and not u.password
-                    and (u.port is None or u.port == 443 or tls_test_mode or is_tunnel_host)
-                    and u.path == "/fed/v1/message"
-                    and not u.query and not u.fragment
-                )
-                # Salvaguarda de integración local (solo si el operador
-                # habilita explícitamente IAO_ALLOW_LOOPBACK_HTTP=1):
-                # permite HTTP en loopback y cualquier puerto, siempre que
-                # el path sea el esperado y no haya credenciales. Esta ruta
-                # NUNCA afecta peers externos: el host debe ser loopback.
-                loopback_valid = False
-                if (not strict_valid
-                        and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") == "1"
-                        and u.scheme in ("http", "https")
-                        and bool(u.hostname)
-                        and not u.username and not u.password
-                        and u.hostname.lower() in {"127.0.0.1", "::1", "localhost"}
-                        and u.path == "/fed/v1/message"
-                        and not u.query and not u.fragment):
-                    loopback_valid = True
-                valid = strict_valid or loopback_valid
-            except ValueError:
+                # Central transport policy accepts pinned public HTTPS, v3
+                # onion over Tor SOCKS5, and explicitly enabled loopback tests.
+                validate_message_endpoint(endpoint)
+                valid = True
+            except FederationTransportError:
                 valid = False
             if not valid:
                 raise ValueError("INVALID_PEER_ENDPOINT")
