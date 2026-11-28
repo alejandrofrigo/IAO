@@ -135,8 +135,9 @@ def test_interruption_after_tool_invocation_is_not_replayed(tmp_path, monkeypatc
     ))
 
     class ActiveAuthority:
-        def verify_primary_device_for_session_digest(self, *_args):
-            return True
+        @contextmanager
+        def authorize_tool_execution(self, *_args):
+            yield True
 
     worker = TaskWorker(
         store, registry, worker_id="fault-injection-worker",
