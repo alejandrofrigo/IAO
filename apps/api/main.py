@@ -24,7 +24,9 @@ async def _runtime_lifespan(_app):
             and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
         try:
             _get_service()
+            _ensure_autonomous_core()
         except Exception:
+            # Autonomous work is isolated from API liveness and local service.
             pass
     yield
 
@@ -33,6 +35,9 @@ app = FastAPI(title="IAO API", version="11.2.0", lifespan=_runtime_lifespan)
 _service = None
 _device_authority = None
 _federation_node = None
+_autonomous_core = None
+_autonomous_core_status = {"enabled": False, "running": False, "recovered_tasks": 0}
+_autonomous_core_lock = threading.Lock()
 _federation_lock = threading.Lock()
 _federation_worker_status = {"autojoin": False, "discovery": False, "external_network": False}
 _service_lock = threading.Lock()
@@ -52,6 +57,40 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-IAO-Device-Proof"],
 )
+
+
+def _ensure_autonomous_core():
+    """Start the persistent, read-only autonomous task worker when enabled."""
+    global _autonomous_core, _autonomous_core_status
+    enabled = os.environ.get("IAO_AUTONOMY_WORKER_ENABLED", "true").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        _autonomous_core_status = {
+            "enabled": False, "running": False, "recovered_tasks": 0,
+        }
+        return None
+    with _autonomous_core_lock:
+        if _autonomous_core is not None:
+            _autonomous_core_status = {
+                "enabled": True,
+                "running": bool(_autonomous_core.worker and _autonomous_core.worker.is_alive()),
+                "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+            }
+            return _autonomous_core
+        from omega.autonomous_core import AutonomousCore
+
+        state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+        core = AutonomousCore(state_dir / "autonomous-core")
+        recovered = core.recover_interrupted_tasks()
+        interval = max(10, min(
+            3600, int(os.environ.get("IAO_AUTONOMY_INTERVAL_SECONDS", "30"))
+        ))
+        core.start_worker(interval=interval)
+        _autonomous_core = core
+        _autonomous_core_status = {
+            "enabled": True, "running": bool(core.worker and core.worker.is_alive()),
+            "recovered_tasks": len(recovered),
+        }
+        return core
 
 
 def _get_device_authority():
@@ -299,6 +338,11 @@ def ready():
             "configured_unverified"
             if _get_service().model is not None
             else "not_configured"
+        ),
+        "autonomous_core": (
+            "running_read_only_worker"
+            if _autonomous_core_status.get("running") is True
+            else "disabled_or_unavailable"
         ),
     }
     return JSONResponse(status_code=200, content=payload)
