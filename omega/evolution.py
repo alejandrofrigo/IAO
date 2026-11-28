@@ -137,11 +137,17 @@ def submit(proposal: dict) -> dict:
         dest = folder / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
+    file_hashes = {
+        name: _sha(content.encode("utf-8"))
+        for name, content in clean["files"].items()
+    }
     metadata = {
         "id": proposal_id,
         "title": clean["title"],
         "checks": clean["checks"],
         "files": sorted(clean["files"]),
+        "file_hashes": file_hashes,
+        "proposal_hash": _sha(_canonical(clean)),
         "status": "PENDING_VERIFICATION",
         "created": time.time(),
     }
@@ -153,42 +159,103 @@ def submit(proposal: dict) -> dict:
     return metadata
 
 def evaluate(proposal_id: str) -> dict:
-    """Verifica sintaxis Python en staging y aprueba solo para revisión/staging."""
+    """Revalidate immutable proposal contents; never execute candidate code."""
     if not re.fullmatch(r"[0-9a-f]{16}", proposal_id):
         raise ValueError("Identificador inválido")
     ok, bad = verify_log()
     if not ok:
         raise RuntimeError(f"Registro de evolución no verificable en línea {bad}")
     folder = CANDIDATES / proposal_id
+    if folder.is_symlink() or not folder.is_dir():
+        raise FileNotFoundError("Directorio de propuesta inexistente o no seguro")
     meta_path = folder / "proposal.json"
-    if not meta_path.is_file():
-        raise FileNotFoundError("Propuesta inexistente")
+    if meta_path.is_symlink() or not meta_path.is_file():
+        raise FileNotFoundError("Metadatos de propuesta inexistentes o no seguros")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    files = meta.get("files")
+    hashes = meta.get("file_hashes")
+    if (not isinstance(files, list) or not files or len(files) > MAX_FILES
+            or not isinstance(hashes, dict)
+            or set(files) != set(hashes)
+            or meta.get("id") != proposal_id):
+        raise ValueError("MANIFEST_INVALID")
+    checks = list(meta.get("checks", []))
+    if not checks or any(item != "compileall" for item in checks):
+        raise ValueError("CHECK_POLICY_INVALID")
+
     failures = []
-    for name in meta["files"]:
+    total = 0
+    normalized = {}
+    for name in files:
         rel = _safe_path(name)
         src = folder / rel
-        if not src.is_file():
-            failures.append(f"Falta el archivo candidato: {name}")
+        # Reject symlinks at every candidate path component.
+        cursor = folder
+        for part in rel.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                failures.append(f"{name}: SYMLINK_REFUSED")
+                break
+        if name in {failure.split(":")[0] for failure in failures}:
             continue
+        if not src.is_file():
+            failures.append(f"{name}: MISSING_OR_NOT_REGULAR_FILE")
+            continue
+        data = src.read_bytes()
+        total += len(data)
+        if len(data) > MAX_FILE_BYTES or total > MAX_TOTAL_BYTES:
+            failures.append(f"{name}: SIZE_LIMIT_EXCEEDED")
+            continue
+        actual_hash = _sha(data)
+        if not isinstance(hashes.get(name), str) or actual_hash != hashes[name]:
+            failures.append(f"{name}: CONTENT_HASH_MISMATCH")
+            continue
+        content = data.decode("utf-8")
+        normalized[name] = content
         if rel.suffix == ".py":
             try:
-                compile(src.read_text(encoding="utf-8"), name, "exec")
-            except Exception as exc:
-                failures.append(f"{name}: {type(exc).__name__}: {exc}")
+                compile(content, name, "exec")
+            except (SyntaxError, ValueError, TypeError) as exc:
+                failures.append(f"{name}: SYNTAX_INVALID:{type(exc).__name__}")
+
+    clean = {
+        "title": meta.get("title"),
+        "files": normalized,
+        "checks": checks,
+    }
+    if len(normalized) == len(files):
+        if _sha(_canonical(clean)) != meta.get("proposal_hash"):
+            failures.append("PROPOSAL_HASH_MISMATCH")
+    else:
+        failures.append("PROPOSAL_INCOMPLETE")
+
     if failures:
         meta["status"] = "REJECTED"
         meta["failures"] = failures
+        meta["validation"] = {
+            "manifest_valid": False,
+            "content_hashes_valid": False,
+            "syntax_valid": False,
+            "candidate_code_executed": False,
+        }
         _record({"type": "PROPOSAL_REJECTED", "id": proposal_id,
                  "failures": failures})
     else:
         meta["status"] = "APPROVED_FOR_STAGING"
+        meta["validation"] = {
+            "manifest_valid": True,
+            "content_hashes_valid": True,
+            "syntax_valid": True,
+            "candidate_code_executed": False,
+        }
         meta["notice"] = (
-            "Aprobada por comprobaciones limitadas; no desplegada ni integrada. "
-            "Faltan pruebas funcionales, seguridad y revisión de integración."
+            "Solo integridad y sintaxis verificadas. No se ejecutó el candidato; "
+            "faltan pruebas funcionales, seguridad y revisión de integración. "
+            "No está autorizado para promoción ni despliegue."
         )
         _record({"type": "PROPOSAL_APPROVED_FOR_STAGING",
-                 "id": proposal_id, "files": meta["files"]})
+                 "id": proposal_id, "files": meta["files"],
+                 "validation": meta["validation"]})
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
                          encoding="utf-8")
     return meta
