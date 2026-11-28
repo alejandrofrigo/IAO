@@ -435,16 +435,15 @@ class PersistentPeerStoreTests(FedBase):
 
 
 
-def test_peer_contract_accepts_v3_onion_endpoint_without_auto_enrollment():
-    from omega.federation import Node
-    from pathlib import Path
-    import tempfile
+class OnionEndpointTests(FedBase):
+    def test_peer_contract_accepts_v3_onion_endpoint_without_auto_enrollment(self):
+        import tempfile
+        from pathlib import Path
 
-    with tempfile.TemporaryDirectory() as directory:
         node = Node(
             self.a.store, self.a.registry, key=self.a.key,
             clock=self.clock, served=self.a.served,
-            peer_store_path=Path(directory) / "onion-peers.json",
+            peer_store_path=Path(self.tmp.name) / "onion-peers.json",
         )
         contract = self.b.contract_for_self(["knowledge.search"])
         contract["endpoint"] = "http://" + "f" * 56 + ".onion/fed/v1/message"
