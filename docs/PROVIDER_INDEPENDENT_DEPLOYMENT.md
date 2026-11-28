@@ -17,12 +17,12 @@ No se debe almacenar en el repositorio una URL Quick Tunnel, una dirección IP d
 
 ## Backend: alternativa autocontrolada
 
-El backend se puede construir y ejecutar desde `deploy/Dockerfile` en infraestructura que controle el operador: un ordenador Linux siempre encendido, un servidor doméstico o un dispositivo Android con Termux compatible con Python. Esto evita depender de Cloudflare Workers y de un proveedor serverless.
+El backend API se construye desde el `Dockerfile` raíz (FastAPI/ASGI) y se ejecuta con `deploy/compose.yaml` en infraestructura que controle el operador: un ordenador Linux siempre encendido o un servidor propio. El Compose usa el contenedor API, no crea una base PostgreSQL desconectada, persiste `/var/lib/iao` en un volumen nombrado y publica el puerto solo en `127.0.0.1` para que un proxy TLS local pueda terminar HTTPS. El `deploy/Dockerfile` antiguo no es el destino de este Compose. Esto evita depender de Cloudflare Workers y de un proveedor serverless.
 
 Requisitos mínimos del backend:
-- proceso API persistente y accesible por HTTPS desde el navegador;
+- proceso API persistente y accesible por HTTPS desde el navegador a través de un proxy inverso TLS (Compose solo enlaza localhost);
 - volumen persistente y respaldado para `IAO_STATE_DIR` (base de datos, identidad de nodo, claves y auditoría);
-- secretos persistentes inyectados fuera del repositorio;
+- archivo `.env` local, no versionado, con `OMEGA_DEV_TOKEN_KEY` y `AUDIT_HMAC_KEY` de al menos 32 caracteres cada una; secretos persistentes inyectados fuera del repositorio;
 - TLS, proxy inverso y CORS limitado al origen real de Pages;
 - monitorización, copias de seguridad y restauración probada.
 
@@ -41,7 +41,7 @@ GitHub Actions es CI efímera, no un servidor persistente. No se debe desplegar 
 
 ## Estado de producción
 
-La existencia del Dockerfile o de un workflow verde no certifica el backend. El contrato de producción de IAO mantiene el worker bloqueado hasta satisfacer los controles de identidad, aislamiento, persistencia y validación E2E. La API actual también debe superar su propia cualificación de producción antes de exponerse públicamente.
+El Compose proporciona un modo de ejecución autocontrolado y persistencia local, no una configuración de producción aprobada: el runtime aún usa autenticación de desarrollo y la readiness informa `degraded`. La existencia del Dockerfile o de un workflow verde no certifica el backend. El contrato de producción de IAO mantiene el worker bloqueado hasta satisfacer los controles de identidad, aislamiento, persistencia y validación E2E. La API actual también debe superar su propia cualificación de producción antes de exponerse públicamente.
 
 ## Cambio de proveedor
 
