@@ -29,7 +29,7 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/live', timeout=3)"
+        - "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=3); d=json.load(r); assert d.get('status') == 'ready'; assert d.get('runtime_startup', {}).get('status') == 'started'"
       interval: 30s
       timeout: 5s
       retries: 3
