@@ -489,3 +489,45 @@ def test_signed_status_rejects_noncanonical_base64url_pad_bits(tmp_path):
 
     with pytest.raises(DeviceAuthorityError, match="INVALID_SIGNATURE"):
         authority.verify_status(proof, owner_subject="operator")
+
+
+def test_device_status_challenge_expires_at_exact_deadline(tmp_path, monkeypatch):
+    import omega.device_authority as device_authority_module
+
+    authority, private_key, device_id = _enrolled_authority(tmp_path)
+    challenge = authority.challenge(device_id, owner_subject="operator")
+    proof = _signed_status(private_key, device_id, challenge["nonce"])
+    fixed_now = int(time.time())
+    with authority._database() as db:
+        db.execute(
+            "UPDATE device_challenges SET expires_at=? WHERE nonce=?",
+            (fixed_now, challenge["nonce"]),
+        )
+    monkeypatch.setattr(device_authority_module.time, "time", lambda: fixed_now)
+
+    with pytest.raises(DeviceAuthorityError, match="CHALLENGE_EXPIRED_OR_REPLAYED"):
+        authority.verify_status(proof, owner_subject="operator")
+
+
+def test_device_request_challenge_expires_at_exact_deadline(tmp_path, monkeypatch):
+    import omega.device_authority as device_authority_module
+
+    authority, private_key, device_id = _enrolled_authority(tmp_path)
+    challenge = authority.challenge(device_id, owner_subject="operator")
+    digest = hashlib.sha256(b"deadline-bound-request").hexdigest()
+    proof = _signed_request(
+        private_key, device_id, challenge["nonce"], "POST", "/v1/tasks", digest
+    )
+    fixed_now = int(time.time())
+    with authority._database() as db:
+        db.execute(
+            "UPDATE device_challenges SET expires_at=? WHERE nonce=?",
+            (fixed_now, challenge["nonce"]),
+        )
+    monkeypatch.setattr(device_authority_module.time, "time", lambda: fixed_now)
+
+    with pytest.raises(DeviceAuthorityError, match="CHALLENGE_EXPIRED_OR_REPLAYED"):
+        authority.verify_request(
+            proof, method="POST", path="/v1/tasks",
+            request_digest=digest, owner_subject="operator",
+        )
