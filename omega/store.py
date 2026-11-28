@@ -523,6 +523,68 @@ class Store:
             self.db.execute("INSERT INTO tool_execution VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (str(uuid.uuid4()), task_id, name, version, status, input_digest, output_digest, error_code, started, finished))
 
+    def finalize_claimed_tool_execution(
+        self, task_id: str, worker_id: str, owner: str, state: str,
+        result: dict[str, Any], name: str, version: str, input_digest: str,
+        output_digest: str, started: str, finished: str,
+    ) -> bool:
+        """Atomically persist a completed tool and its fenced terminal task state.
+
+        If the lease expired while the tool ran, preserve the truthful SUCCEEDED
+        execution record but fail the task with an explicit uncommitted-result
+        marker. Never turn a stale completion into a successful task.
+        """
+        if state not in {"SUCCEEDED", "FAILED"}:
+            raise ValueError("INVALID_TOOL_COMPLETION_STATE")
+        stale_result = {
+            "decision": "INTERRUPTED",
+            "error": "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+        }
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                now = now_iso()
+                row = self.db.execute(
+                    "SELECT state,lease_owner,lease_until FROM task WHERE id=? AND owner=?",
+                    (task_id, owner),
+                ).fetchone()
+                lease_valid = bool(
+                    row is not None
+                    and row["state"] in ("RUNNING", "VERIFYING")
+                    and row["lease_owner"] == worker_id
+                    and row["lease_until"] is not None
+                    and row["lease_until"] > now
+                )
+                if lease_valid:
+                    changed = self.db.execute(
+                        "UPDATE task SET state=?,result_json=?,updated_at=?,"
+                        "lease_owner=NULL,lease_until=NULL WHERE id=? AND owner=? "
+                        "AND state IN ('RUNNING','VERIFYING') AND lease_owner=? AND lease_until>?",
+                        (state, json.dumps(result, sort_keys=True), now,
+                         task_id, owner, worker_id, now),
+                    ).rowcount
+                    lease_valid = changed == 1
+                elif row is not None and row["state"] in ("RUNNING", "VERIFYING") and row["lease_owner"] == worker_id:
+                    self.db.execute(
+                        "UPDATE task SET state='FAILED',result_json=?,updated_at=?,"
+                        "lease_owner=NULL,lease_until=NULL WHERE id=? AND owner=? "
+                        "AND state IN ('RUNNING','VERIFYING') AND lease_owner=?",
+                        (json.dumps(stale_result, sort_keys=True), now,
+                         task_id, owner, worker_id),
+                    )
+                self.db.execute(
+                    "INSERT INTO tool_execution VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), task_id, name, version, "SUCCEEDED",
+                     input_digest, output_digest,
+                     None if lease_valid else "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+                     started, finished),
+                )
+                self.db.execute("COMMIT")
+                return lease_valid
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+
     def tool_executions(self, task_id: str) -> list[dict[str, Any]]:
         with self.lock:
             return [dict(r) for r in self.db.execute("SELECT * FROM tool_execution WHERE task_id=?", (task_id,)).fetchall()]
