@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
@@ -7,11 +8,11 @@ import re
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+from omega.federation_transport import fetch_public_json
 
 _INTERVAL = max(300, int(os.environ.get("IAO_FED_DISCOVERY_INTERVAL", "1800")))
 _THREAD = None
@@ -34,20 +35,45 @@ def _now():
 
 
 def _request_json(url, timeout=12):
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json, application/json",
-            "User-Agent": "IAO-Federation-Discovery/1.0",
-        },
+    """Fetch bounded public JSON through the pinned federation transport."""
+    return fetch_public_json(
+        url, timeout=min(float(timeout), 30.0), max_bytes=1024 * 1024
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        if response.status != 200:
-            raise RuntimeError("HTTP_" + str(response.status))
-        raw = response.read(1024 * 1024 + 1)
-    if len(raw) > 1024 * 1024:
-        raise ValueError("RESPONSE_TOO_LARGE")
-    return json.loads(raw.decode("utf-8"))
+
+
+def _request_manifest(full_name, branch, path):
+    """Read a repository manifest through GitHub's JSON Contents API.
+
+    The Contents API returns base64 in application/json, allowing the same
+    pinned HTTPS transport to protect both discovery and manifest retrieval.
+    This avoids raw.githubusercontent.com's text/plain response path and
+    urllib's ambient proxy/redirect behavior.
+    """
+    if not isinstance(full_name, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name
+    ):
+        raise ValueError("INVALID_REPOSITORY_NAME")
+    if not isinstance(branch, str) or not branch or len(branch) > 255:
+        raise ValueError("INVALID_DEFAULT_BRANCH")
+    encoded_path = urllib.parse.quote(path, safe="")
+    url = (
+        "https://api.github.com/repos/" + full_name + "/contents/"
+        + encoded_path + "?" + urllib.parse.urlencode({"ref": branch})
+    )
+    result = _request_json(url)
+    if (
+        not isinstance(result, dict)
+        or result.get("encoding") != "base64"
+        or not isinstance(result.get("content"), str)
+    ):
+        raise ValueError("INVALID_GITHUB_CONTENTS_RESPONSE")
+    try:
+        raw = base64.b64decode(result["content"], validate=True)
+        if len(raw) > 1024 * 1024:
+            raise ValueError("MANIFEST_TOO_LARGE")
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("INVALID_FEDERATION_MANIFEST") from exc
 
 
 def _append(state, event):
@@ -116,13 +142,8 @@ def _inspect_repo(repo, state):
     })
 
     for path in MANIFEST_PATHS:
-        raw_url = (
-            "https://raw.githubusercontent.com/"
-            + full_name + "/" + urllib.parse.quote(branch, safe="")
-            + "/" + path
-        )
         try:
-            manifest = _request_json(raw_url)
+            manifest = _request_manifest(full_name, branch, path)
         except Exception:
             continue
 
