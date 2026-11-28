@@ -45,7 +45,7 @@ class _ClaimedTaskStore:
     def finalize_claimed_tool_execution(self, *args, **kwargs):
         self.final_state = args[3]
         self.final_result = args[4]
-        self.executions.append((args, {}))
+        self.executions.append((args, kwargs))
         return True
 
 
@@ -311,6 +311,23 @@ def test_worker_rejects_invalid_timeout_budget_before_tool_execution(timeout_val
     assert store.final_result["error"] == "INVALID_TOOL_TIMEOUT_POLICY"
 
 
+def test_invalid_tool_input_is_finalized_atomically_as_denied():
+    worker, store, calls = _worker(_ActiveAuthority())
+    spec = worker.registry.get("knowledge.search")
+    spec.validate_input = lambda _value: (_ for _ in ()).throw(ValueError("invalid"))
+
+    assert worker.run_once() is True
+
+    assert calls == []
+    assert len(store.executions) == 1
+    args, kwargs = store.executions[0]
+    assert args[3] == "FAILED"
+    assert kwargs["execution_status"] == "DENIED"
+    assert kwargs["execution_error_code"] == "INVALID_INPUT"
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "INVALID_INPUT"
+
+
 def test_worker_rechecks_remaining_lease_after_authority_gate():
     worker, store, calls = _worker(_ActiveAuthority())
     store.task["lease_until"] = (
@@ -320,8 +337,9 @@ def test_worker_rechecks_remaining_lease_after_authority_gate():
     assert worker.run_once() is True
     assert calls == []
     assert store.executions
-    assert store.executions[0][0][3] == "DENIED"
-    assert store.executions[0][0][6] == "LEASE_EXPIRING"
+    assert store.executions[0][0][3] == "FAILED"
+    assert store.executions[0][1]["execution_status"] == "DENIED"
+    assert store.executions[0][1]["execution_error_code"] == "LEASE_EXPIRING"
     assert store.final_state == "FAILED"
     assert store.final_result["error"] == "WORKER_LEASE_EXPIRING_BEFORE_TOOL"
 
