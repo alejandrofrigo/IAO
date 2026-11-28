@@ -418,3 +418,20 @@ def test_outbound_https_federation_requires_client_certificate(monkeypatch):
         transport.post_federation_json(
             "https://peer.example.org/fed/v1/message", {"signed": True}
         )
+
+
+def test_tls_peer_certificate_node_id_requires_single_valid_uri_san():
+    node_id = "0123456789abcdef"
+    assert transport._certificate_node_id({
+        "subjectAltName": (("URI", f"urn:iao:node:{node_id}"),)
+    }) == node_id
+    assert transport._certificate_node_id({
+        "subjectAltName": (
+            ("URI", f"urn:iao:node:{node_id}"),
+            ("URI", f"urn:iao:node:{node_id}"),
+        )
+    }) is None
+    assert transport._certificate_node_id({
+        "subjectAltName": (("DNS", f"urn:iao:node:{node_id}"),)
+    }) is None
+    assert transport._certificate_node_id(None) is None
