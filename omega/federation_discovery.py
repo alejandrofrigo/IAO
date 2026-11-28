@@ -68,7 +68,8 @@ def _request_manifest(full_name, branch, path):
     ):
         raise ValueError("INVALID_GITHUB_CONTENTS_RESPONSE")
     try:
-        raw = base64.b64decode(result["content"], validate=True)
+        encoded = "".join(result["content"].split())
+        raw = base64.b64decode(encoded, validate=True)
         if len(raw) > 1024 * 1024:
             raise ValueError("MANIFEST_TOO_LARGE")
         return json.loads(raw.decode("utf-8"))
