@@ -372,7 +372,7 @@ def _request_json(
             if len(raw) > max_bytes:
                 raise FederationTransportError("RESPONSE_TOO_LARGE")
             try:
-                decoded = _json_without_duplicate_keys(raw.decode("utf-8").encode("utf-8"))
+                decoded = _json_without_duplicate_keys(raw)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
             return response.status, decoded
