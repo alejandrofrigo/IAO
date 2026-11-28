@@ -18,8 +18,8 @@ def _b64(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
 
-def _unb64(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+def _unb64(s: str) -> str:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4)).decode("utf-8")
 
 
 def issue_token(key: str, subject: str, scopes: list[str], ttl: int = 3600, now: float | None = None) -> str:
@@ -29,19 +29,42 @@ def issue_token(key: str, subject: str, scopes: list[str], ttl: int = 3600, now:
     return f"{payload}.{sig}"
 
 
+def _reject_duplicate_claims(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError("duplicate token claim")
+        result[name] = value
+    return result
+
+
 def verify_token(key: str, token: str, now: float | None = None) -> Principal | None:
     try:
-        payload, sig = token.split(".", 1)
+        if not isinstance(key, str) or not key or not isinstance(token, str) or len(token) > 8192:
+            return None
+        payload, sig = token.split(".")
         expected = _b64(hmac.new(key.encode(), payload.encode(), hashlib.sha256).digest())
         if not hmac.compare_digest(sig, expected):
             return None
-        data = json.loads(_unb64(payload))
-        # JWT-style exp is exclusive: a token is invalid at the exact expiry instant.
-        if int(data["exp"]) <= (time.time() if now is None else now):
+        data = json.loads(_unb64(payload), object_pairs_hook=_reject_duplicate_claims)
+        if not isinstance(data, dict) or set(data) != {"sub", "scopes", "exp"}:
             return None
+        exp = data["exp"]
         sub = data["sub"]
-        if not isinstance(sub, str) or not sub:
+        scopes = data["scopes"]
+        # Reject bool/string coercion: expiry must be a JSON integer and is exclusive.
+        if isinstance(exp, bool) or not isinstance(exp, int):
             return None
-        return Principal(sub, frozenset(str(s) for s in data["scopes"]))
-    except Exception:
+        if exp <= (time.time() if now is None else now):
+            return None
+        if not isinstance(sub, str) or not sub or len(sub) > 256:
+            return None
+        if (
+            not isinstance(scopes, list)
+            or len(scopes) > 64
+            or any(not isinstance(scope, str) or not scope or len(scope) > 128 for scope in scopes)
+        ):
+            return None
+        return Principal(sub, frozenset(scopes))
+    except (ValueError, TypeError, KeyError, UnicodeError, json.JSONDecodeError):
         return None
