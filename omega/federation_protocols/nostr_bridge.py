@@ -74,6 +74,9 @@ def _ensure_bridge_key() -> Ed25519PrivateKey:
         try:
             os.link(temporary, BRIDGE_KEY)
         except FileExistsError:
+            if BRIDGE_KEY.is_symlink() or not BRIDGE_KEY.is_file():
+                raise RuntimeError("NOSTR_BRIDGE_KEY_PATH_REFUSED")
+            os.chmod(BRIDGE_KEY, 0o600)
             return serialization.load_pem_private_key(BRIDGE_KEY.read_bytes(), password=None)
         directory_fd = os.open(BRIDGE_DIR, os.O_RDONLY)
         try:
