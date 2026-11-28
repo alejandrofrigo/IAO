@@ -119,8 +119,8 @@ def test_service_supplied_knowledge_context_is_preserved():
     assert model.calls[0][0]["role"] == "system"
 
 def test_fenced_json_plan_is_normalized_without_changing_the_contract():
-    raw = "json\\n" + json.dumps(VALID_PLAN)
-    assert CognitiveEngine._parse_plan("```json\\n" + json.dumps(VALID_PLAN) + "\\n```") == VALID_PLAN
+    raw = "json\n" + json.dumps(VALID_PLAN)
+    assert CognitiveEngine._parse_plan("```json\n" + json.dumps(VALID_PLAN) + "\n```") == VALID_PLAN
     assert CognitiveEngine._parse_plan(raw) == VALID_PLAN
 
 
