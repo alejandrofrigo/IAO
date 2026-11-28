@@ -703,6 +703,8 @@ class Node:
                 return {"ok": False, "error": "PEER_UNREACHABLE"}
             if exc.code == "TLS_HANDSHAKE_FAILED":
                 return {"ok": False, "error": "TLS_HANDSHAKE_FAILED"}
+            if exc.code == "TLS_SERVER_NODE_ID_MISMATCH":
+                return {"ok": False, "error": "TLS_NODE_ID_MISMATCH"}
             return {"ok": False, "error": "TRANSPORT_BLOCKED"}
 
         if status != 200:
