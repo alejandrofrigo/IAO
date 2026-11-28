@@ -905,7 +905,7 @@ class OmegaService:
                     )
                     memory_parts = []
                     remaining = 8000
-                    for item in memories[:8]:
+                    for item in memories[-8:]:
                         value = item.get("value")
                         mtype = item.get("mtype")
                         if not isinstance(value, str) or not value.strip():
