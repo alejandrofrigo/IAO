@@ -50,6 +50,11 @@ def _issue_certificate(
         sans.append(x509.DNSName("localhost"))
     if node_id is not None:
         sans.append(x509.UniformResourceIdentifier(f"urn:iao:node:{node_id}"))
+    extended_usage = (
+        x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH])
+        if server
+        else x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH])
+    )
     builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -60,6 +65,7 @@ def _issue_certificate(
         .not_valid_after(now + timedelta(days=1))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.SubjectAlternativeName(sans), critical=False)
+        .add_extension(extended_usage, critical=False)
     )
     cert = builder.sign(ca_key, hashes.SHA256())
     cert_path, key_path = root / f"{name}.crt", root / f"{name}.key"
