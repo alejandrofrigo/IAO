@@ -304,6 +304,20 @@ def live() -> dict[str, str]:
     return {"status": "live"}
 
 
+def _network_discovery_health():
+    state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+    try:
+        from omega.external_network import network_status
+        return network_status(state_dir / "external-network")
+    except Exception as exc:
+        return {
+            "status": "degraded",
+            "reason": type(exc).__name__,
+            "external_connectivity_confirmed": False,
+            "cryptographic_trust_confirmed": False,
+        }
+
+
 @app.get("/health/ready")
 def ready():
     try:
@@ -344,6 +358,7 @@ def ready():
             if _autonomous_core_status.get("running") is True
             else "disabled_or_unavailable"
         ),
+        "network_discovery": _network_discovery_health(),
     }
     return JSONResponse(status_code=200, content=payload)
 
