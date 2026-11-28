@@ -25,9 +25,18 @@ class NodeFactoryError(RuntimeError):
     """Safe, expected node-factory failure."""
 
 
+def _reject_symlink_components(path: Path) -> None:
+    """Reject symlinks in every existing path component, not only the leaf."""
+    absolute = path.absolute()
+    for component in reversed((absolute, *absolute.parents)):
+        if component.is_symlink():
+            raise NodeFactoryError("NODE_FACTORY_SYMLINK_REFUSED")
+
+
 def _write_json_private(path: Path, payload: dict[str, Any]) -> None:
+    _reject_symlink_components(path.parent)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if path.parent.is_symlink() or path.is_symlink():
+    if path.is_symlink():
         raise NodeFactoryError("NODE_FACTORY_SYMLINK_REFUSED")
     fd, temp_name = tempfile.mkstemp(prefix=".iao-node-", dir=str(path.parent))
     try:
@@ -49,8 +58,7 @@ def _write_json_private(path: Path, payload: dict[str, Any]) -> None:
 
 def _safe_output_dir(value: str | Path) -> Path:
     output = Path(value).expanduser()
-    if output.exists() and output.is_symlink():
-        raise NodeFactoryError("NODE_FACTORY_OUTPUT_SYMLINK_REFUSED")
+    _reject_symlink_components(output)
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
     if output.is_symlink() or not output.is_dir():
         raise NodeFactoryError("NODE_FACTORY_OUTPUT_PATH_REFUSED")
@@ -83,7 +91,6 @@ def create_nodes(
     root = _safe_output_dir(output_dir)
     created: list[dict[str, str]] = []
     for _ in range(count):
-        # Create the key in a unique private workspace. Never export it to Git.
         nonce = secrets.token_hex(4)
         staging = root / (".staging-" + nonce)
         staging.mkdir(mode=0o700)
@@ -144,7 +151,6 @@ def create_nodes(
                 "directory": str(node_dir),
             })
         except Exception:
-            # Preserve no partial staging workspace after a failed creation.
             if staging.exists() and not staging.is_symlink():
                 import shutil
                 shutil.rmtree(staging, ignore_errors=True)
@@ -155,8 +161,7 @@ def create_nodes(
 def inspect_nodes(output_dir: str | Path = ".state/node-factory") -> list[dict[str, str]]:
     """Return validated public manifest summaries; never reads private keys."""
     root = Path(output_dir).expanduser()
-    if root.is_symlink():
-        raise NodeFactoryError("NODE_FACTORY_OUTPUT_SYMLINK_REFUSED")
+    _reject_symlink_components(root)
     if not root.exists():
         return []
     if not root.is_dir():
@@ -166,9 +171,14 @@ def inspect_nodes(output_dir: str | Path = ".state/node-factory") -> list[dict[s
     for node_dir in sorted(root.glob("node-*")):
         if node_dir.is_symlink() or not node_dir.is_dir():
             continue
+        identity_dir = node_dir / "identity"
         manifest_path = node_dir / "manifest.json"
-        public_path = node_dir / "identity" / "public.json"
-        if manifest_path.is_symlink() or public_path.is_symlink():
+        public_path = identity_dir / "public.json"
+        if (
+            identity_dir.is_symlink()
+            or manifest_path.is_symlink()
+            or public_path.is_symlink()
+        ):
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
