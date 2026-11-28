@@ -305,3 +305,30 @@ def test_nostr_authorization_requires_verified_event_and_hex_author(tmp_path):
     assert result["discovered"] == 0
     registry = json.loads((tmp_path / "registry.json").read_text())
     assert registry["protocol_peers"] == {}
+
+
+def test_network_status_exposes_counts_without_peer_identifiers_or_endpoints(tmp_path):
+    from omega.external_network import network_status
+
+    network = ExternalNetwork(tmp_path, [Source([record()])])
+    network.run_cycle()
+    status = network_status(tmp_path)
+    assert status["status"] == "observed"
+    assert status["candidate_count"] == 1
+    assert status["p2p_peer_count"] == 0
+    assert status["external_connectivity_confirmed"] is False
+    assert status["cryptographic_trust_confirmed"] is False
+    rendered = json.dumps(status)
+    assert "node-00000001" not in rendered
+    assert "node.example.org" not in rendered
+
+
+def test_network_status_fails_closed_on_registry_symlink(tmp_path):
+    from omega.external_network import network_status
+
+    target = tmp_path / "other.json"
+    target.write_text('{"schema":1,"candidates":{}}')
+    (tmp_path / "registry.json").symlink_to(target)
+    status = network_status(tmp_path)
+    assert status["status"] == "restricted"
+    assert status["reason"] == "REGISTRY_SYMLINK_REFUSED"
