@@ -741,6 +741,15 @@ class FedServer:
 
         self.httpd = ThreadingHTTPServer((host, port), H)
         if ssl_context is not None:
+            # A TLS listener without mandatory client certificates is not an
+            # authenticated federation transport. Fail closed at construction.
+            if (
+                not isinstance(ssl_context, ssl.SSLContext)
+                or ssl_context.protocol != ssl.PROTOCOL_TLS_SERVER
+                or ssl_context.verify_mode != ssl.CERT_REQUIRED
+            ):
+                self.httpd.server_close()
+                raise ValueError("FEDERATION_MTLS_CLIENT_CERT_REQUIRED")
             self.httpd.socket = ssl_context.wrap_socket(
                 self.httpd.socket, server_side=True
             )
