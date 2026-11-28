@@ -6,8 +6,6 @@ import hashlib
 import json
 import secrets
 import sys
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -21,14 +19,7 @@ TIMEOUT = 8.0
 
 sys.path.insert(0, str(ROOT))
 from omega.federation import verify_identity_challenge  # noqa: E402
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-OPENER = urllib.request.build_opener(NoRedirect())
+from omega.federation_transport import fetch_public_json, post_public_json  # noqa: E402
 
 
 def sha(path: Path) -> str:
@@ -89,24 +80,29 @@ def load_nodes() -> dict:
 
 
 def request_json(url: str, method: str = "GET", body: dict | None = None) -> dict:
-    data = None if body is None else json.dumps(
-        body, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, method=method,
-        headers={"Accept": "application/json",
-                 "Content-Type": "application/json"},
-    )
-    with OPENER.open(req, timeout=TIMEOUT) as response:
-        if not response.geturl().startswith("https://"):
-            raise ValueError("HTTPS_REDIRECT_REFUSED")
-        raw = response.read(MAX_RESPONSE + 1)
-        if len(raw) > MAX_RESPONSE:
-            raise ValueError("RESPONSE_TOO_LARGE")
-        value = json.loads(raw.decode("utf-8"))
-        if not isinstance(value, dict):
-            raise ValueError("INVALID_JSON_OBJECT")
-        return value
+    """Use the federation transport: pinned public DNS, TLS hostname checks,
+    no redirects/proxies, bounded JSON responses, and HTTPS-only requests.
+    """
+    if method == "GET":
+        if body is not None:
+            raise ValueError("GET_BODY_NOT_ALLOWED")
+        value = fetch_public_json(
+            url, timeout=TIMEOUT, max_bytes=MAX_RESPONSE
+        )
+    elif method == "POST":
+        if not isinstance(body, dict):
+            raise ValueError("POST_OBJECT_REQUIRED")
+        status, value = post_public_json(
+            url, body, timeout=TIMEOUT, max_bytes=MAX_RESPONSE
+        )
+        if status != 200:
+            raise ValueError("FEDERATION_HTTP_STATUS_" + str(status))
+    else:
+        raise ValueError("FEDERATION_METHOD_NOT_ALLOWED")
+
+    if not isinstance(value, dict):
+        raise ValueError("INVALID_JSON_OBJECT")
+    return value
 
 
 def verify_node(node: dict) -> dict:
@@ -180,13 +176,6 @@ def verify_node(node: dict) -> dict:
         })
         return result
 
-    except urllib.error.HTTPError as exc:
-        result.update({"verdict": "HTTP_ERROR", "http_status": exc.code})
-    except urllib.error.URLError as exc:
-        result.update({
-            "verdict": "UNREACHABLE",
-            "error_class": type(exc.reason).__name__,
-        })
     except Exception as exc:
         result.update({
             "verdict": "FAILED",
