@@ -333,6 +333,36 @@ def live() -> dict[str, str]:
     return {"status": "live"}
 
 
+def _autonomous_core_health():
+    """Report live worker and bounded queue metadata without exposing task payloads."""
+    core = _autonomous_core
+    if core is None:
+        return {
+            "status": "disabled_or_unavailable",
+            "worker_running": False,
+            "task_count": 0,
+            "task_states": {},
+            "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+        }
+    try:
+        snapshot = core.status()
+        running = bool(snapshot.get("worker_running"))
+        return {
+            "status": "running_read_only" if running else "worker_stopped",
+            "worker_running": running,
+            "task_count": snapshot.get("task_count", 0),
+            "task_states": snapshot.get("task_states", {}),
+            "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "worker_running": False,
+            "error_type": type(exc).__name__,
+            "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+        }
+
+
 def _network_discovery_health():
     state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
     try:
@@ -385,11 +415,7 @@ def ready():
             if _get_service().model is not None
             else "not_configured"
         ),
-        "autonomous_core": (
-            "running_read_only_worker"
-            if _autonomous_core_status.get("running") is True
-            else "disabled_or_unavailable"
-        ),
+        "autonomous_core": _autonomous_core_health(),
         "network_discovery": _network_discovery_health(),
     }
     return JSONResponse(status_code=200, content=payload)
