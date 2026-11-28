@@ -27,3 +27,94 @@ def test_audit_created():
         core.submit("capability_scan")
         core.cycle()
         assert Path(tmp, "events.jsonl").exists()
+
+
+def test_maintenance_scheduler_enqueues_deduplicated_periodic_work():
+    from datetime import datetime, timedelta, timezone
+
+    with tempfile.TemporaryDirectory() as tmp:
+        core = AutonomousCore(tmp)
+        now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+        first = core.schedule_maintenance(now)
+        assert len(first) == 3
+        assert core.schedule_maintenance(now + timedelta(minutes=1)) == []
+        data = __import__("json").loads(core.tasks_path.read_text("utf-8"))
+        assert {task["kind"] for task in data["tasks"]} == {
+            "self_check", "capability_scan", "improvement_plan",
+        }
+        assert all(task["source"] == "IAO_MAINTENANCE_SCHEDULER" for task in data["tasks"])
+
+
+def test_maintenance_scheduler_respects_independent_intervals():
+    from datetime import datetime, timedelta, timezone
+    import json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        core = AutonomousCore(tmp)
+        now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+        core.schedule_maintenance(now)
+        with core.lock:
+            data = json.loads(core.tasks_path.read_text("utf-8"))
+            for task in data["tasks"]:
+                task["status"] = "COMPLETED"
+            core._save(data)
+        due = core.schedule_maintenance(now + timedelta(hours=1, seconds=1))
+        assert len(due) == 1
+        data = json.loads(core.tasks_path.read_text("utf-8"))
+        added = next(task for task in data["tasks"] if task["id"] == due[0])
+        assert added["kind"] == "self_check"
+
+
+def test_maintenance_scheduler_rejects_naive_clock():
+    from datetime import datetime
+
+    with tempfile.TemporaryDirectory() as tmp:
+        core = AutonomousCore(tmp)
+        try:
+            core.schedule_maintenance(datetime(2026, 11, 27, 12, 0))
+        except Exception as exc:
+            assert "SCHEDULER_TIME" in str(exc)
+        else:
+            raise AssertionError("naive scheduler time accepted")
+
+
+def test_maintenance_scheduler_bounds_terminal_task_history():
+    import json
+    from datetime import datetime, timezone
+
+    with tempfile.TemporaryDirectory() as tmp:
+        core = AutonomousCore(tmp)
+        now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+        with core.lock:
+            data = json.loads(core.tasks_path.read_text("utf-8"))
+            for index in range(1005):
+                data["tasks"].append({
+                    "id": f"finished-{index}", "kind": "self_check",
+                    "status": "COMPLETED", "updated_at": f"2026-01-{(index % 28) + 1:02d}",
+                })
+            data["tasks"].append({
+                "id": "still-active", "kind": "capability_scan",
+                "status": "RUNNING", "updated_at": now.isoformat(),
+            })
+            core._save(data)
+        core.schedule_maintenance(now)
+        data = json.loads(core.tasks_path.read_text("utf-8"))
+        finished = [task for task in data["tasks"] if task.get("status") == "COMPLETED"]
+        assert len(finished) == 1000
+        assert any(task.get("id") == "still-active" for task in data["tasks"])
+
+
+def test_improvement_plan_reports_repository_gaps_without_mutating_code():
+    with tempfile.TemporaryDirectory() as tmp:
+        core = AutonomousCore(tmp)
+        before = Path("omega/autonomous_core.py").read_bytes()
+        report = core._build_improvement_plan()
+        after = Path("omega/autonomous_core.py").read_bytes()
+
+        assert report["status"] == "READ_ONLY_REPOSITORY_SCAN"
+        assert report["module_count"] > 0
+        assert report["test_file_count"] > 0
+        assert report["code_changes_applied"] is False
+        assert report["candidate_code_executed"] is False
+        assert "Heuristic filename mapping" in report["coverage_interpretation"]
+        assert before == after

@@ -1,0 +1,111 @@
+name: IAO node factory safety and batch production
+
+on:
+  pull_request:
+    paths:
+      - "omega/node_factory.py"
+      - "omega/federation_identity.py"
+      - "tools/iao_node_factory.py"
+      - "tests/test_node_factory.py"
+      - ".github/workflows/node-factory.yml"
+  push:
+    branches:
+      - "codex/iao-node-factory-20261127"
+    paths:
+      - "omega/node_factory.py"
+      - "omega/federation_identity.py"
+      - "tools/iao_node_factory.py"
+      - "tests/test_node_factory.py"
+      - ".github/workflows/node-factory.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  factory-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install minimal test dependencies
+        run: python -m pip install "cryptography==44.0.0" "pytest==8.3.4"
+      - name: Compile factory and identity modules
+        run: python -m compileall -q omega/node_factory.py omega/federation_identity.py tools/iao_node_factory.py
+      - name: Run factory safety tests
+        run: python -m pytest -q tests/test_node_factory.py
+
+  produce-node-batch:
+    needs: factory-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install factory runtime dependency
+        run: python -m pip install "cryptography==44.0.0"
+      - name: Generate and verify three isolated node workspaces
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from omega.node_factory import create_nodes, inspect_nodes
+
+          output = Path(".state/node-factory-batch")
+          created = create_nodes(3, output_dir=output, role="worker")
+          inspected = inspect_nodes(output)
+          assert len(created) == 3
+          assert len(inspected) == 3
+          assert len({node["node_id"] for node in inspected}) == 3
+
+          public_results = []
+          for node in inspected:
+              root = Path(node["directory"])
+              manifest = json.loads((root / "manifest.json").read_text())
+              identity = json.loads((root / "identity/public.json").read_text())
+              key_path = root / "identity/private.key"
+              assert key_path.is_file()
+              assert key_path.stat().st_mode & 0o777 == 0o600
+              assert manifest["status"] == "CREATED_UNENROLLED"
+              assert manifest["authority"] == "NONE"
+              assert manifest["capabilities"] == []
+              assert manifest["endpoint"] is None
+              public_results.append({
+                  "node_id": identity["node_id"],
+                  "role": manifest["role"],
+                  "status": manifest["status"],
+                  "authority": manifest["authority"],
+                  "capabilities": manifest["capabilities"],
+                  "endpoint": manifest["endpoint"],
+                  "private_key_in_artifact": False,
+                  "deployed": False,
+              })
+
+          report = {
+              "schema": 1,
+              "factory": "IAO",
+              "result": "BATCH_CREATED_AND_VERIFIED",
+              "count": len(public_results),
+              "runner": "ephemeral-github-actions",
+              "deployment_status": "NOT_DEPLOYED_EPHEMERAL_RUNNER",
+              "federation_enrollment": "BLOCKED_PENDING_TRUSTED_TRANSPORT_ATTESTATION",
+              "nodes": public_results,
+          }
+          Path("iao-node-factory-result.json").write_text(
+          json.dumps(report, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(report, indent=2))
+          PY
+      - name: Publish sanitized factory result
+        uses: actions/upload-artifact@v4
+        with:
+          name: iao-node-factory-result-${{ github.run_id }}
+          path: iao-node-factory-result.json
+          if-no-files-found: error
+          retention-days: 14

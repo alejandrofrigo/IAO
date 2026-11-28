@@ -1,0 +1,17 @@
+# Build-time dependency installation; candidate execution is offline and isolated.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /opt/iao
+COPY pyproject.toml README.md ./
+COPY apps ./apps
+COPY omega ./omega
+COPY docs/corpus ./knowledge
+
+RUN python -m pip install --no-cache-dir '.[dev]'
+
+WORKDIR /workspace
+USER 65534:65534

@@ -4,6 +4,7 @@ Peers are untrusted for results: responses are signature-checked and treated as 
 import ssl
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import threading
@@ -43,6 +44,63 @@ def _b64(b: bytes) -> str:
 def node_id_of(pub_raw: bytes) -> str:
     return hashlib.sha256(pub_raw).hexdigest()[:16]
 
+def create_federation_server_ssl_context(
+    certificate_file: str | Path,
+    private_key_file: str | Path,
+    client_ca_file: str | Path,
+) -> ssl.SSLContext:
+    """Build a fail-closed TLS 1.2+ server context requiring a trusted client cert."""
+    paths = (
+        (Path(certificate_file), False),
+        (Path(private_key_file), True),
+        (Path(client_ca_file), False),
+    )
+    for path, is_private in paths:
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("FEDERATION_TLS_FILE_REFUSED")
+            mode = path.stat().st_mode & 0o777
+        except OSError as exc:
+            raise ValueError("FEDERATION_TLS_FILE_REFUSED") from exc
+        if is_private and mode & 0o077:
+            raise ValueError("FEDERATION_TLS_PRIVATE_KEY_PERMISSIONS_TOO_OPEN")
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(
+            certfile=str(paths[0][0]), keyfile=str(paths[1][0])
+        )
+        context.load_verify_locations(cafile=str(paths[2][0]))
+        context.verify_mode = ssl.CERT_REQUIRED
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        raise ValueError("FEDERATION_TLS_CONFIGURATION_INVALID") from exc
+    return context
+
+
+def _peer_certificate_node_id(certificate: dict[str, Any] | None) -> str | None:
+    """Return the single IAO node identity asserted by a verified TLS peer cert."""
+    if not isinstance(certificate, dict):
+        return None
+    names = certificate.get("subjectAltName")
+    if not isinstance(names, tuple):
+        return None
+    identities = [
+        value[len("urn:iao:node:"):]
+        for kind, value in names
+        if kind == "URI"
+        and isinstance(value, str)
+        and value.startswith("urn:iao:node:")
+    ]
+    if len(identities) != 1:
+        return None
+    identity = identities[0]
+    if (
+        len(identity) != 16
+        or any(char not in "0123456789abcdef" for char in identity)
+    ):
+        return None
+    return identity
+
 
 def _sign(key: Ed25519PrivateKey, env: dict[str, Any]) -> dict[str, Any]:
     return {**env, "sig": _b64(key.sign(canonical_json(env)))}
@@ -56,6 +114,19 @@ def _verify(pub_raw: bytes, env: dict[str, Any]) -> bool:
         return True
     except (InvalidSignature, KeyError, ValueError, TypeError):
         return False
+
+
+def _json_without_duplicate_keys(raw: bytes) -> Any:
+    """Decode JSON while rejecting duplicate keys at every object depth."""
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("DUPLICATE_JSON_KEY")
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=unique_object)
 
 
 def verify_identity_challenge(
@@ -74,7 +145,9 @@ def verify_identity_challenge(
 
     if not isinstance(identity, dict) or not isinstance(response, dict):
         return fail("INVALID_DOCUMENT")
-    if identity.get("protocol") != "iao-federation" or identity.get("version") != 1:
+    if (identity.get("protocol") != "iao-federation"
+            or type(identity.get("version")) is not int
+            or identity.get("version") != 1):
         return fail("UNSUPPORTED_IDENTITY_PROTOCOL")
 
     peer_id = identity.get("node_id")
@@ -106,12 +179,17 @@ def verify_identity_challenge(
     if not _verify(public_raw, response):
         return fail("BAD_CHALLENGE_SIGNATURE")
 
+    response_request_ts = response.get("request_ts")
     if (response.get("v") != 1
+            or type(response.get("v")) is not int
             or response.get("protocol") != "iao-federation"
             or response.get("from") != peer_id
             or response.get("to") != requester_id
             or response.get("nonce") != nonce
-            or response.get("request_ts") != float(request_ts)):
+            or isinstance(response_request_ts, bool)
+            or not isinstance(response_request_ts, (int, float))
+            or not math.isfinite(float(response_request_ts))
+            or float(response_request_ts) != float(request_ts)):
         return fail("CHALLENGE_BINDING_MISMATCH")
 
     response_ts = response.get("ts")
@@ -195,46 +273,14 @@ class Node:
             if not isinstance(endpoint, str) or len(endpoint) > 2048:
                 raise ValueError("INVALID_PEER_ENDPOINT")
             try:
-                u = urlsplit(endpoint)
-                # Validación estricta (producción): HTTPS, puerto 443 o vacío,
-                # path exacto /fed/v1/message, sin credenciales ni query.
-                tls_test_mode = bool(os.environ.get("IAO_TLS_CA_FILE"))
-                # Permitir puerto no-443 en hosts de túnel reconocidos.
-                # En producción con dominio propio se mantiene la regla 443.
-                _TUNNEL_HOSTS = {"bore.pub", "loca.lt"}
-                _TUNNEL_SUFFIXES = (
-                    ".ngrok-free.app", ".ngrok.io",
-                    ".trycloudflare.com", ".loca.lt",
+                # Central transport policy accepts pinned public HTTPS, v3
+                # onion over Tor SOCKS5, and explicitly enabled loopback tests.
+                endpoint_scheme = validate_message_endpoint(endpoint)[0]
+                valid = not (
+                    endpoint_scheme == "http"
+                    and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") != "1"
                 )
-                _host = (u.hostname or "").lower()
-                is_tunnel_host = (
-                    _host in _TUNNEL_HOSTS
-                    or any(_host.endswith(_sfx) for _sfx in _TUNNEL_SUFFIXES)
-                )
-                strict_valid = (
-                    u.scheme == "https" and bool(u.hostname)
-                    and not u.username and not u.password
-                    and (u.port is None or u.port == 443 or tls_test_mode or is_tunnel_host)
-                    and u.path == "/fed/v1/message"
-                    and not u.query and not u.fragment
-                )
-                # Salvaguarda de integración local (solo si el operador
-                # habilita explícitamente IAO_ALLOW_LOOPBACK_HTTP=1):
-                # permite HTTP en loopback y cualquier puerto, siempre que
-                # el path sea el esperado y no haya credenciales. Esta ruta
-                # NUNCA afecta peers externos: el host debe ser loopback.
-                loopback_valid = False
-                if (not strict_valid
-                        and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") == "1"
-                        and u.scheme in ("http", "https")
-                        and bool(u.hostname)
-                        and not u.username and not u.password
-                        and u.hostname.lower() in {"127.0.0.1", "::1", "localhost"}
-                        and u.path == "/fed/v1/message"
-                        and not u.query and not u.fragment):
-                    loopback_valid = True
-                valid = strict_valid or loopback_valid
-            except ValueError:
+            except FederationTransportError:
                 valid = False
             if not valid:
                 raise ValueError("INVALID_PEER_ENDPOINT")
@@ -358,10 +404,15 @@ class Node:
         try:
             if publication.get("protocol") != "iao-federation-publication":
                 return False
-            if publication.get("version") != 1:
+            if type(publication.get("version")) is not int or publication.get("version") != 1:
                 return False
             pub = bytes.fromhex(publication["public_key"])
-            if len(pub) != 32:
+            peer_id = publication.get("node_id")
+            if (len(pub) != 32
+                    or not isinstance(peer_id, str)
+                    or len(peer_id) != 16
+                    or any(ch not in "0123456789abcdef" for ch in peer_id)
+                    or node_id_of(pub) != peer_id):
                 return False
             sig = base64.b64decode(publication["sig"], validate=True)
             body = {k: v for k, v in publication.items() if k != "sig"}
@@ -377,7 +428,7 @@ class Node:
         if not isinstance(raw, bytes) or len(raw) > MAX_MSG:
             return 413, {"error": "PAYLOAD_TOO_LARGE"}
         try:
-            request = json.loads(raw)
+            request = _json_without_duplicate_keys(raw)
         except (ValueError, UnicodeDecodeError):
             return 400, {"error": "INVALID_CHALLENGE"}
         if not isinstance(request, dict):
@@ -387,7 +438,8 @@ class Node:
         recipient = request.get("to")
         nonce = request.get("nonce")
         ts = request.get("ts")
-        if (request.get("v") != 1
+        if (type(request.get("v")) is not int
+                or request.get("v") != 1
                 or not isinstance(requester, str)
                 or len(requester) != 16
                 or any(ch not in "0123456789abcdef" for ch in requester)
@@ -517,25 +569,42 @@ class Node:
             if len(raw) > MAX_MSG:
                 raise FedDenied(413, "PAYLOAD_TOO_LARGE")
             try:
-                env = json.loads(raw)
-                peer = str(env["from"])
-                if not isinstance(env, dict) or env.get("v") != 1:
-                    raise ValueError
-            except (ValueError, KeyError, TypeError):
+                env = _json_without_duplicate_keys(raw)
+            except (ValueError, UnicodeDecodeError):
                 raise FedDenied(400, "MALFORMED") from None
-            if env.get("to") != self.node_id:
-                raise FedDenied(403, "WRONG_RECIPIENT")          # a message captured for node X is useless at node Y
+            if not isinstance(env, dict):
+                raise FedDenied(400, "MALFORMED")
+            peer = env.get("from")
+            recipient = env.get("to")
+            timestamp = env.get("ts")
+            nonce = env.get("nonce")
+            if (
+                type(env.get("v")) is not int
+                or env.get("v") != 1
+                or not isinstance(peer, str)
+                or len(peer) != 16
+                or any(ch not in "0123456789abcdef" for ch in peer)
+                or not isinstance(recipient, str)
+                or len(recipient) != 16
+                or any(ch not in "0123456789abcdef" for ch in recipient)
+                or isinstance(timestamp, bool)
+                or not isinstance(timestamp, (int, float))
+                or not math.isfinite(float(timestamp))
+                or not isinstance(nonce, str)
+                or len(nonce) < 16
+                or len(nonce) > 256
+            ):
+                raise FedDenied(400, "MALFORMED")
+            if recipient != self.node_id:
+                raise FedDenied(403, "WRONG_RECIPIENT")
             c = self.peers.get(peer)
             if c is None:
                 raise FedDenied(403, "UNKNOWN_PEER")
             if not _verify(c["pub"], env):
                 raise FedDenied(403, "BAD_SIGNATURE")
             now = self.clock()
-            if abs(now - float(env.get("ts", 0))) > self.skew:
+            if abs(now - float(timestamp)) > self.skew:
                 raise FedDenied(403, "CLOCK_SKEW")
-            nonce = str(env.get("nonce", ""))
-            if len(nonce) < 16:
-                raise FedDenied(400, "MALFORMED")
             with self._lock:
                 self._seen = {k: t for k, t in self._seen.items() if now - t <= 2 * self.skew}
                 if (peer, nonce) in self._seen:
@@ -621,7 +690,8 @@ class Node:
     def _post(self, c: dict[str, Any], url: str, env: dict[str, Any], nonce: str, timeout: float) -> dict[str, Any]:
         try:
             status, resp = post_federation_json(
-                url, env, timeout=timeout, max_bytes=MAX_MSG * 8
+                url, env, timeout=timeout, max_bytes=MAX_MSG * 8,
+                expected_peer_id=c["peer_id"],
             )
         except FederationTransportError as exc:
             if exc.code in {
@@ -631,6 +701,10 @@ class Node:
                 "LOOPBACK_RESOLUTION_FAILED",
             }:
                 return {"ok": False, "error": "PEER_UNREACHABLE"}
+            if exc.code == "TLS_HANDSHAKE_FAILED":
+                return {"ok": False, "error": "TLS_HANDSHAKE_FAILED"}
+            if exc.code == "TLS_SERVER_NODE_ID_MISMATCH":
+                return {"ok": False, "error": "TLS_NODE_ID_MISMATCH"}
             return {"ok": False, "error": "TRANSPORT_BLOCKED"}
 
         if status != 200:
@@ -640,7 +714,7 @@ class Node:
             return {"ok": False, "error": "BAD_RESPONSE"}
         if not _verify(c["pub"], resp):
             return {"ok": False, "error": "BAD_RESPONSE_SIGNATURE"}
-        if "result" not in resp:
+        if "result" not in resp or type(resp.get("v")) is not int or resp.get("v") != 1:
             return {"ok": False, "error": "BAD_RESPONSE"}
         if (
             resp.get("to") != self.node_id
@@ -648,11 +722,15 @@ class Node:
             or resp.get("in_reply_to") != nonce
         ):
             return {"ok": False, "error": "REPLAYED_OR_MISROUTED_RESPONSE"}
-        try:
-            response_ts = float(resp.get("ts", 0))
-        except (TypeError, ValueError):
+        raw_response_ts = resp.get("ts")
+        if (
+            isinstance(raw_response_ts, bool)
+            or not isinstance(raw_response_ts, (int, float))
+            or not math.isfinite(float(raw_response_ts))
+        ):
             return {"ok": False, "error": "CLOCK_SKEW"}
-        if not math.isfinite(response_ts) or abs(self.clock() - response_ts) > self.skew:
+        response_ts = float(raw_response_ts)
+        if abs(self.clock() - response_ts) > self.skew:
             return {"ok": False, "error": "CLOCK_SKEW"}
         return {
             "ok": True,
@@ -765,20 +843,55 @@ class FedServer:
                 if len(raw) != n:
                     self._reply(400, {"error": "INCOMPLETE_BODY"})
                     return
+                if ssl_context is not None:
+                    # TLS verified the certificate chain; additionally bind its
+                    # unique URI SAN to the signed protocol sender identity.
+                    certificate = self.connection.getpeercert()
+                    certificate_node_id = _peer_certificate_node_id(certificate)
+                    try:
+                        request = json.loads(raw)
+                    except (ValueError, UnicodeDecodeError):
+                        request = None
+                    sender = request.get("from") if isinstance(request, dict) else None
+                    if (
+                        certificate_node_id is None
+                        or not isinstance(sender, str)
+                        or sender != certificate_node_id
+                    ):
+                        self._reply(403, {"error": "TLS_NODE_ID_MISMATCH"})
+                        return
                 if self.path == "/fed/v1/handshake":
                     status, payload = outer.answer_challenge(raw)
                 else:
                     status, payload = outer.handle(raw)
                 self._reply(status, payload)
 
+        if ssl_context is None:
+            try:
+                bind_address = ipaddress.ip_address(host)
+            except ValueError:
+                bind_address = None
+            if bind_address is None or not bind_address.is_loopback:
+                raise ValueError("FEDERATION_TLS_REQUIRED_FOR_NON_LOOPBACK_BIND")
         self.httpd = ThreadingHTTPServer((host, port), H)
         if ssl_context is not None:
+            # A TLS listener without mandatory client certificates is not an
+            # authenticated federation transport. Fail closed at construction.
+            if (
+                not isinstance(ssl_context, ssl.SSLContext)
+                or ssl_context.protocol != ssl.PROTOCOL_TLS_SERVER
+                or ssl_context.verify_mode != ssl.CERT_REQUIRED
+                or ssl_context.minimum_version < ssl.TLSVersion.TLSv1_2
+            ):
+                self.httpd.server_close()
+                raise ValueError("FEDERATION_MTLS_CLIENT_CERT_REQUIRED")
             self.httpd.socket = ssl_context.wrap_socket(
                 self.httpd.socket, server_side=True
             )
         self.port = self.httpd.server_address[1]
         self._node_for_publication = node
-        self.url = f"http://{host}:{self.port}/fed/v1/message"
+        scheme = "https" if ssl_context is not None else "http"
+        self.url = f"{scheme}://{host}:{self.port}/fed/v1/message"
         self._t = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
     def set_publication(self, publication: dict[str, Any]) -> None:

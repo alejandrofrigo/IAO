@@ -2,6 +2,7 @@
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from apps.api import main
 
@@ -12,12 +13,17 @@ def configured_client(monkeypatch, tmp_path):
     monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("IAO_CORPUS_DIR", str(tmp_path / "corpus"))
     monkeypatch.setenv("MODEL_ADAPTER", "disabled")
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "false")
     monkeypatch.delenv("IAO_LLM_ROUTER", raising=False)
     monkeypatch.setenv("IAO_DEVICE_ENROLLMENT_CODE", "one-time-enrollment-code-" + "z" * 32)
     monkeypatch.setenv("IAO_DEVICE_ENROLLMENT_ENABLED", "1")
     main._service = None
     main._device_authority = None
     main._federation_node = None
+    if main._autonomous_core is not None:
+        main._autonomous_core.stop_worker(timeout=1)
+    main._autonomous_core = None
+    main._autonomous_core_status.update({"enabled": False, "running": False, "recovered_tasks": 0})
     main._federation_worker_status.update({
         "autojoin": False, "discovery": False, "external_network": False,
     })
@@ -40,18 +46,79 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert body["status"] == "degraded"
     assert body["production_gates"]["device_identity_verification"] == "integrated_read_only"
     assert body["production_gates"]["privileged_device_commands"] == "disabled"
-    assert body["production_gates"]["identity_provider"] == "dev_hmac_not_oidc"
+    assert body["production_gates"]["identity_provider"] == "hmac_token_auth_oidc_unconfigured"
     assert body["production_gates"]["independent_federation"] == "not_started_or_unavailable"
     assert body["production_gates"]["model_provider"] == "not_configured"
+    assert body["production_gates"]["network_discovery"]["status"] == "unknown"
+    assert body["production_gates"]["network_discovery"]["external_connectivity_confirmed"] is False
+    assert body["production_gates"]["network_discovery"]["cryptographic_trust_confirmed"] is False
+
+
+def test_autonomous_health_reports_live_worker_and_queue_without_task_payloads(monkeypatch):
+    from types import SimpleNamespace
+
+    class StubCore:
+        worker = SimpleNamespace(is_alive=lambda: True)
+
+        def status(self):
+            return {
+                "worker_running": True,
+                "task_count": 4,
+                "task_states": {"QUEUED": 2, "COMPLETED": 2},
+            }
+
+    monkeypatch.setattr(main, "_autonomous_core", StubCore())
+    monkeypatch.setattr(
+        main, "_autonomous_core_status",
+        {"enabled": True, "running": True, "recovered_tasks": 1},
+    )
+    health = main._autonomous_core_health()
+    assert health == {
+        "status": "running_read_only",
+        "worker_running": True,
+        "task_count": 4,
+        "task_states": {"QUEUED": 2, "COMPLETED": 2},
+        "recovered_tasks": 1,
+    }
+    assert "tasks" not in health
+    assert "payload" not in health
+
+
+def test_autonomous_health_does_not_trust_stale_startup_flag(monkeypatch):
+    from types import SimpleNamespace
+
+    class StoppedCore:
+        worker = SimpleNamespace(is_alive=lambda: False)
+
+        def status(self):
+            return {
+                "worker_running": False,
+                "task_count": 1,
+                "task_states": {"QUEUED": 1},
+            }
+
+    monkeypatch.setattr(main, "_autonomous_core", StoppedCore())
+    monkeypatch.setattr(
+        main, "_autonomous_core_status",
+        {"enabled": True, "running": True, "recovered_tasks": 0},
+    )
+    health = main._autonomous_core_health()
+    assert health["status"] == "worker_stopped"
+    assert health["worker_running"] is False
+    assert health["task_states"] == {"QUEUED": 1}
 
 
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
     main._service = None
-    response = TestClient(main.app).get("/health/ready")
+    with TestClient(main.app) as client:
+        response = client.get("/health/ready")
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
+    assert response.json()["runtime_startup"] == {
+        "status": "blocked", "reason": "PERSISTENT_KEYS_NOT_CONFIGURED",
+    }
 
 
 def test_public_session_and_conversation_use_persistent_service(monkeypatch, tmp_path) -> None:
@@ -234,3 +301,141 @@ def test_federation_initialization_failure_does_not_take_down_local_api(monkeypa
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
     assert (tmp_path / "state" / "omega.db").is_file()
+
+    
+def test_autonomous_core_worker_starts_and_recovers_persisted_tasks(monkeypatch, tmp_path):
+    from omega.autonomous_core import AutonomousCore
+    import json
+
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "true")
+    monkeypatch.setenv("IAO_AUTONOMY_INTERVAL_SECONDS", "10")
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
+    main._autonomous_core = None
+    core = AutonomousCore(tmp_path / "state" / "autonomous-core")
+    task = core.submit("self_check")
+    with core.lock:
+        data = json.loads(core.tasks_path.read_text("utf-8"))
+        data["tasks"][0]["status"] = "RUNNING"
+        core._save(data)
+
+    started = main._ensure_autonomous_core()
+    try:
+        assert started is main._autonomous_core
+        assert started.status()["worker_running"] is True
+        assert main._autonomous_core_status["running"] is True
+        assert main._autonomous_core_status["recovered_tasks"] == 1
+        recovered = json.loads(started.tasks_path.read_text("utf-8"))
+        assert recovered["tasks"][0]["status"] in {"QUEUED", "RUNNING", "COMPLETED", "BLOCKED"}
+        assert recovered["tasks"][0]["id"] == task["id"]
+    finally:
+        started.stop_worker(timeout=2)
+        main._autonomous_core = None
+        main._autonomous_core_status.update({
+            "enabled": False, "running": False, "recovered_tasks": 0,
+        })
+
+
+def test_autonomous_core_can_be_disabled_explicitly(monkeypatch, tmp_path):
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "false")
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
+    main._autonomous_core = None
+    assert main._ensure_autonomous_core() is None
+    assert main._autonomous_core_status["enabled"] is False
+    assert main._autonomous_core_status["running"] is False
+
+
+def test_runtime_startup_failure_is_visible_without_breaking_liveness(monkeypatch):
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "x" * 40)
+    monkeypatch.setenv("AUDIT_HMAC_KEY", "y" * 48)
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "false")
+    main._runtime_startup_status = {"status": "not_started", "reason": None}
+
+    def fail_startup():
+        raise RuntimeError("sensitive details must not escape")
+
+    monkeypatch.setattr(main, "_get_service", fail_startup)
+    with TestClient(main.app) as client:
+        assert client.get("/health/live").status_code == 200
+
+    assert main._runtime_startup_status == {
+        "status": "degraded", "reason": "RuntimeError",
+    }
+
+
+def test_runtime_startup_reports_missing_keys_as_blocked(monkeypatch):
+    monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
+    monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
+    main._runtime_startup_status = {"status": "not_started", "reason": None}
+    with TestClient(main.app) as client:
+        assert client.get("/health/live").status_code == 200
+    assert main._runtime_startup_status == {
+        "status": "blocked", "reason": "PERSISTENT_KEYS_NOT_CONFIGURED",
+    }
+
+
+
+
+def test_production_runtime_rejects_development_token_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "d" * 64)
+    monkeypatch.delenv("OMEGA_TOKEN_SIGNING_KEY", raising=False)
+    try:
+        main._runtime_token_key()
+    except RuntimeError as exc:
+        assert str(exc) == "PRODUCTION_TOKEN_SIGNING_KEY_REQUIRED"
+    else:
+        raise AssertionError("production must not accept the development token key")
+
+
+def test_production_runtime_uses_dedicated_token_signing_key(monkeypatch):
+    dedicated = "production-signing-key-" + "p" * 48
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "d" * 64)
+    monkeypatch.setenv("OMEGA_TOKEN_SIGNING_KEY", dedicated)
+    assert main._runtime_token_key() == dedicated
+
+
+def test_nonproduction_runtime_keeps_development_key_compatibility(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("OMEGA_TOKEN_SIGNING_KEY", raising=False)
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "dev-key-" + "x" * 40)
+    assert main._runtime_token_key() == "dev-key-" + "x" * 40
+
+
+
+def test_production_readiness_blocks_development_secret_even_with_audit_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "development-secret-" + "d" * 48)
+    monkeypatch.delenv("OMEGA_TOKEN_SIGNING_KEY", raising=False)
+    monkeypatch.setenv("AUDIT_HMAC_KEY", "audit-secret-" + "a" * 48)
+    main._service = None
+    with TestClient(main.app) as client:
+        assert client.get("/health/live").status_code == 200
+        response = client.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["runtime_startup"] == {
+        "status": "blocked", "reason": "PRODUCTION_TOKEN_SIGNING_KEY_REQUIRED",
+    }
+
+
+def test_self_hosted_compose_forces_production_auth_mode():
+    compose = Path(__file__).resolve().parents[1] / "deploy" / "compose.yaml"
+    config = compose.read_text(encoding="utf-8")
+    assert "APP_ENV: production" in config
+    assert "/health/ready" in config
+    assert "d.get('status') == 'ready'" in config
+    assert "runtime_startup" in config
+    assert "/health/live" not in config
+
+
+def test_production_environment_template_fails_closed_without_generated_secrets():
+    template = Path(__file__).resolve().parents[1] / "deploy" / ".env.production.example"
+    values = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in template.read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    assert values["APP_ENV"] == "production"
+    assert values["OMEGA_TOKEN_SIGNING_KEY"] == ""
+    assert values["AUDIT_HMAC_KEY"] == ""
+    assert values["IAO_CORS_ORIGINS"] == ""

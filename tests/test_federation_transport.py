@@ -23,12 +23,13 @@ class FakeResponse:
 class FakeConnection:
     response = FakeResponse()
 
-    def __init__(self, hostname, address, *, port=443, timeout, context):
+    def __init__(self, hostname, address, *, port=443, timeout, context, expected_peer_id=None):
         self.hostname = hostname
         self.address = address
         self.port = port
         self.timeout = timeout
         self.context = context
+        self.expected_peer_id = expected_peer_id
         self.request_args = None
         self.closed = False
 
@@ -92,9 +93,10 @@ def test_dns_resolution_rejects_private_and_mixed_public_private(monkeypatch):
 def test_fetch_public_json_pins_ip_and_parses_json(monkeypatch):
     created = []
 
-    def factory(hostname, address, *, port=443, timeout, context):
+    def factory(hostname, address, *, port=443, timeout, context, expected_peer_id=None):
         conn = FakeConnection(
-            hostname, address, port=port, timeout=timeout, context=context
+            hostname, address, port=port, timeout=timeout, context=context,
+            expected_peer_id=expected_peer_id,
         )
         created.append(conn)
         return conn
@@ -110,6 +112,22 @@ def test_fetch_public_json_pins_ip_and_parses_json(monkeypatch):
     assert created[0].request_args[2]["Host"] == "directory.example.org"
     assert created[0].request_args[3] is None
     assert created[0].closed
+
+
+def test_fetch_public_json_rejects_duplicate_nested_keys(monkeypatch):
+    monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
+    monkeypatch.setattr(
+        transport,
+        "_PinnedHTTPSConnection",
+        lambda *args, **kwargs: FakeConnection(*args, **kwargs),
+    )
+    FakeConnection.response = FakeResponse(
+        body=b'{"peers":[{"id":"first","id":"second"}]}'
+    )
+    with pytest.raises(
+        transport.FederationTransportError, match="INVALID_JSON_RESPONSE"
+    ):
+        transport.fetch_public_json("https://directory.example.org/peers")
 
 
 def test_fetch_public_json_rejects_redirect(monkeypatch):
@@ -307,8 +325,9 @@ def test_fetch_onion_json_rejects_redirect(monkeypatch):
 def test_post_public_json_uses_pinned_public_https_and_no_redirect(monkeypatch):
     calls = []
     monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
-    def factory(hostname, address, *, port=443, timeout, context):
-        conn = FakeConnection(hostname, address, port=port, timeout=timeout, context=context)
+    def factory(hostname, address, *, port=443, timeout, context, expected_peer_id=None):
+        conn = FakeConnection(hostname, address, port=port, timeout=timeout, context=context,
+                              expected_peer_id=expected_peer_id)
         calls.append(conn)
         return conn
     monkeypatch.setattr(transport, "_PinnedHTTPSConnection", factory)
@@ -331,3 +350,107 @@ def test_post_public_json_rejects_redirect(monkeypatch):
     FakeConnection.response = FakeResponse(status=307, headers={"Location": "https://other.example/"})
     with pytest.raises(transport.FederationTransportError, match="REDIRECT_REFUSED"):
         transport.post_public_json("https://peer.example.org/fed/v1/handshake", {"x": 1})
+
+
+
+def test_validate_message_endpoint_accepts_only_v3_onion_federation_path():
+    host = "d" * 56 + ".onion"
+    assert transport.validate_message_endpoint(
+        f"http://{host}/fed/v1/message"
+    ) == ("onion", host, 80, "/fed/v1/message", host)
+    for url in (
+        f"http://{host}/admin",
+        f"http://{host}:8080/fed/v1/message",
+        f"http://short.onion/fed/v1/message",
+        f"https://{host}/fed/v1/message",
+        f"http://{host}/fed/v1/message?x=1",
+    ):
+        with pytest.raises(transport.FederationTransportError):
+            transport.validate_message_endpoint(url)
+
+
+def test_post_federation_json_routes_onion_through_tor_socks(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "socks", SimpleNamespace(SOCKS5=2))
+    monkeypatch.setenv("IAO_TOR_SOCKS_HOST", "127.0.0.1")
+    monkeypatch.setenv("IAO_TOR_SOCKS_PORT", "9050")
+    calls = []
+
+    class Response:
+        status = 200
+        def getheader(self, name):
+            return {"Content-Type": "application/json", "Content-Length": "11"}.get(name)
+        def read(self, size=-1):
+            return b'{"ok":true}'
+
+    class Connection:
+        def __init__(self, hostname, *, timeout, proxy_host, proxy_port):
+            calls.append(("init", hostname, timeout, proxy_host, proxy_port))
+        def request(self, method, target, body=None, headers=None):
+            calls.append((method, target, headers["Host"], body))
+        def getresponse(self):
+            return Response()
+        def close(self):
+            calls.append(("closed",))
+
+    monkeypatch.setattr(transport, "_TorOnionHTTPConnection", Connection)
+    host = "e" * 56 + ".onion"
+    status, payload = transport.post_federation_json(
+        f"http://{host}/fed/v1/message", {"signed": True}
+    )
+    assert status == 200
+    assert payload == {"ok": True}
+    assert calls[0] == ("init", host, 5.0, "127.0.0.1", 9050)
+    assert calls[1][0:3] == ("POST", "/fed/v1/message", host)
+    assert calls[-1] == ("closed",)
+
+
+
+def test_public_federation_origin_accepts_https_and_v3_onion_only():
+    onion = "http://" + "g" * 56 + ".onion"
+    assert transport.validate_public_federation_origin(
+        "https://node.example.org"
+    ) == "https://node.example.org"
+    assert transport.validate_public_federation_origin(onion) == onion
+    for origin in (
+        "http://node.example.org",
+        "http://short.onion",
+        "https://node.example.org:8443",
+        "https://user@node.example.org",
+        "https://node.example.org/path",
+    ):
+        with pytest.raises(transport.FederationTransportError):
+            transport.validate_public_federation_origin(origin)
+
+
+def test_outbound_https_federation_requires_client_certificate(monkeypatch):
+    monkeypatch.delenv("IAO_TLS_REQUIRE_CLIENT_CERT", raising=False)
+    monkeypatch.delenv("IAO_TLS_CLIENT_CERT_FILE", raising=False)
+    monkeypatch.delenv("IAO_TLS_CLIENT_KEY_FILE", raising=False)
+    monkeypatch.setattr(
+        transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"]
+    )
+    with pytest.raises(
+        transport.FederationTransportError, match="CLIENT_CERT_REQUIRED"
+    ):
+        transport.post_federation_json(
+            "https://peer.example.org/fed/v1/message", {"signed": True}
+        )
+
+
+def test_tls_peer_certificate_node_id_requires_single_valid_uri_san():
+    node_id = "0123456789abcdef"
+    assert transport._certificate_node_id({
+        "subjectAltName": (("URI", f"urn:iao:node:{node_id}"),)
+    }) == node_id
+    assert transport._certificate_node_id({
+        "subjectAltName": (
+            ("URI", f"urn:iao:node:{node_id}"),
+            ("URI", f"urn:iao:node:{node_id}"),
+        )
+    }) is None
+    assert transport._certificate_node_id({
+        "subjectAltName": (("DNS", f"urn:iao:node:{node_id}"),)
+    }) is None
+    assert transport._certificate_node_id(None) is None

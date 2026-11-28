@@ -6,6 +6,7 @@ The HTTP server does not start this worker implicitly.
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import threading
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from omega.policy import authorize
+from omega.operator_identity import OperatorIdentityError
 from omega.server import build_service
 from omega.env_loader import load_env_files
 from omega.config import load_settings
@@ -36,13 +38,23 @@ class TaskWorker:
         operator_identity_authority: Any = None,
         tool_executor: Any = None,
     ) -> None:
+        if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3600:
+            raise ValueError("INVALID_LEASE_SECONDS")
+        if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, (int, float)):
+            raise ValueError("INVALID_WORKER_POLL_SECONDS")
+        try:
+            poll_interval = float(poll_seconds)
+        except (OverflowError, TypeError, ValueError):
+            raise ValueError("INVALID_WORKER_POLL_SECONDS") from None
+        if not math.isfinite(poll_interval) or not 0 < poll_interval <= 3600:
+            raise ValueError("INVALID_WORKER_POLL_SECONDS")
         self.store = store
         self.registry = registry
         self.operator_identity_authority = operator_identity_authority
         self.tool_executor = tool_executor or run_tool_isolated
         self.worker_id = worker_id or ("worker-" + uuid.uuid4().hex)
         self.lease_seconds = lease_seconds
-        self.poll_seconds = poll_seconds
+        self.poll_seconds = poll_interval
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -111,15 +123,14 @@ class TaskWorker:
             try:
                 clean = spec.validate_input(payload)
             except (TypeError, ValueError):
-                self.store.add_tool_execution(
-                    task_id, spec.name, spec.version, "DENIED",
-                    _digest(payload), None, "INVALID_INPUT", None,
-                    datetime.now(timezone.utc).isoformat(),
+                finished = datetime.now(timezone.utc).isoformat()
+                self.store.finalize_claimed_tool_execution(
+                    task_id, self.worker_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "INVALID_INPUT", "verification": "FAIL"},
+                    spec.name, spec.version, _digest(payload), None, finished, finished,
+                    execution_status="DENIED", execution_error_code="INVALID_INPUT",
                 )
-                return self._finish(
-                    task_id, owner, "FAILED",
-                    {"decision": "ALLOW", "error": "INVALID_INPUT", "verification": "FAIL"},
-                )
+                return True
 
             # Revalidate revocation, root-key version, exact bearer-session
             # digest and primary-device binding immediately before tool execution.
@@ -135,11 +146,84 @@ class TaskWorker:
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_UNAVAILABLE"},
                 )
-            try:
-                self.operator_identity_authority.verify_primary_device_for_session_digest(
-                    owner, session_digest, device_id,
+            # The authority context holds a cross-process SQLite write
+            # reservation through the bounded tool call. A concurrent root
+            # revocation therefore cannot commit between authorization and
+            # tool completion. No tool is invoked if the gate cannot be acquired.
+            started = datetime.now(timezone.utc).isoformat()
+            digest_in = _digest(clean)
+            budget = intent.get("budget", {})
+            budget_timeout = (
+                budget.get("timeout_seconds", 20)
+                if isinstance(budget, dict) else None
+            )
+            spec_timeout = spec.timeout_seconds
+            def valid_timeout(value: Any) -> bool:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                ):
+                    return False
+                try:
+                    numeric = float(value)
+                except (OverflowError, TypeError, ValueError):
+                    return False
+                return math.isfinite(numeric) and numeric > 0
+
+            if not all(valid_timeout(value) for value in (budget_timeout, spec_timeout)):
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "INVALID_TOOL_TIMEOUT_POLICY"},
                 )
-            except Exception:
+            timeout = min(float(spec_timeout), float(budget_timeout))
+            # The process runner may need up to two additional seconds to
+            # terminate/reap a timed-out child. Keep a further three-second
+            # scheduling margin so a live tool cannot outlast its task lease.
+            if (
+                isinstance(self.lease_seconds, bool)
+                or not isinstance(self.lease_seconds, int)
+                or timeout + 5 >= self.lease_seconds
+            ):
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "WORKER_LEASE_TOO_SHORT_FOR_TOOL_TIMEOUT"},
+                )
+            try:
+                with self.operator_identity_authority.authorize_tool_execution(
+                    owner, session_digest, device_id,
+                ) as authority_valid:
+                    if authority_valid is not True:
+                        raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                    # A worker can wait for the identity DB write reservation.
+                    # Recheck the actual task lease after acquiring that gate,
+                    # not just the configured lease duration, before invoking
+                    # any tool. Leave enough time for the bounded call and reap.
+                    try:
+                        lease_until = datetime.fromisoformat(task["lease_until"])
+                        if lease_until.tzinfo is None:
+                            raise ValueError("naive lease timestamp")
+                        remaining_lease = (
+                            lease_until - datetime.now(timezone.utc)
+                        ).total_seconds()
+                    except (KeyError, TypeError, ValueError):
+                        remaining_lease = 0.0
+                    if remaining_lease <= timeout + 5:
+                        finished = datetime.now(timezone.utc).isoformat()
+                        self.store.finalize_claimed_tool_execution(
+                            task_id, self.worker_id, owner, "FAILED",
+                            {
+                                "decision": "DENY",
+                                "error": "WORKER_LEASE_EXPIRING_BEFORE_TOOL",
+                            },
+                            spec.name, spec.version, digest_in, None, started, finished,
+                            execution_status="DENIED",
+                            execution_error_code="LEASE_EXPIRING",
+                        )
+                        return True
+                    output, verdict = self.tool_executor(
+                        spec.run, spec.verify, clean, timeout
+                    )
+            except OperatorIdentityError:
                 self.store.audit(
                     owner, "TASK_WORKER_OPERATOR_AUTHORITY_DENIED", task_id,
                     decision="FAIL_CLOSED",
@@ -148,70 +232,43 @@ class TaskWorker:
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_REVOKED"},
                 )
-
-            started = datetime.now(timezone.utc).isoformat()
-            digest_in = _digest(clean)
-            timeout = min(
-                float(spec.timeout_seconds),
-                float(intent.get("budget", {}).get("timeout_seconds", 20)),
-            )
-            try:
-                output, verdict = self.tool_executor(
-                    spec.run, spec.verify, clean, timeout
-                )
             except ToolProcessTimeout:
-                self.store.add_tool_execution(
-                    task_id, spec.name, spec.version, "TIMED_OUT",
-                    digest_in, None, "TIMED_OUT", started,
-                    datetime.now(timezone.utc).isoformat(),
-                )
-                return self._finish(
-                    task_id, owner, "FAILED",
+                finished = datetime.now(timezone.utc).isoformat()
+                self.store.finalize_claimed_tool_execution(
+                    task_id, self.worker_id, owner, "FAILED",
                     {"decision": "ALLOW", "error": "TIMED_OUT"},
-                )
-            except Exception:
-                self.store.add_tool_execution(
-                    task_id, spec.name, spec.version, "FAILED",
-                    digest_in, None, "TOOL_ERROR", started,
-                    datetime.now(timezone.utc).isoformat(),
-                )
-                return self._finish(
-                    task_id, owner, "FAILED",
-                    {"decision": "ALLOW", "error": "TOOL_ERROR"},
-                )
-
-            self.store.add_tool_execution(
-                task_id, spec.name, spec.version, "SUCCEEDED",
-                digest_in, _digest(output), None, started,
-                datetime.now(timezone.utc).isoformat(),
-            )
-            if not self.store.update_claimed_task(
-                task_id, self.worker_id, "VERIFYING"
-            ):
-                self.store.audit(
-                    "system", "TASK_WORKER_STALE_CLAIM", task_id,
-                    worker=self.worker_id, decision="REJECT",
+                    spec.name, spec.version, digest_in, None, started, finished,
+                    execution_status="TIMED_OUT", execution_error_code="TIMED_OUT",
                 )
                 return True
-            self.store.audit(
-                owner, "TASK_STATE", task_id, to="VERIFYING",
-                worker=self.worker_id,
-            )
+            except Exception:
+                finished = datetime.now(timezone.utc).isoformat()
+                self.store.finalize_claimed_tool_execution(
+                    task_id, self.worker_id, owner, "FAILED",
+                    {"decision": "ALLOW", "error": "TOOL_ERROR"},
+                    spec.name, spec.version, digest_in, None, started, finished,
+                    execution_status="FAILED", execution_error_code="TOOL_ERROR",
+                )
+                return True
+
             result: dict[str, Any] = {
                 "decision": "ALLOW",
                 "verification": verdict,
                 "result": output,
             }
-            self.store.audit(
-                owner, "EVIDENCE", task_id,
-                decision=verdict,
-                method="schema+source_hash+snippet_provenance",
-                output_digest=_digest(output),
+            final_state = "SUCCEEDED" if verdict == "PASS" else "FAILED"
+            if final_state == "FAILED":
+                result["error"] = "VERIFICATION_" + str(verdict)
+            self.store.finalize_claimed_tool_execution(
+                task_id, self.worker_id, owner, final_state, result,
+                spec.name, spec.version, digest_in, _digest(output),
+                started, datetime.now(timezone.utc).isoformat(),
             )
-            if verdict == "PASS":
-                return self._finish(task_id, owner, "SUCCEEDED", result)
-            result["error"] = "VERIFICATION_" + str(verdict)
-            return self._finish(task_id, owner, "FAILED", result)
+            # The store commits terminal task state, truthful execution status,
+            # and the corresponding audit events in one SQLite transaction.
+            # It also records stale completion (including a missing task), so
+            # the worker must not append a second, non-atomic audit event here.
+            return True
         except Exception:
             # No automatic retry: an unexpected worker failure leaves the lease
             # to expire, after which startup recovery marks it FAILED.
@@ -241,8 +298,26 @@ class TaskWorker:
         )
         return True
 
+    def recover_interrupted(self) -> int:
+        """Fail closed expired in-flight tasks without re-enqueueing or replaying them."""
+        recovered = self.store.recover_interrupted_tasks()
+        if recovered:
+            # Keep owner subjects and task identifiers out of audit metadata.
+            self.store.audit(
+                "system",
+                "TASK_WORKER_INTERRUPTED_RECOVERED",
+                "task_worker",
+                recovered_count=len(recovered),
+                decision="FAIL_CLOSED",
+            )
+        return len(recovered)
+
     def run_forever(self) -> None:
         while not self._stop.is_set():
+            # Recovery must run periodically, not only at process startup:
+            # otherwise an expired lease can remain RUNNING indefinitely
+            # while this worker stays alive.
+            self.recover_interrupted()
             if not self.run_once():
                 self._stop.wait(self.poll_seconds)
 
@@ -270,18 +345,9 @@ def main() -> None:
         poll_seconds=float(os.environ.get("IAO_WORKER_POLL_SECONDS", "1")),
         operator_identity_authority=service.operator_identity_authority,
     )
-    # Startup reconciliation is fail-closed: expired RUNNING and VERIFYING
-    # leases are marked FAILED and are never automatically re-enqueued.
-    recovered = service.store.recover_interrupted_tasks()
-    if recovered:
-        # Keep owner subjects and per-task identifiers out of audit metadata.
-        service.store.audit(
-            "system",
-            "TASK_WORKER_INTERRUPTED_RECOVERED",
-            "task_worker",
-            recovered_count=len(recovered),
-            decision="FAIL_CLOSED",
-        )
+    # Initial reconciliation; run_forever repeats it to catch leases expiring
+    # while this process remains alive.
+    worker.recover_interrupted()
 
     def request_stop(*_: object) -> None:
         worker.stop()

@@ -21,7 +21,7 @@
 
 **No se permite el enrolamiento automático de peers remotos todavía.** Una firma Ed25519 válida demuestra posesión de una clave, pero no demuestra por sí sola que el canal de transporte sea seguro. El código anterior aceptaba campos JSON como https_verified=true y redirected=false; esos booleanos podían ser falsificados por quien construyera el objeto de evidencia.
 
-Por ello, las rutas CandidateRegistry.record_verified_identity() y CandidateRegistry.authorize() fallan cerradas con TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED. El pipeline autónomo también bloquea el enrolamiento de peers no-loopback, incluso si la configuración declara require_mutual_tls=true. Esa configuración no sustituye una prueba real de mTLS ligada a la conexión.
+Por ello, las rutas CandidateRegistry.record_verified_identity() y CandidateRegistry.authorize() fallan cerradas con TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED. El pipeline autónomo también bloquea todo enrolamiento remoto: `_enroll_one()` devuelve TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED antes de realizar cualquier petición de red. La configuración opcional de certificado cliente solo demuestra que el cliente puede presentar un certificado; no demuestra que el servidor remoto lo haya exigido y validado en esa misma conexión. Ni `require_mutual_tls=true` ni campos declarativos sustituyen una atestación verificable ligada a la conexión.
 
 El descubrimiento continúa disponible, pero un peer descubierto no obtiene confianza, permisos, acceso al corpus privado, capacidad de ejecutar código ni autoridad sobre IAO. El pipeline también evita iniciar handshakes HTTP salientes hacia peers remotos hasta que exista el transporte confiable; solo se permiten pruebas loopback de desarrollo.
 
@@ -43,3 +43,34 @@ Las pruebas unitarias y los workflows de GitHub Actions comprueban el código y 
 - python -m pytest tests/test_federation_ipfs_discovery.py tests/test_federation_assimilation_security.py
 - python -m pytest
 - El punto de entrada síncrono del DHT es discover_sync() en omega/libp2p_discovery.py.
+
+## Descubrimiento público y registro de candidatos
+
+El motor `NODE_NETWORK` del supervisor de cinco motores puede ejecutar
+`python -m omega.federation_discovery --run`. El ciclo consulta únicamente
+búsquedas públicas de repositorios GitHub y recupera manifiestos JSON mediante
+la API Contents. Ambas rutas usan `omega.federation_transport`, con HTTPS,
+validación de hostname/TLS, resolución pública fijada, rechazo de redirecciones
+y límites de respuesta.
+
+Los manifiestos válidos se guardan en
+`.state/iao-node-network/discovered-candidates.json` como
+`DISCOVERED_UNVERIFIED`. El registro es privado (directorio 0700, archivo
+0600), atómico y rechaza rutas de auditoría/registro que atraviesen enlaces
+simbólicos. La clave de candidato es determinista a partir de la identidad
+declarada y el origen. La huella SHA-256 de la clave pública debe coincidir
+con el identificador declarado.
+
+Este inventario es solo una cola de pistas públicas:
+- `identity_verified=false`, `enrolled=false`;
+- `granted_capabilities=[]`;
+- ejecución de código remoto y acceso a datos privados permanecen desactivados;
+- las capacidades anunciadas se conservan únicamente como solicitudes no confiables;
+- las actualizaciones de descubrimiento no sustituyen estados de revocación,
+  identidad verificada, autoridad ni concesiones existentes.
+
+El descubrimiento no realiza handshake con candidatos ni los enrola. La
+admisión y el transporte remoto siguen bloqueados hasta integrar y probar una
+atestación mTLS vinculada a la conexión. El supervisor solo añade el adaptador
+NODE_NETWORK cuando falta en una configuración existente; una desactivación
+explícita del operador se conserva.

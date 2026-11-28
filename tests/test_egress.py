@@ -169,6 +169,69 @@ class EgressTests(unittest.TestCase):
     def test_timeout(self) -> None:
         self.denied(self.u("/slow"), "TIMEOUT", total_timeout=0.5)
 
+
+    def test_explicit_public_internet_mode_accepts_arbitrary_public_hostname(self) -> None:
+        from omega.egress import _check_url, _resolve
+
+        def public_dns(host: str, port: int, **kwargs: object) -> list:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        policy = EgressPolicy(
+            allow_public_hosts=True,
+            allowed_ports=frozenset({443}),
+            resolver=public_dns,
+        )
+        scheme, host, port, _path, _url = _check_url(
+            "https://arbitrary-public.example/resource", policy
+        )
+        self.assertEqual((scheme, host, port), ("https", "arbitrary-public.example", 443))
+        self.assertEqual(_resolve(host, port, policy), "93.184.216.34")
+
+    def test_public_internet_mode_still_denies_private_dns_answers(self) -> None:
+        from omega.egress import _resolve
+
+        def rebinding_dns(host: str, port: int, **kwargs: object) -> list:
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port)),
+            ]
+
+        policy = EgressPolicy(
+            allow_public_hosts=True,
+            allowed_ports=frozenset({443}),
+            resolver=rebinding_dns,
+        )
+        with self.assertRaises(EgressDenied) as caught:
+            _resolve("arbitrary-public.example", 443, policy)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADDRESS")
+
+    def test_public_internet_mode_does_not_allow_unapproved_plain_http(self) -> None:
+        from omega.egress import _check_url
+
+        policy = EgressPolicy(allow_public_hosts=True)
+        with self.assertRaises(EgressDenied) as caught:
+            _check_url("http://arbitrary-public.example/", policy)
+        self.assertEqual(caught.exception.code, "SCHEME_NOT_ALLOWED")
+
+
+    def test_runtime_egress_is_disabled_without_explicit_configuration(self) -> None:
+        from omega.egress import policy_from_env
+        self.assertIsNone(policy_from_env({}))
+
+    def test_runtime_allowlist_keeps_public_internet_disabled(self) -> None:
+        from omega.egress import policy_from_env
+        policy = policy_from_env({"OMEGA_EGRESS_ALLOWLIST": "Example.org, api.example.net"})
+        self.assertIsNotNone(policy)
+        self.assertEqual(policy.allow_hosts, frozenset({"example.org", "api.example.net"}))
+        self.assertFalse(policy.allow_public_hosts)
+
+    def test_runtime_public_internet_requires_explicit_opt_in(self) -> None:
+        from omega.egress import policy_from_env
+        policy = policy_from_env({"OMEGA_EGRESS_PUBLIC_INTERNET": "true"})
+        self.assertIsNotNone(policy)
+        self.assertTrue(policy.allow_public_hosts)
+        self.assertEqual(policy.allow_hosts, frozenset())
+
     def test_connection_refused_classified(self) -> None:
         s = socket.socket()
         s.bind(("127.0.0.1", 0))

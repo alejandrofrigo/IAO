@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from omega.service import POLICY_VERSION
+from omega.operator_identity import OperatorIdentityError
 from omega.task_worker import TaskWorker
 from omega.tools.registry import ToolRegistry, ToolSpec
 
@@ -16,6 +19,7 @@ class _ClaimedTaskStore:
             "id": "queued-task-1",
             "owner": "operator:test-owner",
             "intent_json": json.dumps(intent),
+            "lease_until": (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat(),
         }
         self.final_state = None
         self.final_result = None
@@ -39,12 +43,24 @@ class _ClaimedTaskStore:
     def add_tool_execution(self, *args, **kwargs):
         self.executions.append((args, kwargs))
 
+    def finalize_claimed_tool_execution(self, *args, **kwargs):
+        self.final_state = args[3]
+        self.final_result = args[4]
+        self.executions.append((args, kwargs))
+        return True
+
 
 class _RevokedAuthority:
-    def verify_primary_device_for_session_digest(
-        self, owner: str, session_digest: str, device_id: str
-    ) -> bool:
-        raise RuntimeError("authority revoked")
+    @contextmanager
+    def authorize_tool_execution(self, owner: str, session_digest: str, device_id: str):
+        raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        yield False
+
+
+class _ActiveAuthority:
+    @contextmanager
+    def authorize_tool_execution(self, *_args):
+        yield True
 
 
 
@@ -127,8 +143,9 @@ def test_interruption_after_tool_invocation_is_not_replayed(tmp_path, monkeypatc
     ))
 
     class ActiveAuthority:
-        def verify_primary_device_for_session_digest(self, *_args):
-            return True
+        @contextmanager
+        def authorize_tool_execution(self, *_args):
+            yield True
 
     worker = TaskWorker(
         store, registry, worker_id="fault-injection-worker",
@@ -210,3 +227,326 @@ def test_worker_fails_closed_when_primary_device_or_session_was_revoked():
     assert denied[0][1]["decision"] == "FAIL_CLOSED"
     assert "session_digest" not in denied[0][1]
     assert "device_id" not in denied[0][1]
+
+
+class _FalseAuthority:
+    @contextmanager
+    def authorize_tool_execution(self, *_args):
+        yield False
+
+
+def test_worker_fails_closed_when_authority_returns_false():
+    worker, store, calls = _worker(_FalseAuthority())
+
+    assert worker.run_once() is True
+
+    assert calls == []
+    assert store.executions == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "WORKER_OPERATOR_AUTHORITY_REVOKED"
+
+
+def test_worker_recovers_expired_leases_while_process_remains_alive():
+    class RecoveryStore:
+        def __init__(self):
+            self.recovery_calls = 0
+            self.events = []
+
+        def recover_interrupted_tasks(self):
+            self.recovery_calls += 1
+            if self.recovery_calls == 1:
+                return [{"id": "expired-secret-task-id", "owner": "private-owner"}]
+            return []
+
+        def claim_next_task(self, *_args, **_kwargs):
+            return None
+
+        def audit(self, *args, **kwargs):
+            self.events.append((args, kwargs))
+
+    class StopAfterWait:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, _seconds):
+            self.stopped = True
+
+        def set(self):
+            self.stopped = True
+
+    store = RecoveryStore()
+    worker = TaskWorker(store, ToolRegistry(), worker_id="recovery-test-worker")
+    worker._stop = StopAfterWait()
+
+    worker.run_forever()
+
+    assert store.recovery_calls == 1
+    recovery_events = [
+        (args, kwargs) for args, kwargs in store.events
+        if args and args[1] == "TASK_WORKER_INTERRUPTED_RECOVERED"
+    ]
+    assert len(recovery_events) == 1
+    assert recovery_events[0][1]["recovered_count"] == 1
+    assert recovery_events[0][1]["decision"] == "FAIL_CLOSED"
+    assert "expired-secret-task-id" not in repr(recovery_events)
+    assert "private-owner" not in repr(recovery_events)
+
+
+@pytest.mark.parametrize(
+    "timeout_value",
+    [True, 10**400, float("inf"), float("nan"), 0, -1],
+)
+def test_worker_rejects_invalid_timeout_budget_before_tool_execution(timeout_value):
+    worker, store, calls = _worker(_ActiveAuthority())
+    intent = json.loads(store.task["intent_json"])
+    intent["budget"]["timeout_seconds"] = timeout_value
+    store.task["intent_json"] = json.dumps(intent)
+
+    assert worker.run_once() is True
+    assert calls == []
+    assert store.executions == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "INVALID_TOOL_TIMEOUT_POLICY"
+
+
+def test_invalid_tool_input_is_finalized_atomically_as_denied():
+    worker, store, calls = _worker(_ActiveAuthority())
+    spec = worker.registry.get("knowledge.search")
+    worker.registry._tools["knowledge.search"] = replace(
+        spec,
+        validate_input=lambda _value: (_ for _ in ()).throw(ValueError("invalid")),
+    )
+
+    assert worker.run_once() is True
+
+    assert calls == []
+    assert len(store.executions) == 1
+    args, kwargs = store.executions[0]
+    assert args[3] == "FAILED"
+    assert kwargs["execution_status"] == "DENIED"
+    assert kwargs["execution_error_code"] == "INVALID_INPUT"
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "INVALID_INPUT"
+
+
+def test_worker_rechecks_remaining_lease_after_authority_gate():
+    worker, store, calls = _worker(_ActiveAuthority())
+    store.task["lease_until"] = (
+        datetime.now(timezone.utc) + timedelta(seconds=3)
+    ).isoformat()
+
+    assert worker.run_once() is True
+    assert calls == []
+    assert store.executions
+    assert store.executions[0][0][3] == "FAILED"
+    assert store.executions[0][1]["execution_status"] == "DENIED"
+    assert store.executions[0][1]["execution_error_code"] == "LEASE_EXPIRING"
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "WORKER_LEASE_EXPIRING_BEFORE_TOOL"
+
+
+def test_worker_rejects_lease_without_timeout_and_cleanup_margin():
+    worker, store, calls = _worker(_ActiveAuthority())
+    worker.lease_seconds = 7  # tool timeout is 2s; required margin is 5s
+
+    assert worker.run_once() is True
+    assert calls == []
+    assert store.executions == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "WORKER_LEASE_TOO_SHORT_FOR_TOOL_TIMEOUT"
+
+
+@pytest.mark.parametrize("lease_seconds", [True, 0, -1, 1.5, "60", 3601])
+def test_worker_rejects_invalid_lease_configuration(lease_seconds):
+    with pytest.raises(ValueError, match="INVALID_LEASE_SECONDS"):
+        TaskWorker(_ClaimedTaskStore({}), ToolRegistry(), lease_seconds=lease_seconds)
+
+
+@pytest.mark.parametrize("poll_seconds", [True, 0, -1, float("inf"), float("nan"), 10**400, "1"])
+def test_worker_rejects_invalid_poll_configuration(poll_seconds):
+    with pytest.raises(ValueError, match="INVALID_WORKER_POLL_SECONDS"):
+        TaskWorker(_ClaimedTaskStore({}), ToolRegistry(), poll_seconds=poll_seconds)
+
+
+def test_tool_completion_and_task_state_commit_atomically_after_lease_expiry(tmp_path):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-tool-completion.db", b"worker-test-audit-key-0123456789")
+    task_id = "atomic-expired-task"
+    owner = "operator:atomic-test"
+    intent = {"expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}
+    task, created = store.create_task(task_id, owner, intent, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    claimed = store.claim_next_task("atomic-worker", lease_seconds=60)
+    assert claimed is not None
+    with store.lock:
+        store.db.execute(
+            "UPDATE task SET lease_until=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", task_id),
+        )
+
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "SUCCEEDED",
+        {"decision": "ALLOW", "verification": "PASS", "result": {"items": []}},
+        "knowledge.search", "1", "a" * 64, "b" * 64,
+        "2026-11-28T00:00:00+00:00", datetime.now(timezone.utc).isoformat(),
+    )
+    assert committed is False
+    final = store.get_task(task_id, owner)
+    assert final["state"] == "FAILED"
+    assert json.loads(final["result_json"]) == {
+        "decision": "INTERRUPTED",
+        "error": "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+    }
+    executions = store.tool_executions(task_id)
+    assert len(executions) == 1
+    assert executions[0]["status"] == "SUCCEEDED"
+    assert executions[0]["error_code"] == "LEASE_EXPIRED_AFTER_TOOL_COMPLETION"
+    assert executions[0]["output_digest"] == "b" * 64
+    event_types = [event["event_type"] for event in store._all_events()]
+    assert event_types[-1] == "TASK_WORKER_STALE_COMPLETION"
+    assert "TASK_STATE" not in event_types
+    assert "EVIDENCE" not in event_types
+    store.close()
+
+
+def test_tool_completion_and_task_success_commit_in_one_transaction(tmp_path):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-tool-success.db", b"worker-test-audit-key-0123456789")
+    task_id = "atomic-success-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    assert store.claim_next_task("atomic-worker", lease_seconds=60) is not None
+    result = {"decision": "ALLOW", "verification": "PASS", "result": {"items": []}}
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "SUCCEEDED", result,
+        "knowledge.search", "1", "a" * 64, "b" * 64,
+        datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+    )
+    assert committed is True
+    final = store.get_task(task_id, owner)
+    assert final["state"] == "SUCCEEDED"
+    assert json.loads(final["result_json"]) == result
+    executions = store.tool_executions(task_id)
+    assert len(executions) == 1
+    assert executions[0]["status"] == "SUCCEEDED"
+    assert executions[0]["error_code"] is None
+    assert final["lease_owner"] is None
+    assert final["lease_until"] is None
+    events = store._all_events()
+    assert [event["event_type"] for event in events[-2:]] == [
+        "TASK_STATE", "EVIDENCE",
+    ]
+    assert events[-2]["details"]["to"] == "SUCCEEDED"
+    assert events[-1]["details"]["output_digest"] == "b" * 64
+    assert store.verify_audit()[0] is True
+    store.close()
+
+
+def test_tool_completion_does_not_create_execution_for_missing_task(tmp_path):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-missing-task.db", b"worker-test-audit-key-0123456789")
+    task_id = "removed-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    with store.lock:
+        store.db.execute("DELETE FROM task WHERE id=?", (task_id,))
+
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "SUCCEEDED",
+        {"decision": "ALLOW", "verification": "PASS", "result": {}},
+        "knowledge.search", "1", "a" * 64, "b" * 64,
+        datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+    )
+    assert committed is False
+    assert store.tool_executions(task_id) == []
+    store.close()
+
+
+def test_tool_completion_and_audit_roll_back_together_on_audit_failure(tmp_path, monkeypatch):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-audit-rollback.db", b"worker-test-audit-key-0123456789")
+    task_id = "atomic-audit-rollback-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    assert store.claim_next_task("atomic-worker", lease_seconds=60) is not None
+    before_events = len(store._all_events())
+    original = store._append_audit_event_in_transaction
+
+    def fail_on_evidence(actor, event_type, subject, **details):
+        if event_type == "EVIDENCE":
+            raise RuntimeError("SIMULATED_AUDIT_WRITE_FAILURE")
+        return original(actor, event_type, subject, **details)
+
+    monkeypatch.setattr(store, "_append_audit_event_in_transaction", fail_on_evidence)
+    with pytest.raises(RuntimeError, match="SIMULATED_AUDIT_WRITE_FAILURE"):
+        store.finalize_claimed_tool_execution(
+            task_id, "atomic-worker", owner, "SUCCEEDED",
+            {"decision": "ALLOW", "verification": "PASS", "result": {}},
+            "knowledge.search", "1", "a" * 64, "b" * 64,
+            datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+        )
+    final = store.get_task(task_id, owner)
+    assert final["state"] == "RUNNING"
+    assert final["lease_owner"] == "atomic-worker"
+    assert store.tool_executions(task_id) == []
+    assert len(store._all_events()) == before_events
+    assert store.verify_audit()[0] is True
+    store.close()
+
+
+@pytest.mark.parametrize(
+    ("execution_status", "execution_error"),
+    [("TIMED_OUT", "TIMED_OUT"), ("FAILED", "TOOL_ERROR")],
+)
+def test_failed_tool_outcome_and_task_state_commit_atomically(
+    tmp_path, execution_status, execution_error
+):
+    from omega.store import Store
+
+    store = Store(
+        tmp_path / f"atomic-{execution_status.lower()}.db",
+        b"worker-test-audit-key-0123456789",
+    )
+    task_id = f"atomic-{execution_status.lower()}-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    assert store.claim_next_task("atomic-worker", lease_seconds=60) is not None
+
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "FAILED",
+        {"decision": "ALLOW", "error": execution_error},
+        "knowledge.search", "1", "a" * 64, None,
+        datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+        execution_status=execution_status,
+        execution_error_code=execution_error,
+    )
+    assert committed is True
+    assert store.get_task(task_id, owner)["state"] == "FAILED"
+    executions = store.tool_executions(task_id)
+    assert len(executions) == 1
+    assert executions[0]["status"] == execution_status
+    assert executions[0]["error_code"] == execution_error
+    events = store._all_events()
+    assert events[-1]["event_type"] == "TASK_STATE"
+    assert events[-1]["details"]["error"] == execution_error
+    assert store.verify_audit()[0] is True
+    store.close()

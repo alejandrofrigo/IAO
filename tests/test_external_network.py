@@ -239,3 +239,96 @@ def test_v3_onion_peers_are_kept_in_unverified_inventory():
     assert item["origin"] == "http://" + host
     assert item["status"] == "DISCOVERED_UNVERIFIED"
     assert item["identity_verified"] is False
+
+
+
+def test_ipfs_adapter_reads_only_local_swarm_api(monkeypatch):
+    import io
+    import json
+    import urllib.request
+    from omega.external_network import IPFSSwarmDiscovery
+
+    calls = []
+    payload = {"Peers": [{
+        "Peer": "12D3KooWJ5xExamplePeerIdentifier",
+        "Addr": "/ip4/203.0.113.10/tcp/4001",
+    }]}
+    class Response(io.BytesIO):
+        pass
+    def fake_open(request, timeout):
+        calls.append((request.full_url, request.get_method(), timeout))
+        return Response(json.dumps(payload).encode())
+    class Opener:
+        def open(self, request, timeout):
+            return fake_open(request, timeout)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: Opener())
+    found = IPFSSwarmDiscovery("http://127.0.0.1:5001").discover()
+    assert found[0]["peer_id"] == "12D3KooWJ5xExamplePeerIdentifier"
+    assert found[0]["multiaddr"] == ["/ip4/203.0.113.10/tcp/4001"]
+    assert calls == [("http://127.0.0.1:5001/api/v0/swarm/peers", "POST", 8)]
+    assert IPFSSwarmDiscovery("http://8.8.8.8:5001").discover() == []
+
+
+def test_nostr_authorizations_are_kept_separate_from_node_identity(tmp_path):
+    class NostrSource:
+        name = "nostr_authorizations"
+        def discover(self):
+            return [{
+                "event_id": "a" * 64,
+                "author_pubkey": "b" * 64,
+                "authorization_event_verified": True,
+            }]
+    network = ExternalNetwork(tmp_path, [NostrSource()])
+    result = network.run_cycle()
+    registry = json.loads((tmp_path / "registry.json").read_text())
+    assert result["added"] == 1
+    assert registry["candidates"] == {}
+    record = registry["protocol_peers"]["a" * 64]
+    assert record["status"] == "AUTHORIZATION_EVENT_VERIFIED"
+    assert record["identity_verified"] is False
+    assert record["enrolled"] is False
+    assert record["granted_capabilities"] == []
+
+
+def test_nostr_authorization_requires_verified_event_and_hex_author(tmp_path):
+    class NostrSource:
+        name = "nostr_authorizations"
+        def discover(self):
+            return [
+                {"event_id": "c" * 64, "author_pubkey": "z" * 64,
+                 "authorization_event_verified": True},
+                {"event_id": "d" * 64, "author_pubkey": "e" * 64,
+                 "authorization_event_verified": False},
+            ]
+    network = ExternalNetwork(tmp_path, [NostrSource()])
+    result = network.run_cycle()
+    assert result["discovered"] == 0
+    registry = json.loads((tmp_path / "registry.json").read_text())
+    assert registry["protocol_peers"] == {}
+
+
+def test_network_status_exposes_counts_without_peer_identifiers_or_endpoints(tmp_path):
+    from omega.external_network import network_status
+
+    network = ExternalNetwork(tmp_path, [Source([record()])])
+    network.run_cycle()
+    status = network_status(tmp_path)
+    assert status["status"] == "observed"
+    assert status["candidate_count"] == 1
+    assert status["p2p_peer_count"] == 0
+    assert status["external_connectivity_confirmed"] is False
+    assert status["cryptographic_trust_confirmed"] is False
+    rendered = json.dumps(status)
+    assert "node-00000001" not in rendered
+    assert "node.example.org" not in rendered
+
+
+def test_network_status_fails_closed_on_registry_symlink(tmp_path):
+    from omega.external_network import network_status
+
+    target = tmp_path / "other.json"
+    target.write_text('{"schema":1,"candidates":{}}')
+    (tmp_path / "registry.json").symlink_to(target)
+    status = network_status(tmp_path)
+    assert status["status"] == "restricted"
+    assert status["reason"] == "REGISTRY_SYMLINK_REFUSED"

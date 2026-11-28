@@ -2,30 +2,38 @@ services:
   api:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
-    env_file: ../.env
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8080"
+      IAO_STATE_DIR: /var/lib/iao
+      IAO_CORPUS_DIR: /app/knowledge
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - iao_state:/var/lib/iao
     read_only: true
     tmpfs:
       - /tmp
+    init: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     restart: unless-stopped
-  db:
-    image: postgres:17.2
-    environment:
-      POSTGRES_DB: omega
-      POSTGRES_USER: omega
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in environment}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U omega -d omega"]
-      interval: 10s
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=3); d=json.load(r); assert d.get('status') == 'ready'; assert d.get('runtime_startup', {}).get('status') == 'started'"
+      interval: 30s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 20s
+
 volumes:
-  postgres_data: {}
+  iao_state: {}

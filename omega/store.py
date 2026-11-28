@@ -239,6 +239,29 @@ class Store:
             "tables": current,
         }
 
+    def _append_audit_event_in_transaction(
+        self, actor: str, event_type: str, subject: str, **details: Any
+    ) -> dict[str, Any]:
+        """Append one hash-chained event inside the caller's open transaction."""
+        row = self.db.execute(
+            "SELECT event_hash FROM audit_event_v2 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        payload = {"actor": actor, **details}
+        event = make_event(
+            event_type, subject, payload,
+            row[0] if row else GENESIS_HASH, self.audit_key,
+        )
+        self.db.execute(
+            "INSERT INTO audit_event_v2(ts,event_type,subject,details,previous_hash,event_hash) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                event["timestamp"], event_type, subject,
+                json.dumps(payload, sort_keys=True, ensure_ascii=False),
+                event["previous_hash"], event["event_hash"],
+            ),
+        )
+        return event
+
     # ---- audit (hash chained) ----
     def audit(self, actor: str, event_type: str, subject: str, **details: Any) -> dict[str, Any]:
         details = {"actor": actor, **details}
@@ -522,6 +545,107 @@ class Store:
         with self.lock:
             self.db.execute("INSERT INTO tool_execution VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (str(uuid.uuid4()), task_id, name, version, status, input_digest, output_digest, error_code, started, finished))
+
+    def finalize_claimed_tool_execution(
+        self, task_id: str, worker_id: str, owner: str, state: str,
+        result: dict[str, Any], name: str, version: str, input_digest: str,
+        output_digest: str | None, started: str, finished: str,
+        *, execution_status: str = "SUCCEEDED",
+        execution_error_code: str | None = None,
+    ) -> bool:
+        """Atomically persist tool outcome, fenced task state, and audit evidence."""
+        if state not in {"SUCCEEDED", "FAILED"}:
+            raise ValueError("INVALID_TOOL_COMPLETION_STATE")
+        if execution_status not in {"SUCCEEDED", "FAILED", "DENIED", "TIMED_OUT", "CANCELLED"}:
+            raise ValueError("INVALID_TOOL_EXECUTION_STATUS")
+        if execution_status == "SUCCEEDED" and execution_error_code is not None:
+            raise ValueError("SUCCESSFUL_TOOL_CANNOT_HAVE_EXECUTION_ERROR")
+        stale_reason = {
+            "SUCCEEDED": "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+            "TIMED_OUT": "LEASE_EXPIRED_DURING_TOOL_TIMEOUT",
+            "FAILED": "LEASE_EXPIRED_AFTER_TOOL_ERROR",
+            "DENIED": "LEASE_EXPIRED_AFTER_TOOL_DENIAL",
+            "CANCELLED": "LEASE_EXPIRED_AFTER_TOOL_CANCELLATION",
+        }[execution_status]
+        stale_result = {
+            "decision": "INTERRUPTED",
+            "error": stale_reason,
+        }
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                now = now_iso()
+                row = self.db.execute(
+                    "SELECT state,lease_owner,lease_until FROM task WHERE id=? AND owner=?",
+                    (task_id, owner),
+                ).fetchone()
+                if row is None:
+                    self._append_audit_event_in_transaction(
+                        "system", "TASK_WORKER_STALE_COMPLETION", task_id,
+                        worker=worker_id, decision="REJECT", reason="TASK_NOT_FOUND",
+                    )
+                    self.db.execute("COMMIT")
+                    return False
+
+                lease_valid = bool(
+                    row["state"] in ("RUNNING", "VERIFYING")
+                    and row["lease_owner"] == worker_id
+                    and row["lease_until"] is not None
+                    and row["lease_until"] > now
+                )
+                if lease_valid:
+                    changed = self.db.execute(
+                        "UPDATE task SET state=?,result_json=?,updated_at=?,"
+                        "lease_owner=NULL,lease_until=NULL WHERE id=? AND owner=? "
+                        "AND state IN ('RUNNING','VERIFYING') AND lease_owner=? AND lease_until>?",
+                        (state, json.dumps(result, sort_keys=True), now,
+                         task_id, owner, worker_id, now),
+                    ).rowcount
+                    lease_valid = changed == 1
+                elif row["state"] in ("RUNNING", "VERIFYING") and row["lease_owner"] == worker_id:
+                    self.db.execute(
+                        "UPDATE task SET state='FAILED',result_json=?,updated_at=?,"
+                        "lease_owner=NULL,lease_until=NULL WHERE id=? AND owner=? "
+                        "AND state IN ('RUNNING','VERIFYING') AND lease_owner=?",
+                        (json.dumps(stale_result, sort_keys=True), now,
+                         task_id, owner, worker_id),
+                    )
+
+                self.db.execute(
+                    "INSERT INTO tool_execution VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), task_id, name, version, execution_status,
+                     input_digest, output_digest,
+                     execution_error_code or (
+                         stale_reason
+                         if not lease_valid
+                         else None
+                     ),
+                     started, finished),
+                )
+                if lease_valid:
+                    self._append_audit_event_in_transaction(
+                        owner, "TASK_STATE", task_id, to=state,
+                        worker=worker_id, error=result.get("error"),
+                        verification=result.get("verification"),
+                    )
+                    if execution_status == "SUCCEEDED" and output_digest is not None:
+                        self._append_audit_event_in_transaction(
+                            owner, "EVIDENCE", task_id,
+                            decision=result.get("verification"),
+                            method="schema+source_hash+snippet_provenance",
+                            output_digest=output_digest,
+                        )
+                else:
+                    self._append_audit_event_in_transaction(
+                        "system", "TASK_WORKER_STALE_COMPLETION", task_id,
+                        worker=worker_id, decision="REJECT",
+                        reason=stale_reason,
+                    )
+                self.db.execute("COMMIT")
+                return lease_valid
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
 
     def tool_executions(self, task_id: str) -> list[dict[str, Any]]:
         with self.lock:

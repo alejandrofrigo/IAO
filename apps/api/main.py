@@ -15,17 +15,47 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+
+def _runtime_token_key() -> str:
+    """Use a dedicated signing secret in production; keep the dev key dev-only."""
+    app_env = os.environ.get("APP_ENV", "development").strip().lower()
+    production_key = os.environ.get("OMEGA_TOKEN_SIGNING_KEY", "")
+    if app_env == "production":
+        if len(production_key) < 32:
+            raise RuntimeError("PRODUCTION_TOKEN_SIGNING_KEY_REQUIRED")
+        return production_key
+    return production_key or os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+
+
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # Start persistent service and network workers during configured production boot.
     # Liveness-only qualification may omit secrets; in that case the API remains
     # live but readiness and service routes stay fail-closed.
-    if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
+    global _runtime_startup_status
+    try:
+        token_key = _runtime_token_key()
+    except RuntimeError as exc:
+        _runtime_startup_status = {"status": "blocked", "reason": str(exc)}
+        yield
+        return
+    if (len(token_key) >= 32
             and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
         try:
             _get_service()
-        except Exception:
-            pass
+            _ensure_autonomous_core()
+            _runtime_startup_status = {"status": "started", "reason": None}
+        except Exception as exc:
+            # Keep liveness available, but make startup failure observable without
+            # leaking exception text, credentials, paths, or task data.
+            _runtime_startup_status = {
+                "status": "degraded",
+                "reason": type(exc).__name__,
+            }
+    else:
+        _runtime_startup_status = {
+            "status": "blocked",
+            "reason": "PERSISTENT_KEYS_NOT_CONFIGURED",
+        }
     yield
 
 
@@ -33,6 +63,10 @@ app = FastAPI(title="IAO API", version="11.2.0", lifespan=_runtime_lifespan)
 _service = None
 _device_authority = None
 _federation_node = None
+_autonomous_core = None
+_autonomous_core_status = {"enabled": False, "running": False, "recovered_tasks": 0}
+_runtime_startup_status = {"status": "not_started", "reason": None}
+_autonomous_core_lock = threading.Lock()
 _federation_lock = threading.Lock()
 _federation_worker_status = {"autojoin": False, "discovery": False, "external_network": False}
 _service_lock = threading.Lock()
@@ -52,6 +86,40 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-IAO-Device-Proof"],
 )
+
+
+def _ensure_autonomous_core():
+    """Start the persistent, read-only autonomous task worker when enabled."""
+    global _autonomous_core, _autonomous_core_status
+    enabled = os.environ.get("IAO_AUTONOMY_WORKER_ENABLED", "true").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        _autonomous_core_status = {
+            "enabled": False, "running": False, "recovered_tasks": 0,
+        }
+        return None
+    with _autonomous_core_lock:
+        if _autonomous_core is not None:
+            _autonomous_core_status = {
+                "enabled": True,
+                "running": bool(_autonomous_core.worker and _autonomous_core.worker.is_alive()),
+                "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+            }
+            return _autonomous_core
+        from omega.autonomous_core import AutonomousCore
+
+        state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+        core = AutonomousCore(state_dir / "autonomous-core")
+        recovered = core.recover_interrupted_tasks()
+        interval = max(10, min(
+            3600, int(os.environ.get("IAO_AUTONOMY_INTERVAL_SECONDS", "30"))
+        ))
+        core.start_worker(interval=interval)
+        _autonomous_core = core
+        _autonomous_core_status = {
+            "enabled": True, "running": bool(core.worker and core.worker.is_alive()),
+            "recovered_tasks": len(recovered),
+        }
+        return core
 
 
 def _get_device_authority():
@@ -146,7 +214,7 @@ def _get_service():
     if _service is None:
         with _service_lock:
             if _service is None:
-                token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
+                token_key = _runtime_token_key()
                 audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
                 if len(token_key) < 32 or len(audit_key) < 32:
                     raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
@@ -214,13 +282,8 @@ def federation_publication():
         origin = os.environ.get("IAO_FEDERATION_PUBLIC_ORIGIN", "").strip().rstrip("/")
         if os.environ.get("IAO_FEDERATION_PUBLIC_PEERING", "").lower() != "true" or not origin:
             return _federation_json(404, {"error": "PUBLIC_PEERING_NOT_OFFERED"})
-        from urllib.parse import urlsplit
-        parsed = urlsplit(origin)
-        if (parsed.scheme != "https" or not parsed.hostname
-                or parsed.username or parsed.password
-                or parsed.port not in (None, 443)
-                or parsed.path or parsed.query or parsed.fragment):
-            return _federation_json(503, {"error": "PUBLIC_PEERING_CONFIG_INVALID"})
+        from omega.federation_transport import validate_public_federation_origin
+        validate_public_federation_origin(origin)
         publication = node.identity_publication(
             origin + "/fed/v1/message",
             capabilities=sorted(node.served),
@@ -270,6 +333,50 @@ def live() -> dict[str, str]:
     return {"status": "live"}
 
 
+def _autonomous_core_health():
+    """Report live worker and bounded queue metadata without exposing task payloads."""
+    core = _autonomous_core
+    if core is None:
+        return {
+            "status": "disabled_or_unavailable",
+            "worker_running": False,
+            "task_count": 0,
+            "task_states": {},
+            "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+        }
+    try:
+        snapshot = core.status()
+        running = bool(snapshot.get("worker_running"))
+        return {
+            "status": "running_read_only" if running else "worker_stopped",
+            "worker_running": running,
+            "task_count": snapshot.get("task_count", 0),
+            "task_states": snapshot.get("task_states", {}),
+            "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "worker_running": False,
+            "error_type": type(exc).__name__,
+            "recovered_tasks": _autonomous_core_status.get("recovered_tasks", 0),
+        }
+
+
+def _network_discovery_health():
+    state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+    try:
+        from omega.external_network import network_status
+        return network_status(state_dir / "external-network")
+    except Exception as exc:
+        return {
+            "status": "degraded",
+            "reason": type(exc).__name__,
+            "external_connectivity_confirmed": False,
+            "cryptographic_trust_confirmed": False,
+        }
+
+
 @app.get("/health/ready")
 def ready():
     try:
@@ -280,21 +387,24 @@ def ready():
             content={
                 "status": "not_ready",
                 "reason": "PERSISTENT_RUNTIME_UNAVAILABLE",
+                "runtime_startup": dict(_runtime_startup_status),
             },
         )
     if status != 200 or payload.get("status") == "not_ready":
         payload["status"] = "not_ready"
+        payload["runtime_startup"] = dict(_runtime_startup_status)
         return JSONResponse(status_code=503, content=payload)
     # Infrastructure readiness is not equivalent to production readiness:
     # device-bound command authority and independent federation are still
     # explicit acceptance gates, even when the database and audit chain work.
     payload["status"] = "degraded"
+    payload["runtime_startup"] = dict(_runtime_startup_status)
     payload["production_gates"] = {
         "device_identity_verification": "integrated_read_only",
         "operator_session_association": "api_available_read_only",
         "operator_root_bootstrap": "out_of_band_configurable_not_verified",
         "privileged_device_commands": "disabled",
-        "identity_provider": "dev_hmac_not_oidc",
+        "identity_provider": "hmac_token_auth_oidc_unconfigured",
         "independent_federation": (
             "discovery_workers_started_unverified"
             if any(_federation_worker_status.values())
@@ -305,6 +415,8 @@ def ready():
             if _get_service().model is not None
             else "not_configured"
         ),
+        "autonomous_core": _autonomous_core_health(),
+        "network_discovery": _network_discovery_health(),
     }
     return JSONResponse(status_code=200, content=payload)
 

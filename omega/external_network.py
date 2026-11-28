@@ -208,6 +208,88 @@ class TorOnionDirectories:
 
 
 
+class IPFSSwarmDiscovery:
+    """Read the local IPFS daemon's connected swarm peers; never contact remote APIs."""
+    name = "ipfs_swarm"
+
+    def __init__(self, api: str):
+        self.api = api
+
+    def discover(self) -> list[dict[str, Any]]:
+        import urllib.request
+        try:
+            parsed = urlsplit(self.api)
+            host = (parsed.hostname or "").lower()
+            if (parsed.scheme != "http" or host not in {"127.0.0.1", "localhost", "::1"}
+                    or parsed.username or parsed.password or parsed.path not in ("", "/")
+                    or parsed.query or parsed.fragment or parsed.port not in (None, 5001)):
+                return []
+            request = urllib.request.Request(
+                self.api.rstrip("/") + "/api/v0/swarm/peers",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            class _NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, new_url):
+                    return None
+            opener = urllib.request.build_opener(_NoRedirect)
+            with opener.open(request, timeout=8) as response:
+                payload = json.loads(response.read(500_001))
+            if not isinstance(payload, dict):
+                return []
+            peers = payload.get("Peers", [])
+            if not isinstance(peers, list):
+                return []
+            found = []
+            seen = set()
+            for peer in peers[:MAX_CANDIDATES]:
+                if not isinstance(peer, dict):
+                    continue
+                peer_id, address = peer.get("Peer"), peer.get("Addr")
+                if (not isinstance(peer_id, str) or not 20 <= len(peer_id) <= 100
+                        or not peer_id.isalnum() or not isinstance(address, str)
+                        or not address.startswith("/") or len(address) > 512
+                        or any(ord(ch) < 33 or ord(ch) > 126 for ch in address)
+                        or peer_id in seen):
+                    continue
+                seen.add(peer_id)
+                found.append({"peer_id": peer_id, "multiaddr": [address]})
+            return found
+        except Exception:
+            return []
+
+
+class NostrAuthorizationDiscovery:
+    """Verify explicit Nostr bridge authorization events; never treat relays as nodes."""
+    name = "nostr_authorizations"
+
+    def __init__(self, relays: list[str] | None = None):
+        self.relays = relays
+
+    def discover(self) -> list[dict[str, Any]]:
+        import asyncio
+        from omega.federation_protocols.nostr_bridge import discover_nostr_authorizations
+        try:
+            events = asyncio.run(discover_nostr_authorizations(self.relays))
+        except RuntimeError:
+            # If called from an event-loop thread, do not nest or bypass the loop.
+            return []
+        return [
+            {
+                "event_id": event.get("id"),
+                "author_pubkey": event.get("pubkey"),
+                "created_at": event.get("created_at"),
+                "kind": 1,
+                "source": "nostr_signed_authorization",
+                "authorization_event_verified": True,
+            }
+            for event in events[:MAX_ITEMS]
+            if isinstance(event, dict)
+            and isinstance(event.get("id"), str)
+            and isinstance(event.get("pubkey"), str)
+        ]
+
+
 class GitHubPublicDiscovery:
     """GitHub is an optional discovery adapter, not the network's authority."""
     name = "github_public_search"
@@ -298,13 +380,15 @@ class ExternalNetwork:
         if self.registry_path.is_symlink():
             raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
         if not self.registry_path.exists():
-            return {"schema": 1, "candidates": {}, "p2p_peers": {}}
+            return {"schema": 1, "candidates": {}, "p2p_peers": {}, "protocol_peers": {}}
         data = json.loads(self.registry_path.read_text(encoding="utf-8"))
         if (not isinstance(data, dict) or data.get("schema") != 1
                 or not isinstance(data.get("candidates"), dict)
                 or len(data["candidates"]) > MAX_CANDIDATES
                 or not isinstance(data.get("p2p_peers", {}), dict)
-                or len(data.get("p2p_peers", {})) > MAX_CANDIDATES):
+                or len(data.get("p2p_peers", {})) > MAX_CANDIDATES
+                or not isinstance(data.get("protocol_peers", {}), dict)
+                or len(data.get("protocol_peers", {})) > MAX_CANDIDATES):
             raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_INVALID")
         return data
 
@@ -337,6 +421,7 @@ class ExternalNetwork:
             registry = self._load_registry()
             candidates = registry["candidates"]
             p2p_peers = registry.setdefault("p2p_peers", {})
+            protocol_peers = registry.setdefault("protocol_peers", {})
             totals = {"status": "COMPLETED", "sources": 0, "source_errors": 0,
                       "discovered": 0, "added": 0, "refreshed": 0}
             for source in self.sources:
@@ -346,7 +431,30 @@ class ExternalNetwork:
                     if not isinstance(found, list):
                         raise TypeError("SOURCE_RESULT_MUST_BE_LIST")
                     for raw in found[:MAX_CANDIDATES]:
-                        if source.name in {"local_p2p_inventory", "libp2p_kad_dht"}:
+                        if source.name == "nostr_authorizations":
+                            if not isinstance(raw, dict):
+                                continue
+                            event_id, author = raw.get("event_id"), raw.get("author_pubkey")
+                            if (not isinstance(event_id, str) or not 16 <= len(event_id) <= 128
+                                    or not isinstance(author, str) or len(author) != 64
+                                    or any(ch not in "0123456789abcdef" for ch in author)
+                                    or raw.get("authorization_event_verified") is not True):
+                                continue
+                            now = _utc()
+                            previous = protocol_peers.get(event_id, {})
+                            protocol_peers[event_id] = {
+                                "event_id": event_id, "author_pubkey": author,
+                                "source": source.name,
+                                "status": "AUTHORIZATION_EVENT_VERIFIED",
+                                "identity_verified": False, "enrolled": False,
+                                "granted_capabilities": [],
+                                "first_seen": previous.get("first_seen", now),
+                                "last_seen": now,
+                            }
+                            totals["discovered"] += 1
+                            totals["refreshed" if previous else "added"] += 1
+                            continue
+                        if source.name in {"local_p2p_inventory", "libp2p_kad_dht", "ipfs_swarm"}:
                             if not isinstance(raw, dict):
                                 continue
                             peer_id, addrs = raw.get("peer_id"), raw.get("multiaddr")
@@ -404,7 +512,7 @@ class ExternalNetwork:
             # for explicit lifecycle/revocation handling, never silently deleted.
             now_epoch = time.time()
             aged = {"stale": 0, "pruned": 0}
-            for collection in (candidates, p2p_peers):
+            for collection in (candidates, p2p_peers, protocol_peers):
                 for key, item in list(collection.items()):
                     try:
                         seen = datetime.fromisoformat(
@@ -434,6 +542,7 @@ class ExternalNetwork:
                 item["candidate_id"]: item for item in ordered[:MAX_CANDIDATES]
             }
             registry["p2p_peers"] = dict(list(p2p_peers.items())[-MAX_CANDIDATES:])
+            registry["protocol_peers"] = dict(list(protocol_peers.items())[-MAX_CANDIDATES:])
             registry["updated_at"] = _utc()
             self._save_registry(registry)
             self._audit("EXTERNAL_NETWORK_CYCLE_COMPLETED", **totals)
@@ -465,6 +574,17 @@ def build_network(state_dir: str | Path | None = None) -> ExternalNetwork:
     if isinstance(onion_feeds, list) and onion_feeds:
         sources.append(TorOnionDirectories(onion_feeds))
     sources.append(LocalP2PInventory(state))
+    ipfs = config.get("ipfs", {})
+    if isinstance(ipfs, dict) and ipfs.get("enabled") is True:
+        api = ipfs.get("api", "http://127.0.0.1:5001")
+        if isinstance(api, str):
+            sources.append(IPFSSwarmDiscovery(api))
+    nostr = config.get("nostr", {})
+    if not isinstance(nostr, dict):
+        nostr = {}
+    if nostr.get("enabled") is True:
+        relays = nostr.get("relays")
+        sources.append(NostrAuthorizationDiscovery(relays if isinstance(relays, list) else None))
     p2p = config.get("libp2p", {})
     if not isinstance(p2p, dict):
         p2p = {}
@@ -478,6 +598,69 @@ def build_network(state_dir: str | Path | None = None) -> ExternalNetwork:
             bootstrap = p2p.get("bootstrap_addrs")
             sources.append(Libp2pDHTDiscovery(bootstrap if isinstance(bootstrap, list) else None))
     return ExternalNetwork(state, sources)
+
+
+def network_status(state_dir: str | Path | None = None) -> dict[str, Any]:
+    """Return privacy-safe inventory metrics; never expose peer identifiers or endpoints."""
+    state = Path(state_dir) if state_dir is not None else _state_dir()
+    registry_path = state / "registry.json"
+    if registry_path.is_symlink():
+        return {"status": "restricted", "reason": "REGISTRY_SYMLINK_REFUSED"}
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {
+            "status": "unknown", "candidate_count": 0, "p2p_peer_count": 0,
+            "protocol_peer_count": 0, "last_updated": None,
+            "last_cycle": None, "external_connectivity_confirmed": False,
+            "cryptographic_trust_confirmed": False,
+        }
+    except (OSError, ValueError, UnicodeError):
+        return {"status": "degraded", "reason": "REGISTRY_UNREADABLE"}
+    if (not isinstance(registry, dict) or registry.get("schema") != 1
+            or not isinstance(registry.get("candidates"), dict)
+            or not isinstance(registry.get("p2p_peers", {}), dict)
+            or not isinstance(registry.get("protocol_peers", {}), dict)):
+        return {"status": "degraded", "reason": "REGISTRY_INVALID"}
+
+    last_cycle = None
+    audit_path = state / "events.jsonl"
+    if audit_path.is_file() and not audit_path.is_symlink():
+        try:
+            with audit_path.open("rb") as stream:
+                stream.seek(max(0, audit_path.stat().st_size - 262144))
+                lines = stream.read(262144).splitlines()
+            for line in reversed(lines):
+                try:
+                    event = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if event.get("event") == "EXTERNAL_NETWORK_CYCLE_COMPLETED":
+                    last_cycle = {
+                        key: event[key] for key in (
+                            "timestamp", "sources", "source_errors", "discovered",
+                            "added", "refreshed", "stale", "pruned",
+                        ) if key in event
+                    }
+                    break
+        except OSError:
+            pass
+    candidates = registry["candidates"]
+    p2p = registry.get("p2p_peers", {})
+    protocol = registry.get("protocol_peers", {})
+    status = "degraded" if last_cycle and last_cycle.get("source_errors", 0) else (
+        "observed" if last_cycle else "unknown"
+    )
+    return {
+        "status": status,
+        "candidate_count": len(candidates),
+        "p2p_peer_count": len(p2p),
+        "protocol_peer_count": len(protocol),
+        "last_updated": registry.get("updated_at"),
+        "last_cycle": last_cycle,
+        "external_connectivity_confirmed": False,
+        "cryptographic_trust_confirmed": False,
+    }
 
 
 def start_external_network(state_dir: str | Path | None = None, fed_node=None) -> bool:

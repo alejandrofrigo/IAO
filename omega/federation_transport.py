@@ -19,6 +19,39 @@ from urllib.parse import urlsplit
 MAX_DISCOVERY_BYTES = 1_000_000
 
 
+def _json_without_duplicate_keys(raw: bytes):
+    """Decode JSON and reject duplicate keys at every object depth."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("DUPLICATE_JSON_KEY")
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=unique_object)
+
+
+def _certificate_node_id(certificate: dict | None) -> str | None:
+    if not isinstance(certificate, dict):
+        return None
+    names = certificate.get("subjectAltName")
+    if not isinstance(names, tuple):
+        return None
+    values = [
+        value[len("urn:iao:node:"):]
+        for kind, value in names
+        if kind == "URI" and isinstance(value, str)
+        and value.startswith("urn:iao:node:")
+    ]
+    if len(values) != 1:
+        return None
+    value = values[0]
+    if len(value) != 16 or any(ch not in "0123456789abcdef" for ch in value):
+        return None
+    return value
+
+
 class FederationTransportError(RuntimeError):
     """Safe transport failure with a stable machine-readable reason."""
 
@@ -62,6 +95,29 @@ def validate_discovery_url(url: str) -> tuple[str, str, int, str]:
     return _parse_https_url(url)
 
 
+
+def validate_public_federation_origin(origin: str) -> str:
+    """Validate an exact HTTPS or Tor v3 onion origin for publication."""
+    if not isinstance(origin, str) or not 1 <= len(origin) <= 255:
+        raise FederationTransportError("INVALID_PUBLIC_ORIGIN")
+    try:
+        parsed = urlsplit(origin)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise FederationTransportError("INVALID_PUBLIC_ORIGIN") from exc
+    if (not host or parsed.username or parsed.password or parsed.path
+            or parsed.query or parsed.fragment):
+        raise FederationTransportError("INVALID_PUBLIC_ORIGIN")
+    if parsed.scheme == "https" and port in (None, 443):
+        return origin
+    if (parsed.scheme == "http" and host.endswith(".onion")
+            and len(host) == 62
+            and all(char in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
+            and port in (None, 80)):
+        return origin
+    raise FederationTransportError("INVALID_PUBLIC_ORIGIN")
+
 def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
     """Accept public HTTPS peers or literal-loopback HTTP integration peers."""
     if not isinstance(url, str) or not 1 <= len(url) <= 2048:
@@ -82,6 +138,15 @@ def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
         or any(ord(ch) < 33 or ord(ch) == 127 for ch in url)
     ):
         raise FederationTransportError("INVALID_ENDPOINT")
+    # Onion services are valid only as explicit Tor v3 HTTP endpoints.
+    # Reject HTTPS or malformed onion hosts before the generic HTTPS branch.
+    if host.lower().endswith(".onion") and not (
+        parsed.scheme == "http"
+        and len(host) == 62
+        and all(char in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
+        and port in (None, 80)
+    ):
+        raise FederationTransportError("INVALID_ONION_ENDPOINT")
     if parsed.scheme == "https":
         tunnel_hosts = {"bore.pub", "loca.lt"}
         tunnel_suffixes = (
@@ -102,6 +167,11 @@ def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
         except UnicodeError as exc:
             raise FederationTransportError("INVALID_ENDPOINT") from exc
         return "https", ascii_host, port or 443, parsed.path, ascii_host
+    if (parsed.scheme == "http" and host.endswith(".onion")
+            and len(host) == 62
+            and all(char in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
+            and port in (None, 80)):
+        return "onion", host, 80, parsed.path, host
     if parsed.scheme == "http" and port is not None and 1 <= port <= 65535:
         try:
             address = ipaddress.ip_address(host)
@@ -159,9 +229,11 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(
         self, hostname: str, address: str, *, port: int = 443,
         timeout: float, context: ssl.SSLContext,
+        expected_peer_id: str | None = None,
     ):
         super().__init__(hostname, port, timeout=timeout, context=context)
         self._pinned_address = address
+        self._expected_peer_id = expected_peer_id
 
     def connect(self) -> None:
         raw = socket.create_connection(
@@ -169,8 +241,16 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         )
         try:
             self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+            if self._expected_peer_id is not None:
+                peer_id = _certificate_node_id(self.sock.getpeercert())
+                if peer_id != self._expected_peer_id:
+                    raise FederationTransportError("TLS_SERVER_NODE_ID_MISMATCH")
         except Exception:
-            raw.close()
+            if self.sock is not None:
+                self.sock.close()
+                self.sock = None
+            else:
+                raw.close()
             raise
 
 
@@ -185,7 +265,7 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
         )
 
 
-def _client_tls_context() -> ssl.SSLContext:
+def _client_tls_context(*, require_client_cert: bool = False) -> ssl.SSLContext:
     ca_file = os.environ.get("IAO_TLS_CA_FILE") or None
     try:
         context = ssl.create_default_context(cafile=ca_file)
@@ -193,9 +273,9 @@ def _client_tls_context() -> ssl.SSLContext:
         raise FederationTransportError("TLS_CA_CONFIGURATION_INVALID") from exc
     cert_file = os.environ.get("IAO_TLS_CLIENT_CERT_FILE")
     key_file = os.environ.get("IAO_TLS_CLIENT_KEY_FILE")
-    require_client_cert = os.environ.get("IAO_TLS_REQUIRE_CLIENT_CERT", "").lower() in {
-        "1", "true", "yes",
-    }
+    require_client_cert = require_client_cert or os.environ.get(
+        "IAO_TLS_REQUIRE_CLIENT_CERT", ""
+    ).lower() in {"1", "true", "yes"}
     if bool(cert_file) != bool(key_file):
         raise FederationTransportError("INCOMPLETE_CLIENT_CERT_CONFIGURATION")
     if require_client_cert and not cert_file:
@@ -227,6 +307,8 @@ def _request_json(
     max_bytes: int,
     allow_loopback_http: bool,
     allow_public_post: bool = False,
+    require_client_cert: bool = False,
+    expected_peer_id: str | None = None,
 ) -> tuple[int, object]:
     if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
         raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
@@ -239,7 +321,7 @@ def _request_json(
             raise FederationTransportError("LOOPBACK_HTTP_NOT_ALLOWED")
     if scheme == "https":
         addresses = resolve_public_addresses(host, port)
-        context = _client_tls_context()
+        context = _client_tls_context(require_client_cert=require_client_cert)
     else:
         addresses = _resolve_loopback(host, port)
         context = None
@@ -251,7 +333,8 @@ def _request_json(
     for address in addresses:
         if scheme == "https":
             connection = _PinnedHTTPSConnection(
-                tls_host, address, port=port, timeout=timeout, context=context
+                tls_host, address, port=port, timeout=timeout, context=context,
+                expected_peer_id=expected_peer_id,
             )
         else:
             connection = _PinnedHTTPConnection(
@@ -289,13 +372,15 @@ def _request_json(
             if len(raw) > max_bytes:
                 raise FederationTransportError("RESPONSE_TOO_LARGE")
             try:
-                decoded = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                decoded = _json_without_duplicate_keys(raw)
+            except (UnicodeDecodeError, ValueError) as exc:
                 raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
             return response.status, decoded
         except FederationTransportError:
             raise
-        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+        except ssl.SSLError as exc:
+            raise FederationTransportError("TLS_HANDSHAKE_FAILED") from exc
+        except (OSError, http.client.HTTPException) as exc:
             last_error = exc
         finally:
             connection.close()
@@ -398,8 +483,8 @@ def fetch_onion_json(
         if len(raw) > max_bytes:
             raise FederationTransportError("RESPONSE_TOO_LARGE")
         try:
-            return json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return _json_without_duplicate_keys(raw)
+        except (UnicodeDecodeError, ValueError) as exc:
             raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
     except FederationTransportError:
         raise
@@ -442,9 +527,78 @@ def post_federation_json(
     *,
     timeout: float = 5.0,
     max_bytes: int = 262_144,
+    expected_peer_id: str | None = None,
 ) -> tuple[int, object]:
-    """POST a signed federation envelope over pinned HTTPS or literal loopback HTTP."""
+    """POST a signed envelope over pinned HTTPS, Tor onion, or explicit loopback."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise FederationTransportError("INVALID_ENDPOINT") from exc
+    if parsed.hostname and parsed.hostname.endswith(".onion"):
+        return post_onion_federation_json(
+            url, payload, timeout=timeout, max_bytes=max_bytes
+        )
     return _request_json(
         "POST", url, payload, timeout=timeout, max_bytes=max_bytes,
-        allow_loopback_http=True,
+        allow_loopback_http=True, require_client_cert=True,
+        expected_peer_id=expected_peer_id,
     )
+
+
+def post_onion_federation_json(
+    url: str,
+    payload: dict,
+    *,
+    timeout: float = 8.0,
+    max_bytes: int = 262_144,
+) -> tuple[int, object]:
+    """POST signed federation envelopes through Tor SOCKS5 with remote onion DNS."""
+    if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
+        raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
+    host, port, target = _parse_onion_url(url)
+    if target != "/fed/v1/message":
+        raise FederationTransportError("INVALID_ONION_FEDERATION_PATH")
+    proxy_host, proxy_port = _tor_proxy()
+    try:
+        import socks
+    except ImportError as exc:
+        raise FederationTransportError("TOR_SOCKS_DEPENDENCY_MISSING") from exc
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if len(body) > max_bytes:
+        raise FederationTransportError("REQUEST_TOO_LARGE")
+    connection = _TorOnionHTTPConnection(
+        host, timeout=timeout, proxy_host=proxy_host, proxy_port=proxy_port
+    )
+    try:
+        connection.request("POST", target, body=body, headers={
+            "Host": host, "Accept": "application/json",
+            "Content-Type": "application/json", "Connection": "close",
+            "User-Agent": "IAO-tor-federation/1",
+        })
+        response = connection.getresponse()
+        if 300 <= response.status < 400:
+            raise FederationTransportError("REDIRECT_REFUSED")
+        content_type = (response.getheader("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json" and not content_type.endswith("+json"):
+            raise FederationTransportError("JSON_CONTENT_TYPE_REQUIRED")
+        length = response.getheader("Content-Length")
+        if length is not None:
+            try:
+                if int(length) < 0 or int(length) > max_bytes:
+                    raise FederationTransportError("RESPONSE_TOO_LARGE")
+            except ValueError as exc:
+                raise FederationTransportError("INVALID_CONTENT_LENGTH") from exc
+        raw = response.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise FederationTransportError("RESPONSE_TOO_LARGE")
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
+        return response.status, decoded
+    except FederationTransportError:
+        raise
+    except (OSError, http.client.HTTPException) as exc:
+        raise FederationTransportError("TOR_ONION_REQUEST_FAILED") from exc
+    finally:
+        connection.close()

@@ -114,6 +114,86 @@ class AutonomousCore:
             self._event("TASK_SUBMITTED", {"id": task["id"], "kind": kind})
         return task
 
+    def schedule_maintenance(self, now=None):
+        """Enqueue bounded recurring diagnostics without duplicating active work."""
+        from datetime import timedelta
+
+        current = now or datetime.now(timezone.utc)
+        if not isinstance(current, datetime) or current.tzinfo is None:
+            raise AutonomousCoreError("INVALID_SCHEDULER_TIME")
+        current = current.astimezone(timezone.utc)
+        schedules = {
+            "self_check": 60 * 60,
+            "capability_scan": 6 * 60 * 60,
+            "improvement_plan": 24 * 60 * 60,
+        }
+        schedule_path = self.root / "scheduler.json"
+        with self.lock:
+            try:
+                state = json.loads(schedule_path.read_text("utf-8"))
+                if not isinstance(state, dict):
+                    raise ValueError("invalid scheduler state")
+            except FileNotFoundError:
+                state = {}
+            except (ValueError, OSError, UnicodeError) as exc:
+                raise AutonomousCoreError("INVALID_SCHEDULER_STATE") from exc
+            data = json.loads(self.tasks_path.read_text("utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+                raise AutonomousCoreError("INVALID_TASK_DATABASE")
+            active = {
+                item.get("kind") for item in data["tasks"]
+                if isinstance(item, dict) and item.get("status") in {"QUEUED", "RUNNING"}
+            }
+            terminal = [
+                item for item in data["tasks"]
+                if isinstance(item, dict)
+                and item.get("status") in {"COMPLETED", "FAILED", "BLOCKED"}
+            ]
+            terminal.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
+            retained_terminal = {item.get("id") for item in terminal[:1000]}
+            before_prune = len(data["tasks"])
+            data["tasks"] = [
+                item for item in data["tasks"]
+                if not isinstance(item, dict)
+                or item.get("status") not in {"COMPLETED", "FAILED", "BLOCKED"}
+                or item.get("id") in retained_terminal
+            ]
+            pruned = before_prune - len(data["tasks"])
+            if pruned:
+                self._event("TASK_HISTORY_PRUNED", {"count": pruned})
+            scheduled = []
+            for kind, interval in schedules.items():
+                previous = state.get(kind)
+                try:
+                    due = datetime.fromisoformat(previous) if previous else None
+                    if due is not None and (due.tzinfo is None or due.utcoffset() is None):
+                        due = None
+                except (TypeError, ValueError):
+                    due = None
+                if due is not None and due > current:
+                    continue
+                if kind not in active:
+                    if len(data["tasks"]) >= 5000:
+                        raise AutonomousCoreError("QUEUE_LIMIT")
+                    timestamp = current.isoformat()
+                    task = {
+                        "id": uuid.uuid4().hex, "kind": kind, "payload": {},
+                        "source": "IAO_MAINTENANCE_SCHEDULER", "status": "QUEUED",
+                        "created_at": timestamp, "updated_at": timestamp, "result": None,
+                    }
+                    data["tasks"].append(task)
+                    scheduled.append(task["id"])
+                    self._event("TASK_SUBMITTED", {"id": task["id"], "kind": kind})
+                state[kind] = (current + timedelta(seconds=interval)).isoformat()
+            self._save(data)
+            tmp = schedule_path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as stream:
+                json.dump(state, stream, sort_keys=True, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, schedule_path)
+        return scheduled
+
     def _federation_capability_scan(self):
         """Inspect federation state locally; never infer connectivity or trust."""
         import sqlite3
@@ -330,6 +410,53 @@ class AutonomousCore:
         result["scanned_at"] = self._now()
         return result
 
+    def _build_improvement_plan(self):
+        """Build a deterministic, read-only repository quality-gap report."""
+        repo = Path(__file__).resolve().parent.parent
+        omega_dir = repo / "omega"
+        tests_dir = repo / "tests"
+        if not omega_dir.is_dir() or not tests_dir.is_dir():
+            return {
+                "status": "INCOMPLETE_REPOSITORY_LAYOUT",
+                "code_changes_applied": False,
+                "candidate_code_executed": False,
+            }
+
+        modules = sorted(
+            path.stem for path in omega_dir.rglob("*.py")
+            if path.name != "__init__.py"
+            and "__pycache__" not in path.parts
+        )
+        test_names = {
+            path.stem[len("test_"):]
+            for path in tests_dir.rglob("test_*.py")
+            if "__pycache__" not in path.parts
+        }
+        uncovered = [
+            name for name in modules
+            if name not in test_names and name.replace("_", "") not in {
+                item.replace("_", "") for item in test_names
+            }
+        ]
+        return {
+            "status": "READ_ONLY_REPOSITORY_SCAN",
+            "module_count": len(modules),
+            "test_file_count": len(test_names),
+            "modules_without_directly_named_test_file": uncovered[:50],
+            "unpaired_module_count": len(uncovered),
+            "recommendations": [
+                "Add focused regression tests for modules without a directly named test file.",
+                "Run the complete CI matrix before accepting candidate changes.",
+                "Require functional and security tests in an OS-isolated candidate workspace.",
+            ],
+            "coverage_interpretation": (
+                "Heuristic filename mapping only; this is not measured code coverage "
+                "and does not prove that listed modules lack indirect tests."
+            ),
+            "code_changes_applied": False,
+            "candidate_code_executed": False,
+        }
+
     def _execute(self, task):
         kind = task["kind"]
         if kind == "self_check":
@@ -340,10 +467,7 @@ class AutonomousCore:
         if kind == "capability_scan":
             return self._federation_capability_scan()
         if kind == "improvement_plan":
-            return {
-                "recommendation": "Measure failures, propose reversible improvements.",
-                "code_changes_applied": False,
-            }
+            return self._build_improvement_plan()
         raise AutonomousCoreError("UNKNOWN_TASK")
 
     def run_one(self):
@@ -486,5 +610,11 @@ class AutonomousCore:
     def serve(self, interval=30):
         self._event("FOREGROUND_WORKER_STARTED", {"interval": interval})
         while not self.stop_event.is_set():
-            self.cycle()
+            try:
+                self.schedule_maintenance()
+                self.cycle()
+            except Exception as exc:
+                self._event("MAINTENANCE_CYCLE_FAILED", {
+                    "error_type": type(exc).__name__,
+                })
             self.stop_event.wait(interval)

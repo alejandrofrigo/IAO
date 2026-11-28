@@ -118,6 +118,69 @@ class IdentityChallengeVerificationTests(FedBase):
         result = self.verify(identity, response, nonce, request_ts)
         self.assertEqual(result["error"], "RESPONSE_CLOCK_SKEW")
 
+    def test_boolean_identity_version_is_not_protocol_version_one(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        identity["version"] = True
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "UNSUPPORTED_IDENTITY_PROTOCOL")
+
+    def test_boolean_response_version_is_rejected_even_when_signed(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        proof = {key: value for key, value in response.items() if key != "sig"}
+        proof["v"] = True
+        response = _sign(self.b.key, proof)
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "CHALLENGE_BINDING_MISMATCH")
+
+    def test_boolean_request_timestamp_is_rejected_even_when_signed(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        proof = {key: value for key, value in response.items() if key != "sig"}
+        proof["request_ts"] = True
+        response = _sign(self.b.key, proof)
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "CHALLENGE_BINDING_MISMATCH")
+
+    def test_duplicate_challenge_request_key_is_rejected(self):
+        raw = (
+            b'{"v":1,"v":1,"from":"' + self.a.node_id.encode()
+            + b'","to":"' + self.b.node_id.encode()
+            + b'","nonce":"' + (b"e" * 64)
+            + b'","ts":1000000.0}'
+        )
+        status, payload = self.b.answer_challenge(raw)
+        self.assertEqual((status, payload["error"]), (400, "INVALID_CHALLENGE"))
+
+    def test_boolean_challenge_request_version_is_rejected(self):
+        request = {
+            "v": True,
+            "from": self.a.node_id,
+            "to": self.b.node_id,
+            "nonce": "d" * 64,
+            "ts": self.clock(),
+        }
+        status, payload = self.b.answer_challenge(json.dumps(request).encode())
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "INVALID_CHALLENGE")
+
+    def test_signed_publication_rejects_boolean_protocol_version(self):
+        publication = self.b.identity_publication(
+            "https://node.example.org", consent=False
+        )
+        body = {key: value for key, value in publication.items() if key != "sig"}
+        body["version"] = True
+        forged = {**body, "sig": _sign(self.b.key, body)["sig"]}
+        self.assertFalse(Node.verify_publication(forged))
+
+    def test_signed_publication_requires_node_id_to_match_signing_key(self):
+        publication = self.b.identity_publication(
+            "https://node.example.org", consent=False
+        )
+        self.assertTrue(Node.verify_publication(publication))
+        body = {key: value for key, value in publication.items() if key != "sig"}
+        body["node_id"] = self.a.node_id
+        forged = {**body, "sig": _sign(self.b.key, body)["sig"]}
+        self.assertFalse(Node.verify_publication(forged))
+
 
 class HappyAndAuthTests(FedBase):
     def test_roundtrip_signed_verified_untrusted(self) -> None:
@@ -161,6 +224,39 @@ class HappyAndAuthTests(FedBase):
 
 
 class ReplayAndTimeTests(FedBase):
+    def test_duplicate_top_level_json_key_is_rejected(self) -> None:
+        envelope = _sign(self.a.key, self.env(nonce="duplicate-key-top-0001"))
+        raw = json.dumps(envelope).encode()
+        raw = raw[:-1] + b',"v":1}'
+        status, payload = self.b.handle(raw)
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_duplicate_nested_json_key_is_rejected(self) -> None:
+        envelope = _sign(self.a.key, self.env(nonce="duplicate-key-nest-01"))
+        raw = json.dumps(envelope).encode()
+        original = b'"query": "audit chain restore"'
+        duplicate = b'"query": "audit chain restore", "query": "other"'
+        self.assertIn(original, raw)
+        raw = raw.replace(original, duplicate, 1)
+        self.assertIn(duplicate, raw)
+        status, _payload = self.b.handle(raw)
+        self.assertEqual(status, 400)
+        from omega.federation import _json_without_duplicate_keys
+        with self.assertRaisesRegex(ValueError, "DUPLICATE_JSON_KEY"):
+            _json_without_duplicate_keys(raw)
+
+    def test_boolean_protocol_version_is_rejected_even_when_signed(self) -> None:
+        status, payload = self.raw(self.env(v=True, nonce="boolean-version-0001"))
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_boolean_envelope_timestamp_is_rejected_even_when_signed(self) -> None:
+        status, payload = self.raw(self.env(ts=True, nonce="boolean-timestamp-01"))
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_non_object_envelope_is_rejected_without_exception(self) -> None:
+        status, payload = self.b.handle(b"[]")
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
     def test_replay_rejected(self) -> None:
         raw = json.dumps(_sign(self.a.key, self.env())).encode()
         self.assertEqual(self.b.handle(raw)[0], 200)
@@ -290,6 +386,41 @@ class PartitionAndHostilePeerTests(FedBase):
         self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual(r["error"], "REPLAYED_OR_MISROUTED_RESPONSE")
+
+    def test_signed_response_boolean_timestamp_is_rejected(self) -> None:
+        self.t[0] = 1.0
+        hostile = self._hostile(lambda req: _sign(
+            self.b.key,
+            {
+                "v": 1, "from": self.b.node_id, "to": self.a.node_id,
+                "ts": True, "in_reply_to": req["nonce"],
+                "result": {"items": []}, "verification": "PASS",
+            },
+        ))
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(
+            self.b.node_id, hostile.url, "knowledge.search", Q
+        )
+        self.assertEqual(
+            (result["ok"], result["error"]), (False, "CLOCK_SKEW")
+        )
+
+    def test_signed_response_boolean_version_is_rejected(self) -> None:
+        hostile = self._hostile(lambda req: _sign(
+            self.b.key,
+            {
+                "v": True, "from": self.b.node_id, "to": self.a.node_id,
+                "ts": self.clock(), "in_reply_to": req["nonce"],
+                "result": {"items": []}, "verification": "PASS",
+            },
+        ))
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(
+            self.b.node_id, hostile.url, "knowledge.search", Q
+        )
+        self.assertEqual(
+            (result["ok"], result["error"]), (False, "BAD_RESPONSE")
+        )
 
     def test_garbage_and_oversized_responses_handled(self) -> None:
         hostile = self._hostile(lambda req: {"x": "not an envelope"})
@@ -432,3 +563,141 @@ class PersistentPeerStoreTests(FedBase):
             restored.peers[self.b.node_id]["granted_capabilities"],
             [],
         )
+
+
+
+class OnionEndpointTests(FedBase):
+    def test_peer_contract_accepts_v3_onion_endpoint_without_auto_enrollment(self):
+        from pathlib import Path
+
+        node = Node(
+            self.a.store, self.a.registry, key=self.a.key,
+            clock=self.clock, served=self.a.served,
+            peer_store_path=Path(self.tmp.name) / "onion-peers.json",
+        )
+        contract = self.b.contract_for_self(["knowledge.search"])
+        contract["endpoint"] = "http://" + "f" * 56 + ".onion/fed/v1/message"
+        node.enroll(contract)
+        self.assertEqual(node.peers[self.b.node_id]["endpoint"], contract["endpoint"])
+        self.assertEqual(node.peers[self.b.node_id]["granted_capabilities"], [])
+
+
+class FederationMTLSListenerTests(unittest.TestCase):
+    def test_tls_listener_refuses_context_without_required_client_certificate(self):
+        import ssl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "mtls", lambda: 1_000_000.0)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            try:
+                with self.assertRaisesRegex(
+                    ValueError, "FEDERATION_MTLS_CLIENT_CERT_REQUIRED"
+                ):
+                    FedServer(node, ssl_context=context)
+            finally:
+                node.store.close()
+
+
+class FederationTLSNodeIdentityTests(unittest.TestCase):
+    def test_tls_certificate_node_identity_requires_one_valid_uri_san(self):
+        from omega.federation import _peer_certificate_node_id
+
+        node_id = "0123456789abcdef"
+        self.assertEqual(
+            _peer_certificate_node_id(
+                {"subjectAltName": (("URI", f"urn:iao:node:{node_id}"),)}
+            ),
+            node_id,
+        )
+        for certificate in (
+            None,
+            {},
+            {"subjectAltName": (("DNS", f"urn:iao:node:{node_id}"),)},
+            {"subjectAltName": (("URI", "urn:iao:node:short"),)},
+            {"subjectAltName": (
+                ("URI", f"urn:iao:node:{node_id}"),
+                ("URI", f"urn:iao:node:{node_id}"),
+            )},
+            {"subjectAltName": (("URI", "urn:iao:node:0123456789ABCDEf"),)},
+        ):
+            self.assertIsNone(_peer_certificate_node_id(certificate))
+
+
+class FederationCleartextBindTests(unittest.TestCase):
+    def test_non_loopback_listener_requires_tls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "public-bind", lambda: 1_000_000.0)
+            try:
+                with self.assertRaisesRegex(
+                    ValueError, "FEDERATION_TLS_REQUIRED_FOR_NON_LOOPBACK_BIND"
+                ):
+                    FedServer(node, host="0.0.0.0")
+            finally:
+                node.store.close()
+
+
+class FederationTLSListenerConfigurationTests(unittest.TestCase):
+    def test_tls_listener_advertises_https_and_requires_tls12(self):
+        import ssl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "tls-url", lambda: 1_000_000.0)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            server = None
+            try:
+                server = FedServer(node, ssl_context=context)
+                self.assertTrue(server.url.startswith("https://"))
+                self.assertGreaterEqual(
+                    context.minimum_version, ssl.TLSVersion.TLSv1_2
+                )
+            finally:
+                if server is not None:
+                    server.httpd.server_close()
+                node.store.close()
+
+    def test_tls_listener_rejects_context_allowing_tls10(self):
+        import ssl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "tls-old", lambda: 1_000_000.0)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.minimum_version = ssl.TLSVersion.TLSv1
+            try:
+                with self.assertRaisesRegex(
+                    ValueError, "FEDERATION_MTLS_CLIENT_CERT_REQUIRED"
+                ):
+                    FedServer(node, ssl_context=context)
+            finally:
+                node.store.close()
+
+
+class FederationServerTLSContextFactoryTests(unittest.TestCase):
+    def test_server_context_factory_refuses_missing_files(self):
+        from omega.federation import create_federation_server_ssl_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, "FEDERATION_TLS_FILE_REFUSED"):
+                create_federation_server_ssl_context(
+                    root / "server.crt", root / "server.key", root / "client-ca.crt"
+                )
+
+    def test_server_context_factory_refuses_world_readable_private_key(self):
+        from omega.federation import create_federation_server_ssl_context
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cert = root / "server.crt"
+            key = root / "server.key"
+            ca = root / "client-ca.crt"
+            cert.write_text("not-a-certificate")
+            key.write_text("not-a-private-key")
+            ca.write_text("not-a-ca")
+            key.chmod(0o644)
+            with self.assertRaisesRegex(
+                ValueError, "FEDERATION_TLS_PRIVATE_KEY_PERMISSIONS_TOO_OPEN"
+            ):
+                create_federation_server_ssl_context(cert, key, ca)

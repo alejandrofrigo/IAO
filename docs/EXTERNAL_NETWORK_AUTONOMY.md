@@ -1,80 +1,90 @@
 # Red externa autónoma de IAO
 
-Estado de ingeniería: 26 de noviembre de 2026. Este hito añade un coordinador de descubrimiento multifuente al arranque del servidor. No demuestra que exista ya una red pública de peers conectados ni un servicio alojado 24/7.
+Estado de ingeniería: 27 de noviembre de 2026. El servidor integra adaptadores opcionales para directorios HTTPS y onion v3, Kademlia/libp2p, IPFS Swarm y autorizaciones Nostr verificadas. Esto implementa conectores y ciclos de inventario; no demuestra por sí solo que haya peers remotos disponibles, que una federación esté operativa ni que exista servicio 24/7.
 
-## Ciclo autónomo
+## Fuentes conectadas al worker
 
-El servidor inicia un worker de baja frecuencia que repite el descubrimiento cada 30 minutos por defecto (mínimo: 5 minutos). Los adaptadores son independientes:
+- GitHub público: búsqueda indirecta a través del registro local de descubrimiento; nunca es autoridad.
+- Feeds HTTPS y directorios Ed25519 configurados localmente.
+- Directorios onion v3 por Tor SOCKS5 con resolución DNS remota, sin redirecciones y con límites de tamaño/tiempo.
+- Federación saliente hacia peers IAO con endpoint onion v3: mensajes Ed25519 firmados viajan por Tor SOCKS5. El endpoint debe estar fijado en el contrato del peer y el peer debe estar enrolado de forma independiente.
+- libp2p Kademlia DHT en modo cliente outbound-only, cuando está instalada la dependencia `p2p`.
+- IPFS Swarm: lee peers conectados desde la API local IPFS, nunca desde una API remota arbitraria.
+- Nostr: consulta relays WebSocket públicos y verifica eventos Schnorr de autorización dirigidos al bridge IAO. Un relay o autor Nostr no se convierte en nodo IAO ni recibe permisos.
+- Inventario local de peers P2P existentes.
 
-- Búsqueda pública de repositorios GitHub como fuente opcional, nunca como autoridad o registro central.
-- Feeds HTTPS públicos configurados.
-- Directorios HTTPS firmados con claves Ed25519 previamente configuradas.
-- Directorios públicos `.onion` v3 mediante Tor SOCKS5 local, con DNS remoto, sin redirecciones y límites de respuesta.
-- Cliente Kademlia libp2p outbound-only cuando está instalada la dependencia opcional `p2p`, además de leer el inventario local. Los peers se almacenan por separado de los nodos HTTP.
-
-Los fallos de una fuente no detienen las demás. El registro se actualiza atómicamente, con permisos privados, límites, deduplicación, first_seen/last_seen y observaciones. El worker no necesita APIs comerciales.
+Los errores de una fuente no detienen las demás. Los resultados se separan en candidatos HTTP, peers P2P y eventos de protocolo.
 
 ## Configuración
 
-Archivo opcional \`~/.config/iao/network-discovery.json\`:
+Archivo opcional `~/.config/iao/network-discovery.json`:
 
-\`\`\`json
+```json
 {
-  "github": {"enabled": true},\n  "libp2p": {"enabled": true},
-  "https_feeds": ["https://directory.example.org/iao/peers.json"],
-  "tor_onion_feeds": ["http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion/iao/peers.json"],
-  "signed_directories": [
-    {
-      "url": "https://directory.example.org/iao/signed.json",
-      "pubkey_hex": "CLAVE_PUBLICA_ED25519_DE_64_CARACTERES_HEXADECIMALES"
-    }
-  ]
+  "github": {"enabled": true},
+  "libp2p": {"enabled": true},
+  "https_feeds": [],
+  "tor_onion_feeds": [
+    "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion/iao/peers.json"
+  ],
+  "signed_directories": [],
+  "ipfs": {"enabled": true, "api": "http://127.0.0.1:5001"},
+  "nostr": {
+    "enabled": true,
+    "relays": [
+      "wss://relay.damus.io",
+      "wss://nos.lol",
+      "wss://relay.nostr.band"
+    ]
+  }
 }
-\`\`\`
+```
 
-Feeds y directorios deben publicar JSON accesible por HTTPS. Los directorios firmados verifican Ed25519 contra la clave pública configurada localmente. Los anuncios sin firma solo son pistas; las claves de confianza nunca se aprenden del propio candidato.
+Activa IPFS solo si el daemon local está instalado y su API está limitada a loopback. Activa Nostr si deseas consultar autorizaciones firmadas en los relays indicados. No se aceptan URLs de API IPFS remotas. Los feeds onion deben ser servicios v3 y entregar JSON.
 
-Variables: \`IAO_NETWORK_DISCOVERY_CONFIG\`, \`IAO_EXTERNAL_NETWORK_INTERVAL\` y \`OMEGA_STATE_DIR\`.
+### Tor saliente y publicación onion
 
-## Separación de seguridad
+El transporte saliente requiere Tor en ejecución con un proxy SOCKS5 local:
 
-Todo nodo HTTP queda \`DISCOVERED_UNVERIFIED\`, \`identity_verified=false\`, \`enrolled=false\`, con permisos vacíos. Las capacidades anunciadas son datos no confiables, nunca permisos. Los peers libp2p permanecen en un inventario P2P separado y no se convierten en endpoints HTTP. El descubrimiento no ejecuta código remoto, no lee datos privados de peers, no realiza handshakes de enrolamiento ni activa tareas.
+- `IAO_TOR_SOCKS_HOST=127.0.0.1`
+- `IAO_TOR_SOCKS_PORT=9050` (o el puerto SOCKS local real)
+- Instalar el extra `.[tor]` (PySocks); el Dockerfile raíz lo incluye.
+- El proxy se restringe a loopback y el hostname onion se resuelve dentro de Tor, nunca por DNS local.
 
-## Límites actuales
+Para ofrecer voluntariamente un servicio onion, configura Tor Hidden Service en el equipo que controla la API, con un directorio de servicio privado y un reenvío equivalente a `HiddenServicePort 80 127.0.0.1:8080`. Protege el directorio de claves de Tor y no publiques su clave privada. Configura además:
 
-- La búsqueda GitHub y los feeds necesitan conectividad saliente; GitHub puede aplicar límites de API.
-- La conexión DHT real se inicia automáticamente solo si está instalada la dependencia opcional `p2p` (`pip install -e '.[p2p]'`); necesita bootstrappers accesibles. Sin esa dependencia, se conserva el inventario local, pero no se afirma conectividad DHT.
-- El adaptador Tor se limita a lectura de directorios onion públicos; no configura ni inicia Tor por sí mismo. Sin daemon Tor y el extra `.[tor]`, esa fuente fallará de forma aislada y las demás seguirán funcionando.
-- Los directorios onion no se consideran confiables por ser onion: las identidades y anuncios deben verificarse independientemente antes de cualquier federación.
-- No se ha probado intercambio real entre instalaciones independientes, ejecución federada ni despliegue persistente. El worker solo se ejecuta mientras el proceso servidor está activo.
+- `IAO_FEDERATION_PUBLIC_PEERING=true`
+- `IAO_FEDERATION_PUBLIC_ORIGIN=http://<hostname-v3>.onion`
+
+La ruta pública de publicación seguirá exigiendo consentimiento explícito. No actives el peering si no controlas el servicio y sus claves. El Compose actual ejecuta la API en un contenedor: su loopback no es el loopback del host; por tanto, el SOCKS de Tor debe estar en el mismo espacio de red que el proceso API para que el transporte saliente funcione. No se afirma que Compose inicie Tor automáticamente.
+
+## Persistencia y confianza
+
+- Los registros se guardan en `OMEGA_STATE_DIR/external-network/registry.json` con permisos privados, escritura atómica, deduplicación y límites.
+- Los nodos HTTP descubiertos empiezan como `DISCOVERED_UNVERIFIED`; no se confía en capacidades anunciadas.
+- Los peers IPFS/libp2p se guardan separados por peer ID y multiaddr; no se inventan endpoints HTTPS.
+- Los eventos Nostr se guardan en `protocol_peers` como autorización de evento verificada; eso no verifica la identidad de un nodo IAO ni equivale a enrolamiento.
+- Los peers onion solo pueden comunicarse mediante mensajes firmados y contratos de capacidades; Tor aporta transporte/privacidad de red, no confianza de aplicación.
+- No se ejecuta código de terceros, no se comparten datos privados y no se conceden capacidades administrativas automáticamente.
+
+## Límites reales
+
+- Tor no se instala ni inicia como daemon automáticamente; el operador debe proporcionar un SOCKS5 local.
+- libp2p necesita bootstrappers accesibles y la dependencia opcional instalada.
+- IPFS necesita un daemon local y peers en su swarm.
+- Nostr necesita conectividad WebSocket y relays disponibles; las autorizaciones deben ser eventos firmados válidos.
+- El worker solo vive mientras el proceso IAO está activo. No es un daemon de sistema garantizado ni un servicio 24/7.
+- No se han validado todavía intercambios reales Tor/IPFS/libp2p/Nostr entre instalaciones independientes en un despliegue de producción.
 
 ## Verificación
 
-\`python -m pytest tests/test_external_network.py tests/test_federation_ipfs_discovery.py\`
+```bash
+python -m pytest tests/test_external_network.py tests/test_federation_transport.py tests/test_federation_discovery_transport.py tests/test_federation.py tests/test_federation_ipfs_discovery.py
+python -m pytest
+```
 
-\`python -m pytest\`
+El CI prueba contratos y aislamiento de código; no sustituye la prueba de conectividad externa.
 
-El CI comprueba código y contratos; no sustituye pruebas externas de conectividad.
+## Federacion por consentimiento
 
-
-## Incorporación federada automática por consentimiento remoto
-
-El ciclo del servidor ahora enlaza el inventario externo con `omega.federation_autonomous`.
-Por cada ciclo se examinan hasta 20 candidatos HTTP descubiertos. Un peer solo se incorpora si publica
-`/fed/v1/publication` con una firma Ed25519 válida y `consent: true`, anuncia el mismo origen
-y endpoint, mantiene una concesión vigente, supera el desafío nonce firmado y ofrece una capacidad
-READ_ONLY que IAO ya sirve. El transporte HTTPS fija las direcciones DNS públicas, valida TLS,
-rechaza redirecciones y limita cuerpos y tiempos.
-
-La publicación pública de cada instalación está desactivada por defecto. Para ofrecer participación
-voluntaria, el operador del peer debe configurar `IAO_FEDERATION_PUBLIC_PEERING=true` y
-`IAO_FEDERATION_PUBLIC_ORIGIN=https://su-dominio-publico.example`. El servidor publica entonces
-`GET /fed/v1/publication`; sin ambas opciones responde 404. El anuncio no permite ejecución remota,
-acceso privado ni concede permisos de entrada. IAO incorpora al peer con lista de permisos entrantes
-vacía. La conexión operativa requiere además que el endpoint público sea alcanzable y que el peer
-mantenga el protocolo y el consentimiento anunciados.
-
-El trabajador de red ejecuta este proceso automáticamente tras cada ciclo de descubrimiento.
-El inventario conserva el resultado y el registro de auditoría local. El transporte federado onion-only
-y el enlace libp2p de mensajes de aplicación siguen siendo fronteras separadas: descubrir peers Tor o
-DHT no los incorpora como peers federados HTTP.
+La publicación está desactivada por defecto. Cada instalación debe configurar explícitamente `IAO_FEDERATION_PUBLIC_PEERING=true` y un origen HTTPS o onion v3 exacto. IAO verifica firma Ed25519, identidad, concesión y challenge antes de considerar una relación federada. El transporte de mensajes onion pasa por Tor SOCKS5; un anuncio o descubrimiento por sí solo no enrola un peer ni concede capacidades.

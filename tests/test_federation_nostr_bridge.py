@@ -44,3 +44,32 @@ def test_nostr_event_candidates_are_discovery_only():
     assert candidates[0]["authorized"] is False
     assert candidates[0]["source"] == "nostr_bridge"
     assert candidates[0]["nostr_event"] == event
+
+
+
+def test_nostr_bridge_key_uses_private_persistent_state(monkeypatch, tmp_path):
+    import stat
+    from pathlib import Path
+
+    directory = tmp_path / "state" / "federation-bridges" / "nostr"
+    monkeypatch.setattr(nostr_bridge, "BRIDGE_DIR", directory)
+    monkeypatch.setattr(nostr_bridge, "BRIDGE_KEY", directory / "bridge.pem")
+    first = nostr_bridge._ensure_bridge_key()
+    second = nostr_bridge._ensure_bridge_key()
+    assert first.private_bytes_raw() == second.private_bytes_raw()
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE((directory / "bridge.pem").stat().st_mode) == 0o600
+
+
+def test_nostr_bridge_refuses_symlinked_key(monkeypatch, tmp_path):
+    import pytest
+    directory = tmp_path / "bridge"
+    directory.mkdir()
+    target = tmp_path / "outside.pem"
+    target.write_text("not a key")
+    key_path = directory / "bridge.pem"
+    key_path.symlink_to(target)
+    monkeypatch.setattr(nostr_bridge, "BRIDGE_DIR", directory)
+    monkeypatch.setattr(nostr_bridge, "BRIDGE_KEY", key_path)
+    with pytest.raises(RuntimeError, match="NOSTR_BRIDGE_KEY_SYMLINK_REFUSED"):
+        nostr_bridge._ensure_bridge_key()

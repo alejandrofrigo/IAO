@@ -20,7 +20,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libgmp-dev libgmp10 \
     && apt-mark manual libgmp10 \
     && python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir '.[p2p]' \
+    && python -m pip install --no-cache-dir '.[p2p,tor]' \
     && apt-get purge -y --auto-remove build-essential libgmp-dev \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system iao \
@@ -33,4 +33,4 @@ USER iao
 
 EXPOSE 8080
 
-CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "omega.supervisor", "--", "uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8080"]

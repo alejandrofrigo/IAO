@@ -29,6 +29,22 @@ FORBIDDEN_PATHS = {
     "omega/evolution.py",
 }
 
+
+def _assert_no_symlink(path: Path) -> None:
+    """Reject symlinked storage roots and every existing path component."""
+    absolute = Path(os.path.abspath(path))
+    cursor = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError("EVOLUTION_SYMLINK_PATH_REFUSED")
+
+
+def _ensure_storage_paths() -> None:
+    for path in (STATE, CANDIDATES, EVENTS):
+        _assert_no_symlink(path)
+
+
 def _canonical(obj: Any) -> bytes:
     return json.dumps(
         obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -38,7 +54,9 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 def _record(event: dict) -> None:
+    _ensure_storage_paths()
     STATE.mkdir(parents=True, exist_ok=True)
+    _assert_no_symlink(EVENTS)
     previous = GENESIS
     if EVENTS.exists():
         with EVENTS.open("r", encoding="utf-8") as f:
@@ -60,6 +78,7 @@ def _record(event: dict) -> None:
         os.fsync(f.fileno())
 
 def verify_log() -> tuple[bool, int | None]:
+    _ensure_storage_paths()
     previous = GENESIS
     if not EVENTS.exists():
         return True, None
@@ -129,19 +148,33 @@ def submit(proposal: dict) -> dict:
     ok, bad = verify_log()
     if not ok:
         raise RuntimeError(f"Registro de evolución no verificable en línea {bad}")
+    _ensure_storage_paths()
     clean = _validate_proposal(proposal)
     proposal_id = _sha(_canonical(clean))[:16]
+    CANDIDATES.mkdir(parents=True, exist_ok=True)
+    _assert_no_symlink(CANDIDATES)
     folder = CANDIDATES / proposal_id
-    folder.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(parents=False, exist_ok=False)
+    _assert_no_symlink(folder)
     for name, content in clean["files"].items():
         dest = folder / name
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
+        _assert_no_symlink(dest)
+        if dest.exists():
+            raise FileExistsError("CANDIDATE_FILE_ALREADY_EXISTS")
+        with dest.open("x", encoding="utf-8") as stream:
+            stream.write(content)
+    file_hashes = {
+        name: _sha(content.encode("utf-8"))
+        for name, content in clean["files"].items()
+    }
     metadata = {
         "id": proposal_id,
         "title": clean["title"],
         "checks": clean["checks"],
         "files": sorted(clean["files"]),
+        "file_hashes": file_hashes,
+        "proposal_hash": _sha(_canonical(clean)),
         "status": "PENDING_VERIFICATION",
         "created": time.time(),
     }
@@ -153,51 +186,169 @@ def submit(proposal: dict) -> dict:
     return metadata
 
 def evaluate(proposal_id: str) -> dict:
-    """Verifica sintaxis Python en staging y aprueba solo para revisión/staging."""
+    """Revalidate proposal integrity and syntax; never execute candidate code."""
     if not re.fullmatch(r"[0-9a-f]{16}", proposal_id):
         raise ValueError("Identificador inválido")
     ok, bad = verify_log()
     if not ok:
         raise RuntimeError(f"Registro de evolución no verificable en línea {bad}")
+
+    # Refuse redirected state roots as well as candidate directories.
+    _ensure_storage_paths()
     folder = CANDIDATES / proposal_id
+    if folder.is_symlink() or not folder.is_dir():
+        raise FileNotFoundError("Directorio de propuesta inexistente o no seguro")
     meta_path = folder / "proposal.json"
-    if not meta_path.is_file():
-        raise FileNotFoundError("Propuesta inexistente")
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta_path.is_symlink() or not meta_path.is_file():
+        raise FileNotFoundError("Metadatos de propuesta inexistentes o no seguros")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"PROPOSAL_METADATA_UNREADABLE:{type(exc).__name__}") from exc
+    if not isinstance(meta, dict):
+        raise ValueError("MANIFEST_INVALID")
+
+    files = meta.get("files")
+    hashes = meta.get("file_hashes")
+    manifest_valid = (
+        isinstance(files, list)
+        and bool(files)
+        and len(files) <= MAX_FILES
+        and all(isinstance(name, str) for name in files)
+        and len(set(files)) == len(files)
+        and isinstance(hashes, dict)
+        and set(files) == set(hashes)
+        and meta.get("id") == proposal_id
+        and isinstance(meta.get("title"), str)
+        and bool(meta.get("title", "").strip())
+        and isinstance(meta.get("proposal_hash"), str)
+    )
+    if not manifest_valid:
+        raise ValueError("MANIFEST_INVALID")
+    checks = meta.get("checks")
+    if not isinstance(checks, list) or not checks or any(
+        item != "compileall" for item in checks
+    ):
+        raise ValueError("CHECK_POLICY_INVALID")
+
     failures = []
-    for name in meta["files"]:
-        rel = _safe_path(name)
-        src = folder / rel
-        if not src.is_file():
-            failures.append(f"Falta el archivo candidato: {name}")
+    total = 0
+    normalized = {}
+    hashes_valid = True
+    syntax_valid = True
+    for name in files:
+        try:
+            rel = _safe_path(name)
+        except (TypeError, ValueError):
+            failures.append(f"{name}: PATH_INVALID")
+            hashes_valid = False
             continue
+
+        src = folder / rel
+        cursor = folder
+        unsafe_link = False
+        for part in rel.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                failures.append(f"{name}: SYMLINK_REFUSED")
+                unsafe_link = True
+                hashes_valid = False
+                break
+        if unsafe_link:
+            continue
+        try:
+            if not src.is_file():
+                failures.append(f"{name}: MISSING_OR_NOT_REGULAR_FILE")
+                hashes_valid = False
+                continue
+            data = src.read_bytes()
+        except OSError as exc:
+            failures.append(f"{name}: READ_FAILED:{type(exc).__name__}")
+            hashes_valid = False
+            continue
+
+        total += len(data)
+        if len(data) > MAX_FILE_BYTES or total > MAX_TOTAL_BYTES:
+            failures.append(f"{name}: SIZE_LIMIT_EXCEEDED")
+            hashes_valid = False
+            continue
+        actual_hash = _sha(data)
+        if not isinstance(hashes.get(name), str) or actual_hash != hashes[name]:
+            failures.append(f"{name}: CONTENT_HASH_MISMATCH")
+            hashes_valid = False
+            continue
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError:
+            failures.append(f"{name}: UTF8_INVALID")
+            hashes_valid = False
+            continue
+
+        normalized[name] = content
         if rel.suffix == ".py":
             try:
-                compile(src.read_text(encoding="utf-8"), name, "exec")
-            except Exception as exc:
-                failures.append(f"{name}: {type(exc).__name__}: {exc}")
+                compile(content, name, "exec")
+            except (SyntaxError, ValueError, TypeError) as exc:
+                failures.append(f"{name}: SYNTAX_INVALID:{type(exc).__name__}")
+                syntax_valid = False
+
+    clean = {
+        "title": meta["title"],
+        "files": normalized,
+        "checks": checks,
+    }
+    if len(normalized) == len(files):
+        if _sha(_canonical(clean)) != meta["proposal_hash"]:
+            failures.append("PROPOSAL_HASH_MISMATCH")
+            hashes_valid = False
+    else:
+        failures.append("PROPOSAL_INCOMPLETE")
+        hashes_valid = False
+
+    meta["validation"] = {
+        "manifest_valid": manifest_valid,
+        "content_hashes_valid": hashes_valid,
+        "syntax_valid": syntax_valid,
+        "candidate_code_executed": False,
+    }
     if failures:
         meta["status"] = "REJECTED"
         meta["failures"] = failures
+        meta["promotion_eligible"] = False
         _record({"type": "PROPOSAL_REJECTED", "id": proposal_id,
-                 "failures": failures})
+                 "failures": failures, "validation": meta["validation"]})
     else:
-        meta["status"] = "APPROVED_FOR_STAGING"
+        meta["status"] = "STATIC_CHECKS_PASSED"
+        meta["promotion_eligible"] = False
         meta["notice"] = (
-            "Aprobada por comprobaciones limitadas; no desplegada ni integrada. "
-            "Faltan pruebas funcionales, seguridad y revisión de integración."
+            "Solo integridad y sintaxis verificadas. No se ejecutó el candidato; "
+            "faltan pruebas funcionales, seguridad y revisión de integración. "
+            "No está autorizado para promoción ni despliegue."
         )
-        _record({"type": "PROPOSAL_APPROVED_FOR_STAGING",
-                 "id": proposal_id, "files": meta["files"]})
-    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
-                         encoding="utf-8")
+        _record({"type": "PROPOSAL_STATIC_CHECKS_PASSED",
+                 "id": proposal_id, "files": meta["files"],
+                 "validation": meta["validation"]})
+
+    # Recheck immediately before replacing metadata; do not follow a swapped symlink.
+    if meta_path.is_symlink():
+        raise ValueError("PROPOSAL_METADATA_SYMLINK_REFUSED")
+    temp_path = folder / "proposal.json.tmp"
+    if temp_path.is_symlink():
+        raise ValueError("PROPOSAL_METADATA_TEMP_SYMLINK_REFUSED")
+    with temp_path.open("w", encoding="utf-8") as stream:
+        json.dump(meta, stream, indent=2, ensure_ascii=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temp_path, meta_path)
     return meta
 
 def status() -> dict:
     ok, bad = verify_log()
     items = []
+    _ensure_storage_paths()
     if CANDIDATES.exists():
         for p in sorted(CANDIDATES.glob("*/proposal.json")):
+            _assert_no_symlink(p)
             try:
                 items.append(json.loads(p.read_text(encoding="utf-8")))
             except Exception:

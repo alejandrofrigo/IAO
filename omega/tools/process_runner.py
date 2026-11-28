@@ -1,7 +1,11 @@
 """Killable process boundary for queued, explicitly approved read-only tools.
 
 This limits execution time and selected POSIX resources. It is not an OS
-sandbox: filesystem and network isolation must be supplied by deployment.
+sandbox: filesystem isolation and controlled global outbound networking must
+be supplied by deployment. The child inherits the host network namespace;
+this module neither provides persistent connectivity nor qualifies egress
+policy, route failover, or isolation from private/control-plane networks.
+See docs/SANDBOX_GLOBAL_NETWORK.md before production use.
 """
 from __future__ import annotations
 
@@ -23,30 +27,30 @@ class ToolProcessError(RuntimeError):
     pass
 
 
-def _apply_child_limits(timeout_seconds: float) -> None:
+def _apply_child_limits(timeout_seconds: float) -> bool:
+    """Apply mandatory POSIX limits; report unsupported platforms explicitly."""
     if os.name != "posix":
-        return
-    try:
-        import resource
+        return False
+    import resource
 
-        cpu = max(1, int(timeout_seconds) + 1)
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-        resource.setrlimit(
-            resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE)
-        )
-        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESULT_BYTES, MAX_RESULT_BYTES))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        if hasattr(resource, "RLIMIT_CORE"):
-            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    except (ImportError, OSError, ValueError):
-        # Parent still enforces a wall-clock deadline and kills the process.
-        pass
+    cpu = max(1, int(timeout_seconds) + 1)
+    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
+    resource.setrlimit(
+        resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE)
+    )
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESULT_BYTES, MAX_RESULT_BYTES))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+    if hasattr(resource, "RLIMIT_CORE"):
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    return True
 
 
 def _child_entry(send_conn: Any, run: Callable[..., Any], verify: Callable[..., Any],
                  payload: dict[str, Any], timeout_seconds: float) -> None:
     try:
-        _apply_child_limits(timeout_seconds)
+        limits_applied = _apply_child_limits(timeout_seconds)
+        if not limits_applied:
+            raise RuntimeError("PROCESS_RESOURCE_LIMITS_UNAVAILABLE")
         # Queued tools must not inherit application credentials through env vars.
         os.environ.clear()
         output = run(payload)

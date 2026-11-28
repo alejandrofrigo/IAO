@@ -1272,6 +1272,48 @@ class OperatorIdentityAuthority:
             raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
         return True
 
+    @contextmanager
+    def authorize_tool_execution(
+        self, authenticated_subject: Any, session_digest: Any, device_id: Any,
+    ):
+        """Serialize authorization with root revocation for the full bounded tool call.
+
+        The SQLite write reservation is deliberately held until the tool executor
+        returns. Thus a concurrent revoke either commits first (and this gate
+        denies) or waits until an already-authorized bounded call has finished.
+        Callers MUST enforce a finite tool timeout before entering this context.
+        """
+        subject_digest = self._session_subject_digest(authenticated_subject)
+        if not isinstance(session_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", session_digest):
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{64}", device_id):
+            raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        with self._database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    """SELECT b.subject_digest,b.session_digest,b.key_version,
+                    i.key_version AS active_key_version,p.device_id,
+                    p.key_version AS device_key_version
+                    FROM operator_session_bindings b
+                    JOIN operator_identities i ON i.identity_id=b.identity_id
+                    JOIN primary_device_bindings p ON p.identity_id=i.identity_id
+                    WHERE i.status='ACTIVE'
+                    AND b.subject_digest=? AND b.session_digest=? AND p.device_id=?""",
+                    (subject_digest, session_digest, device_id),
+                ).fetchone()
+                if (
+                    row is None or row["key_version"] != row["active_key_version"]
+                    or row["device_key_version"] != row["active_key_version"]
+                ):
+                    raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+                yield True
+                db.execute("COMMIT")
+            except BaseException:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
     def verify_primary_device_for_session(
         self, authenticated_subject: Any, authenticated_session_token: Any,
         device_id: Any,

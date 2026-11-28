@@ -1,11 +1,28 @@
+import contextlib
+import io
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 from omega.supervisor import supervise
+
+
+def _launch_supervisor(child_code: str, shutdown_grace: float = 5.0):
+    supervisor_code = (
+        "import subprocess,sys;from omega.supervisor import supervise;"
+        "raise SystemExit(supervise([sys.executable,'-c',sys.argv[1]], "
+        "shutdown_grace=float(sys.argv[2])))"
+    )
+    return subprocess.Popen(
+        [sys.executable, "-c", supervisor_code, child_code, str(shutdown_grace)],
+        stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "PYTHONPATH": "."},
+    )
 
 
 class SupervisorTests(unittest.TestCase):
@@ -15,13 +32,62 @@ class SupervisorTests(unittest.TestCase):
         self.assertLess(time.time() - t0, 10)
 
     def test_sigterm_stops_child_no_orphans(self) -> None:
-        code = ("import subprocess,sys,time;from omega.supervisor import supervise;"
-                "raise SystemExit(supervise([sys.executable,'-c','import time;print(__import__(\"os\").getpid(),flush=True);time.sleep(60)']))")
-        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True, env={**os.environ, "PYTHONPATH": "."})
+        child_code = "import os,time;print(os.getpid(),flush=True);time.sleep(60)"
+        p = _launch_supervisor(child_code)
         assert p.stdout is not None
         child = int(p.stdout.readline())
         p.send_signal(signal.SIGTERM)
         self.assertEqual(p.wait(10), 0)
-        time.sleep(0.3)
+        time.sleep(0.1)
         with self.assertRaises(ProcessLookupError):
             os.kill(child, 0)
+
+    def test_sigterm_kills_child_that_ignores_terminate(self) -> None:
+        child_code = (
+            "import os,signal,time;"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+            "print(os.getpid(),flush=True);time.sleep(60)"
+        )
+        p = _launch_supervisor(child_code, shutdown_grace=0.2)
+        assert p.stdout is not None
+        child = int(p.stdout.readline())
+        p.send_signal(signal.SIGTERM)
+        self.assertEqual(p.wait(5), 0)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child, 0)
+
+    def test_rejects_invalid_shutdown_grace(self) -> None:
+        with self.assertRaises(ValueError):
+            supervise([sys.executable, "-c", "pass"], shutdown_grace=0)
+
+    def test_cli_accepts_explicit_command_without_shell(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "omega.supervisor", "--",
+             sys.executable, "-c", "raise SystemExit(0)"],
+            check=False, timeout=5,
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_restart_events_are_line_delimited_json(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            result = supervise(
+                [sys.executable, "-c", "raise SystemExit(3)"],
+                max_restarts=0,
+                window=60,
+            )
+        self.assertEqual(result, 1)
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([event["event"] for event in events], ["runtime_exit", "HALT"])
+
+
+    def test_preserves_operator_llm_router_setting(self) -> None:
+        with patch.dict(os.environ, {"IAO_LLM_ROUTER": "0"}):
+            with patch("omega.supervisor.subprocess.Popen") as popen:
+                popen.return_value.poll.return_value = 0
+                popen.return_value.wait.return_value = 0
+                self.assertEqual(
+                    supervise([sys.executable, "-c", "pass"]), 0
+                )
+                child_env = popen.call_args.kwargs["env"]
+                self.assertEqual(child_env["IAO_LLM_ROUTER"], "0")

@@ -21,7 +21,8 @@ class EgressDenied(Exception):
 
 @dataclass(frozen=True)
 class EgressPolicy:
-    allow_hosts: frozenset[str]
+    allow_hosts: frozenset[str] = frozenset()
+    allow_public_hosts: bool = False  # explicit opt-in for global public Internet egress
     allow_http: bool = False                      # plain http only for tests / explicit opt-in
     allowed_ports: frozenset[int] = frozenset({443})
     max_bytes: int = 1_000_000
@@ -30,6 +31,28 @@ class EgressPolicy:
     content_types: tuple[str, ...] = ("text/", "application/json")
     allow_private: bool = False                   # TESTS ONLY: permit loopback targets
     resolver: Callable[..., Any] = field(default=socket.getaddrinfo)
+
+
+
+def policy_from_env(env: dict[str, str] | None = None) -> EgressPolicy | None:
+    """Build the opt-in runtime policy; no network tool is registered by default."""
+    import os
+
+    source = os.environ if env is None else env
+    allow_hosts = frozenset(
+        host.strip().lower().rstrip(".")
+        for host in source.get("OMEGA_EGRESS_ALLOWLIST", "").split(",")
+        if host.strip()
+    )
+    public_opt_in = source.get("OMEGA_EGRESS_PUBLIC_INTERNET", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if not allow_hosts and not public_opt_in:
+        return None
+    return EgressPolicy(
+        allow_hosts=allow_hosts,
+        allow_public_hosts=public_opt_in,
+    )
 
 
 def _forbidden(ip_s: str) -> bool:
@@ -67,7 +90,7 @@ def _check_url(url: str, pol: EgressPolicy) -> tuple[str, str, int, str, str]:
     if u.username or u.password or "@" in u.netloc:
         raise EgressDenied("CREDENTIALS_IN_URL")
     host = (u.hostname or "").lower().rstrip(".")
-    if not host or host not in pol.allow_hosts:
+    if not host or (host not in pol.allow_hosts and not pol.allow_public_hosts):
         raise EgressDenied("HOST_NOT_ALLOWED")
     try:
         port = u.port or (443 if u.scheme == "https" else 80)

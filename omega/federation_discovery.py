@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import base64
 import fcntl
+import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+from omega.federation_transport import fetch_public_json
+from omega.federation_autonomous import _write_registry, run_discovered_cycle
 
 _INTERVAL = max(300, int(os.environ.get("IAO_FED_DISCOVERY_INTERVAL", "1800")))
 _THREAD = None
@@ -34,34 +38,83 @@ def _now():
 
 
 def _request_json(url, timeout=12):
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json, application/json",
-            "User-Agent": "IAO-Federation-Discovery/1.0",
-        },
+    """Fetch bounded public JSON through the pinned federation transport."""
+    return fetch_public_json(
+        url, timeout=min(float(timeout), 30.0), max_bytes=1024 * 1024
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        if response.status != 200:
-            raise RuntimeError("HTTP_" + str(response.status))
-        raw = response.read(1024 * 1024 + 1)
-    if len(raw) > 1024 * 1024:
-        raise ValueError("RESPONSE_TOO_LARGE")
-    return json.loads(raw.decode("utf-8"))
+
+
+def _request_manifest(full_name, branch, path):
+    """Read a repository manifest through GitHub's JSON Contents API.
+
+    The Contents API returns base64 in application/json, allowing the same
+    pinned HTTPS transport to protect both discovery and manifest retrieval.
+    This avoids raw.githubusercontent.com's text/plain response path and
+    urllib's ambient proxy/redirect behavior.
+    """
+    if not isinstance(full_name, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name
+    ):
+        raise ValueError("INVALID_REPOSITORY_NAME")
+    if not isinstance(branch, str) or not branch or len(branch) > 255:
+        raise ValueError("INVALID_DEFAULT_BRANCH")
+    encoded_path = urllib.parse.quote(path, safe="/")
+    url = (
+        "https://api.github.com/repos/" + full_name + "/contents/"
+        + encoded_path + "?" + urllib.parse.urlencode({"ref": branch})
+    )
+    result = _request_json(url)
+    if (
+        not isinstance(result, dict)
+        or result.get("encoding") != "base64"
+        or not isinstance(result.get("content"), str)
+    ):
+        raise ValueError("INVALID_GITHUB_CONTENTS_RESPONSE")
+    try:
+        encoded = "".join(result["content"].split())
+        raw = base64.b64decode(encoded, validate=True)
+        if len(raw) > 1024 * 1024:
+            raise ValueError("MANIFEST_TOO_LARGE")
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("INVALID_FEDERATION_MANIFEST") from exc
 
 
 def _append(state, event):
-    state.mkdir(parents=True, exist_ok=True)
+    """Append a private discovery record without following symlink paths."""
+    state = Path(state)
+    absolute = state.absolute()
+    if any(component.is_symlink() for component in (absolute, *absolute.parents)):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(state, 0o700)
+    if not state.is_dir() or any(
+        component.is_symlink() for component in (absolute, *absolute.parents)
+    ):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+
     path = state / "federation-discovery.jsonl"
+    if path.is_symlink():
+        raise RuntimeError("FEDERATION_DISCOVERY_AUDIT_FILE_REFUSED")
     record = dict(event)
     record["timestamp"] = _now()
     data = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n").encode()
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(path), flags, 0o600)
     try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError("FEDERATION_DISCOVERY_AUDIT_FILE_REFUSED")
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "ab") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
 
 
 def _valid_manifest(obj):
@@ -82,25 +135,62 @@ def _valid_manifest(obj):
         return False, "INVALID_NODE_ID"
     if not isinstance(public_key, str) or not re.fullmatch(r"[0-9a-f]{64}", public_key):
         return False, "INVALID_PUBLIC_KEY"
+    if hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16] != node_id:
+        return False, "NODE_ID_PUBLIC_KEY_MISMATCH"
 
     if not isinstance(origin, str):
         return False, "INVALID_ORIGIN"
 
-    parsed = urllib.parse.urlsplit(origin)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in ("", "/")
-        or parsed.port not in (None, 443)
-    ):
+    try:
+        from omega.federation_transport import validate_public_federation_origin
+        validate_public_federation_origin(origin)
+    except Exception:
         return False, "ORIGIN_NOT_ALLOWED"
 
     return True, "MANIFEST_UNVERIFIED"
 
+
+def _persist_candidate(state, manifest, repository):
+    """Persist a discovery lead separately from trust and enrollment state."""
+    state = Path(state)
+    registry_path = state / "iao-node-network" / "discovered-candidates.json"
+    if registry_path.is_symlink():
+        raise RuntimeError("FEDERATION_CANDIDATE_REGISTRY_SYMLINK_REFUSED")
+    if registry_path.exists():
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    else:
+        data = {"schema": 1, "candidates": {}}
+    if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("candidates"), dict):
+        raise RuntimeError("FEDERATION_CANDIDATE_REGISTRY_INVALID")
+    origin = manifest["origin"]
+    node_id = manifest["node_id"]
+    candidate_id = hashlib.sha256((node_id + "|" + origin).encode("utf-8")).hexdigest()
+    now = _now()
+    existing = data["candidates"].get(candidate_id)
+    if isinstance(existing, dict):
+        # Refresh discovery metadata only; never overwrite trust or grants.
+        existing["last_seen"] = now
+        existing["last_seen_repository"] = repository
+        _write_registry(registry_path, data)
+        os.chmod(registry_path.parent, 0o700)
+        return candidate_id, False
+    requested = manifest.get("capabilities", [])
+    if not isinstance(requested, list):
+        requested = []
+    requested = [item.strip()[:128] for item in requested if isinstance(item, str) and item.strip() and len(item.strip()) <= 128][:32]
+    data["candidates"][candidate_id] = {
+        "candidate_id": candidate_id, "node_id": node_id,
+        "origin": origin, "public_key": manifest["public_key"],
+        "source": "github_public_repository_search",
+        "source_repository": repository,
+        "status": "DISCOVERED_UNVERIFIED", "identity_verified": False,
+        "enrolled": False, "first_seen": now, "last_seen": now,
+        "requested_capabilities": requested, "granted_capabilities": [],
+        "remote_code_execution": False, "private_data_access": False,
+    }
+    _write_registry(registry_path, data)
+    os.chmod(registry_path.parent, 0o700)
+    return candidate_id, True
 
 def _inspect_repo(repo, state):
     full_name = repo.get("full_name")
@@ -116,13 +206,8 @@ def _inspect_repo(repo, state):
     })
 
     for path in MANIFEST_PATHS:
-        raw_url = (
-            "https://raw.githubusercontent.com/"
-            + full_name + "/" + urllib.parse.quote(branch, safe="")
-            + "/" + path
-        )
         try:
-            manifest = _request_json(raw_url)
+            manifest = _request_manifest(full_name, branch, path)
         except Exception:
             continue
 
@@ -135,8 +220,11 @@ def _inspect_repo(repo, state):
             })
             continue
 
+        candidate_id, created = _persist_candidate(state, manifest, full_name)
         _append(state, {
             "event": "NODE_CANDIDATE_DISCOVERED",
+            "candidate_id": candidate_id,
+            "candidate_created": created,
             "repository": full_name,
             "node_id": manifest["node_id"],
             "origin": manifest["origin"],
@@ -190,6 +278,26 @@ def discover_once(state_dir):
                 "error_type": type(exc).__name__,
             })
 
+    registry_path = state / "iao-node-network" / "discovered-candidates.json"
+    try:
+        totals["candidate_evaluation"] = run_discovered_cycle(
+            None, state, registry_path
+        )
+        _append(state, {
+            "event": "CANDIDATE_EVALUATION_FINISHED",
+            **totals["candidate_evaluation"],
+            "enrollment_gate": "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED",
+        })
+    except Exception as exc:
+        totals["errors"] += 1
+        totals["candidate_evaluation"] = {
+            "status": "ERROR", "error_type": type(exc).__name__
+        }
+        _append(state, {
+            "event": "CANDIDATE_EVALUATION_ERROR",
+            "error_type": type(exc).__name__,
+        })
+
     _append(state, {
         "event": "DISCOVERY_CYCLE_FINISHED",
         **totals,
@@ -199,17 +307,29 @@ def discover_once(state_dir):
 
 def run_forever(state_dir):
     state = Path(state_dir)
-    state.mkdir(parents=True, exist_ok=True)
+    absolute = state.absolute()
+    if any(component.is_symlink() for component in (absolute, *absolute.parents)):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if any(component.is_symlink() for component in (absolute, *absolute.parents)):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+    os.chmod(state, 0o700)
     lock_path = state / "federation-discovery.lock"
-    lock_file = open(lock_path, "a")
-
+    if lock_path.is_symlink():
+        raise RuntimeError("FEDERATION_DISCOVERY_LOCK_REFUSED")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(lock_path), flags, 0o600)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise RuntimeError("FEDERATION_DISCOVERY_LOCK_REFUSED")
+    os.fchmod(fd, 0o600)
+    lock_file = os.fdopen(fd, "a+")
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         print("DISCOVERY_ALREADY_RUNNING", flush=True)
         lock_file.close()
         return
-
     print("IAO_FEDERATION_DISCOVERY_STARTED", flush=True)
     try:
         while True:
