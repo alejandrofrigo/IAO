@@ -108,16 +108,26 @@ def setup_peer(monkeypatch, tmp_path, *, consent=True, revoked=False):
     return node, registry, candidate, peer_id
 
 
-def test_discovered_peer_enrolls_only_after_signed_consent_and_challenge(monkeypatch, tmp_path):
+def test_discovered_peer_is_not_enrolled_without_connection_bound_mtls(monkeypatch, tmp_path):
     node, registry, candidate, peer_id = setup_peer(monkeypatch, tmp_path)
+
+    def unexpected_network_call(*args, **kwargs):
+        raise AssertionError("remote handshake must remain disabled")
+
+    from omega import federation_transport
+    monkeypatch.setattr(federation_transport, "fetch_public_json", unexpected_network_call)
+    monkeypatch.setattr(federation_transport, "post_public_json", unexpected_network_call)
+
     result = autonomous.run_discovered_cycle(node, tmp_path, registry)
     saved = json.loads(registry.read_text())["candidates"][candidate["candidate_id"]]
-    assert result["enrolled"] == 1
-    assert peer_id in node.peers
-    assert node.peers[peer_id]["granted_capabilities"] == []
-    assert saved["status"] == "ENROLLED"
-    assert saved["identity_verified"] is True
-    assert saved["remote_code_execution"] is False
+    assert result["checked"] == 1
+    assert result["enrolled"] == 0
+    assert result["failed"] == 1
+    assert peer_id not in node.peers
+    assert saved["status"] == "DISCOVERED_UNVERIFIED"
+    assert saved["identity_verified"] is False
+    assert saved["last_federation_error"] == "RuntimeError"
+    assert saved["remote_code_execution"] is not True
 
 
 def test_discovered_peer_without_explicit_consent_is_not_enrolled(monkeypatch, tmp_path):
