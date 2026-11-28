@@ -549,11 +549,17 @@ class Store:
     def finalize_claimed_tool_execution(
         self, task_id: str, worker_id: str, owner: str, state: str,
         result: dict[str, Any], name: str, version: str, input_digest: str,
-        output_digest: str, started: str, finished: str,
+        output_digest: str | None, started: str, finished: str,
+        *, execution_status: str = "SUCCEEDED",
+        execution_error_code: str | None = None,
     ) -> bool:
-        """Atomically persist tool completion, fenced task state, and audit evidence."""
+        """Atomically persist tool outcome, fenced task state, and audit evidence."""
         if state not in {"SUCCEEDED", "FAILED"}:
             raise ValueError("INVALID_TOOL_COMPLETION_STATE")
+        if execution_status not in {"SUCCEEDED", "FAILED", "DENIED", "TIMED_OUT", "CANCELLED"}:
+            raise ValueError("INVALID_TOOL_EXECUTION_STATUS")
+        if execution_status == "SUCCEEDED" and execution_error_code is not None:
+            raise ValueError("SUCCESSFUL_TOOL_CANNOT_HAVE_EXECUTION_ERROR")
         stale_result = {
             "decision": "INTERRUPTED",
             "error": "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
@@ -600,9 +606,13 @@ class Store:
 
                 self.db.execute(
                     "INSERT INTO tool_execution VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), task_id, name, version, "SUCCEEDED",
+                    (str(uuid.uuid4()), task_id, name, version, execution_status,
                      input_digest, output_digest,
-                     None if lease_valid else "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+                     execution_error_code or (
+                         "LEASE_EXPIRED_AFTER_TOOL_COMPLETION"
+                         if not lease_valid and execution_status == "SUCCEEDED"
+                         else None
+                     ),
                      started, finished),
                 )
                 if lease_valid:
@@ -611,12 +621,13 @@ class Store:
                         worker=worker_id, error=result.get("error"),
                         verification=result.get("verification"),
                     )
-                    self._append_audit_event_in_transaction(
-                        owner, "EVIDENCE", task_id,
-                        decision=result.get("verification"),
-                        method="schema+source_hash+snippet_provenance",
-                        output_digest=output_digest,
-                    )
+                    if execution_status == "SUCCEEDED" and output_digest is not None:
+                        self._append_audit_event_in_transaction(
+                            owner, "EVIDENCE", task_id,
+                            decision=result.get("verification"),
+                            method="schema+source_hash+snippet_provenance",
+                            output_digest=output_digest,
+                        )
                 else:
                     self._append_audit_event_in_transaction(
                         "system", "TASK_WORKER_STALE_COMPLETION", task_id,
