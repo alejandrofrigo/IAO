@@ -197,8 +197,11 @@ class Node:
             try:
                 # Central transport policy accepts pinned public HTTPS, v3
                 # onion over Tor SOCKS5, and explicitly enabled loopback tests.
-                validate_message_endpoint(endpoint)
-                valid = True
+                endpoint_scheme = validate_message_endpoint(endpoint)[0]
+                valid = not (
+                    endpoint_scheme == "http"
+                    and os.environ.get("IAO_ALLOW_LOOPBACK_HTTP", "") != "1"
+                )
             except FederationTransportError:
                 valid = False
             if not valid:
