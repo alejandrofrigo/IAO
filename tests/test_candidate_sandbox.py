@@ -39,6 +39,7 @@ def test_docker_suite_uses_offline_read_only_restricted_container(tmp_path, monk
     result = sandbox._docker_suite(tmp_path, "iao-candidate-sandbox:test")
 
     command = captured["command"]
+    assert (tmp_path / ".state").is_dir()
     assert "--pull=never" in command
     assert "--network=none" in command
     assert "--tmpfs=/workspace/.state:rw,noexec,nosuid,nodev,size=256m" in command
