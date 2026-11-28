@@ -208,6 +208,53 @@ class TorOnionDirectories:
 
 
 
+class IPFSSwarmDiscovery:
+    """Read the local IPFS daemon's connected swarm peers; never contact remote APIs."""
+    name = "ipfs_swarm"
+
+    def __init__(self, api: str):
+        self.api = api
+
+    def discover(self) -> list[dict[str, Any]]:
+        from tools.iao_federation_autonomous import discover_dht
+        return [
+            {"peer_id": item["peer_id"], "multiaddr": [item["multiaddr"]]}
+            for item in discover_dht(self.api)
+            if isinstance(item, dict) and item.get("peer_id") and item.get("multiaddr")
+        ]
+
+
+class NostrAuthorizationDiscovery:
+    """Verify explicit Nostr bridge authorization events; never treat relays as nodes."""
+    name = "nostr_authorizations"
+
+    def __init__(self, relays: list[str] | None = None):
+        self.relays = relays
+
+    def discover(self) -> list[dict[str, Any]]:
+        import asyncio
+        from omega.federation_protocols.nostr_bridge import discover_nostr_authorizations
+        try:
+            events = asyncio.run(discover_nostr_authorizations(self.relays))
+        except RuntimeError:
+            # If called from an event-loop thread, do not nest or bypass the loop.
+            return []
+        return [
+            {
+                "event_id": event.get("id"),
+                "author_pubkey": event.get("pubkey"),
+                "created_at": event.get("created_at"),
+                "kind": 1,
+                "source": "nostr_signed_authorization",
+                "authorization_event_verified": True,
+            }
+            for event in events[:MAX_ITEMS]
+            if isinstance(event, dict)
+            and isinstance(event.get("id"), str)
+            and isinstance(event.get("pubkey"), str)
+        ]
+
+
 class GitHubPublicDiscovery:
     """GitHub is an optional discovery adapter, not the network's authority."""
     name = "github_public_search"
@@ -298,7 +345,7 @@ class ExternalNetwork:
         if self.registry_path.is_symlink():
             raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
         if not self.registry_path.exists():
-            return {"schema": 1, "candidates": {}, "p2p_peers": {}}
+            return {"schema": 1, "candidates": {}, "p2p_peers": {}, "protocol_peers": {}}
         data = json.loads(self.registry_path.read_text(encoding="utf-8"))
         if (not isinstance(data, dict) or data.get("schema") != 1
                 or not isinstance(data.get("candidates"), dict)
@@ -336,7 +383,7 @@ class ExternalNetwork:
                         "discovered": 0, "added": 0}
             registry = self._load_registry()
             candidates = registry["candidates"]
-            p2p_peers = registry.setdefault("p2p_peers", {})
+            p2p_peers = registry.setdefault("p2p_peers", {})\n            protocol_peers = registry.setdefault("protocol_peers", {})
             totals = {"status": "COMPLETED", "sources": 0, "source_errors": 0,
                       "discovered": 0, "added": 0, "refreshed": 0}
             for source in self.sources:
@@ -346,7 +393,30 @@ class ExternalNetwork:
                     if not isinstance(found, list):
                         raise TypeError("SOURCE_RESULT_MUST_BE_LIST")
                     for raw in found[:MAX_CANDIDATES]:
-                        if source.name in {"local_p2p_inventory", "libp2p_kad_dht"}:
+                        if source.name == "nostr_authorizations":
+                            if not isinstance(raw, dict):
+                                continue
+                            event_id, author = raw.get("event_id"), raw.get("author_pubkey")
+                            if (not isinstance(event_id, str) or not 16 <= len(event_id) <= 128
+                                    or not isinstance(author, str) or len(author) != 64
+                                    or any(ch not in "0123456789abcdef" for ch in author)
+                                    or raw.get("authorization_event_verified") is not True):
+                                continue
+                            now = _utc()
+                            previous = protocol_peers.get(event_id, {})
+                            protocol_peers[event_id] = {
+                                "event_id": event_id, "author_pubkey": author,
+                                "source": source.name,
+                                "status": "AUTHORIZATION_EVENT_VERIFIED",
+                                "identity_verified": False, "enrolled": False,
+                                "granted_capabilities": [],
+                                "first_seen": previous.get("first_seen", now),
+                                "last_seen": now,
+                            }
+                            totals["discovered"] += 1
+                            totals["refreshed" if previous else "added"] += 1
+                            continue
+                        if source.name in {"local_p2p_inventory", "libp2p_kad_dht", "ipfs_swarm"}:
                             if not isinstance(raw, dict):
                                 continue
                             peer_id, addrs = raw.get("peer_id"), raw.get("multiaddr")
@@ -404,7 +474,7 @@ class ExternalNetwork:
             # for explicit lifecycle/revocation handling, never silently deleted.
             now_epoch = time.time()
             aged = {"stale": 0, "pruned": 0}
-            for collection in (candidates, p2p_peers):
+            for collection in (candidates, p2p_peers, protocol_peers):
                 for key, item in list(collection.items()):
                     try:
                         seen = datetime.fromisoformat(
@@ -433,7 +503,7 @@ class ExternalNetwork:
             registry["candidates"] = {
                 item["candidate_id"]: item for item in ordered[:MAX_CANDIDATES]
             }
-            registry["p2p_peers"] = dict(list(p2p_peers.items())[-MAX_CANDIDATES:])
+            registry["p2p_peers"] = dict(list(p2p_peers.items())[-MAX_CANDIDATES:])\n            registry["protocol_peers"] = dict(list(protocol_peers.items())[-MAX_CANDIDATES:])
             registry["updated_at"] = _utc()
             self._save_registry(registry)
             self._audit("EXTERNAL_NETWORK_CYCLE_COMPLETED", **totals)
@@ -465,6 +535,17 @@ def build_network(state_dir: str | Path | None = None) -> ExternalNetwork:
     if isinstance(onion_feeds, list) and onion_feeds:
         sources.append(TorOnionDirectories(onion_feeds))
     sources.append(LocalP2PInventory(state))
+    ipfs = config.get("ipfs", {})
+    if isinstance(ipfs, dict) and ipfs.get("enabled") is True:
+        api = ipfs.get("api", "http://127.0.0.1:5001")
+        if isinstance(api, str):
+            sources.append(IPFSSwarmDiscovery(api))
+    nostr = config.get("nostr", {})
+    if not isinstance(nostr, dict):
+        nostr = {}
+    if nostr.get("enabled") is True:
+        relays = nostr.get("relays")
+        sources.append(NostrAuthorizationDiscovery(relays if isinstance(relays, list) else None))
     p2p = config.get("libp2p", {})
     if not isinstance(p2p, dict):
         p2p = {}
