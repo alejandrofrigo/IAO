@@ -6,12 +6,12 @@ import json
 import os
 import threading
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+
+from omega.federation_transport import fetch_public_json
 
 INTERVAL_SECONDS = 300
 MAX_CONTRACT_BYTES = 65536
@@ -61,22 +61,13 @@ def _origin(node: dict) -> str:
 
 
 def _get_contract(origin: str) -> dict:
+    """Fetch a peer contract using pinned public HTTPS and strict response limits."""
     url = origin + "/fed/v1/contract"
-    req = urllib.request.Request(
-        url,
-        headers={"Accept": "application/json", "User-Agent": "IAO-Federation/1"},
-        method="GET",
+    # This transport pins globally-routable DNS answers, validates TLS against
+    # the original hostname, rejects redirects/proxies, and bounds JSON bytes.
+    result = fetch_public_json(
+        url, timeout=12.0, max_bytes=MAX_CONTRACT_BYTES
     )
-    # Default TLS certificate and hostname verification remain enabled.
-    with urllib.request.urlopen(req, timeout=12) as response:
-        if response.status != 200:
-            raise ValueError("CONTRACT_HTTP_STATUS")
-        raw = response.read(MAX_CONTRACT_BYTES + 1)
-
-    if len(raw) > MAX_CONTRACT_BYTES:
-        raise ValueError("CONTRACT_TOO_LARGE")
-
-    result = json.loads(raw.decode("utf-8"))
     if not isinstance(result, dict):
         raise ValueError("CONTRACT_NOT_OBJECT")
     return result
