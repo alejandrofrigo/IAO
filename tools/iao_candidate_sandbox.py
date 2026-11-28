@@ -22,8 +22,11 @@ from omega import evolution
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "iao-candidate-sandbox:local"
 RUN_TIMEOUT_SECONDS = 600
-SUMMARY_PATTERN = re.compile(
-    r"(?P<count>\d+)\s+(?P<kind>passed|failed|errors?|skipped|xfailed|xpassed)"
+SUMMARY_LINE_PATTERN = re.compile(
+    r"^\\s*=+\\s*(?P<body>.*?)\\s+in\\s+[0-9]+(?:\\.[0-9]+)?s\\s*=+\\s*$"
+)
+SUMMARY_ITEM_PATTERN = re.compile(
+    r"(?P<count>[0-9]+)\\s+(?P<kind>passed|failed|errors?|skipped|xfailed|xpassed)"
 )
 
 
@@ -80,6 +83,7 @@ def _overlay_candidate(proposal_id: str, destination: Path) -> dict[str, Any]:
 
 
 def _parse_summary(output: str) -> dict[str, int] | None:
+    """Parse exactly one complete, final-format pytest summary line."""
     totals = {
         "passed": 0,
         "failed": 0,
@@ -88,13 +92,33 @@ def _parse_summary(output: str) -> dict[str, int] | None:
         "xfailed": 0,
         "xpassed": 0,
     }
-    matches = list(SUMMARY_PATTERN.finditer(output))
+    summaries = [
+        match.group("body")
+        for line in output.splitlines()
+        if (match := SUMMARY_LINE_PATTERN.fullmatch(line))
+    ]
+    if len(summaries) != 1:
+        return None
+    body = summaries[0]
+    matches = list(SUMMARY_ITEM_PATTERN.finditer(body))
     if not matches:
         return None
+    # Reject any unparsed text, duplicate outcome categories, or malformed counts.
+    cursor = 0
+    seen = set()
     for match in matches:
+        separator = body[cursor:match.start()]
+        if separator.strip(" ,"):
+            return None
         kind = match.group("kind")
         normalized = "errors" if kind in {"error", "errors"} else kind
-        totals[normalized] += int(match.group("count"))
+        if normalized in seen:
+            return None
+        seen.add(normalized)
+        totals[normalized] = int(match.group("count"))
+        cursor = match.end()
+    if body[cursor:].strip(" ,"):
+        return None
     return totals
 
 
