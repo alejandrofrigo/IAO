@@ -239,6 +239,29 @@ class Store:
             "tables": current,
         }
 
+    def _append_audit_event_in_transaction(
+        self, actor: str, event_type: str, subject: str, **details: Any
+    ) -> dict[str, Any]:
+        """Append one hash-chained event inside the caller's open transaction."""
+        row = self.db.execute(
+            "SELECT event_hash FROM audit_event_v2 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        payload = {"actor": actor, **details}
+        event = make_event(
+            event_type, subject, payload,
+            row[0] if row else GENESIS_HASH, self.audit_key,
+        )
+        self.db.execute(
+            "INSERT INTO audit_event_v2(ts,event_type,subject,details,previous_hash,event_hash) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                event["timestamp"], event_type, subject,
+                json.dumps(payload, sort_keys=True, ensure_ascii=False),
+                event["previous_hash"], event["event_hash"],
+            ),
+        )
+        return event
+
     # ---- audit (hash chained) ----
     def audit(self, actor: str, event_type: str, subject: str, **details: Any) -> dict[str, Any]:
         details = {"actor": actor, **details}
@@ -528,12 +551,7 @@ class Store:
         result: dict[str, Any], name: str, version: str, input_digest: str,
         output_digest: str, started: str, finished: str,
     ) -> bool:
-        """Atomically persist a completed tool and its fenced terminal task state.
-
-        If the lease expired while the tool ran, preserve the truthful SUCCEEDED
-        execution record but fail the task with an explicit uncommitted-result
-        marker. Never turn a stale completion into a successful task.
-        """
+        """Atomically persist tool completion, fenced task state, and audit evidence."""
         if state not in {"SUCCEEDED", "FAILED"}:
             raise ValueError("INVALID_TOOL_COMPLETION_STATE")
         stale_result = {
@@ -548,13 +566,14 @@ class Store:
                     "SELECT state,lease_owner,lease_until FROM task WHERE id=? AND owner=?",
                     (task_id, owner),
                 ).fetchone()
-                # A task may have been administratively removed while a
-                # long-running tool was outside the database transaction. Do
-                # not create an orphan execution row or mask that outcome with
-                # a foreign-key exception.
                 if row is None:
+                    self._append_audit_event_in_transaction(
+                        "system", "TASK_WORKER_STALE_COMPLETION", task_id,
+                        worker=worker_id, decision="REJECT", reason="TASK_NOT_FOUND",
+                    )
                     self.db.execute("COMMIT")
                     return False
+
                 lease_valid = bool(
                     row["state"] in ("RUNNING", "VERIFYING")
                     and row["lease_owner"] == worker_id
@@ -570,7 +589,7 @@ class Store:
                          task_id, owner, worker_id, now),
                     ).rowcount
                     lease_valid = changed == 1
-                elif row is not None and row["state"] in ("RUNNING", "VERIFYING") and row["lease_owner"] == worker_id:
+                elif row["state"] in ("RUNNING", "VERIFYING") and row["lease_owner"] == worker_id:
                     self.db.execute(
                         "UPDATE task SET state='FAILED',result_json=?,updated_at=?,"
                         "lease_owner=NULL,lease_until=NULL WHERE id=? AND owner=? "
@@ -578,6 +597,7 @@ class Store:
                         (json.dumps(stale_result, sort_keys=True), now,
                          task_id, owner, worker_id),
                     )
+
                 self.db.execute(
                     "INSERT INTO tool_execution VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (str(uuid.uuid4()), task_id, name, version, "SUCCEEDED",
@@ -585,6 +605,24 @@ class Store:
                      None if lease_valid else "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
                      started, finished),
                 )
+                if lease_valid:
+                    self._append_audit_event_in_transaction(
+                        owner, "TASK_STATE", task_id, to=state,
+                        worker=worker_id, error=result.get("error"),
+                        verification=result.get("verification"),
+                    )
+                    self._append_audit_event_in_transaction(
+                        owner, "EVIDENCE", task_id,
+                        decision=result.get("verification"),
+                        method="schema+source_hash+snippet_provenance",
+                        output_digest=output_digest,
+                    )
+                else:
+                    self._append_audit_event_in_transaction(
+                        "system", "TASK_WORKER_STALE_COMPLETION", task_id,
+                        worker=worker_id, decision="REJECT",
+                        reason="LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+                    )
                 self.db.execute("COMMIT")
                 return lease_valid
             except BaseException:
