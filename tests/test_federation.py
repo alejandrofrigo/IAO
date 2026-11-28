@@ -465,3 +465,28 @@ class FederationMTLSListenerTests(unittest.TestCase):
                     FedServer(node, ssl_context=context)
             finally:
                 node.store.close()
+
+
+class FederationTLSNodeIdentityTests(unittest.TestCase):
+    def test_tls_certificate_node_identity_requires_one_valid_uri_san(self):
+        from omega.federation import _peer_certificate_node_id
+
+        node_id = "0123456789abcdef"
+        self.assertEqual(
+            _peer_certificate_node_id(
+                {"subjectAltName": (("URI", f"urn:iao:node:{node_id}"),)}
+            ),
+            node_id,
+        )
+        for certificate in (
+            None,
+            {},
+            {"subjectAltName": (("DNS", f"urn:iao:node:{node_id}"),)},
+            {"subjectAltName": (("URI", "urn:iao:node:short"),)},
+            {"subjectAltName": (
+                ("URI", f"urn:iao:node:{node_id}"),
+                ("URI", f"urn:iao:node:{node_id}"),
+            )},
+            {"subjectAltName": (("URI", "urn:iao:node:0123456789ABCDEf"),)},
+        ):
+            self.assertIsNone(_peer_certificate_node_id(certificate))
