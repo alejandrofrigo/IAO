@@ -128,5 +128,28 @@ class NodeFactoryTests(unittest.TestCase):
             self.assertEqual(inspect_nodes(tmp), [])
 
 
+    def test_create_rejects_non_string_role_without_type_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for role in ([], {}, None, 1):
+                with self.subTest(role=role):
+                    with self.assertRaises(NodeFactoryError):
+                        create_nodes(1, output_dir=tmp, role=role)
+
+    def test_status_rejects_boolean_schema_and_identity_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nodes = create_nodes(2, output_dir=tmp)
+            first_manifest = Path(nodes[0]["directory"]) / "manifest.json"
+            manifest = json.loads(first_manifest.read_text(encoding="utf-8"))
+            manifest["schema"] = True
+            first_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+
+            second_identity = Path(nodes[1]["directory"]) / "identity/public.json"
+            identity = json.loads(second_identity.read_text(encoding="utf-8"))
+            identity["version"] = True
+            second_identity.write_text(json.dumps(identity), encoding="utf-8")
+
+            self.assertEqual(inspect_nodes(tmp), [])
+
+
 if __name__ == "__main__":
     unittest.main()
