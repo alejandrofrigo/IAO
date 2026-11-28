@@ -18,7 +18,7 @@ NO asimila relays sin evento de autorizacion verificado.
 NO toca federation.py ni padge.py.
 """
 from __future__ import annotations
-import asyncio, json, time, urllib.request
+import asyncio, json, os, stat, tempfile, time, urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ from . import ProtocolAdapter, register
 from .nostr_schnorr import verify_nostr_event, nostr_event_id
 
 ROOT = Path(__file__).resolve().parents[2]
-BRIDGE_DIR = ROOT / ".state" / "federation-bridges" / "nostr"
+BRIDGE_STATE_ROOT = Path(os.environ.get("IAO_STATE_DIR") or os.environ.get("OMEGA_STATE_DIR") or ROOT / ".state").expanduser()\nBRIDGE_DIR = BRIDGE_STATE_ROOT / "federation-bridges" / "nostr"
 BRIDGE_KEY = BRIDGE_DIR / "bridge.pem"
 
 DEFAULT_RELAYS = [
@@ -44,17 +44,48 @@ REQ_TIMEOUT = 8.0
 
 
 def _ensure_bridge_key() -> Ed25519PrivateKey:
-    BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
+    absolute = BRIDGE_DIR.absolute()
+    if any(part.is_symlink() for part in (absolute, *absolute.parents)):
+        raise RuntimeError("NOSTR_BRIDGE_DIRECTORY_SYMLINK_REFUSED")
+    BRIDGE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(BRIDGE_DIR, 0o700)
+    if BRIDGE_KEY.is_symlink():
+        raise RuntimeError("NOSTR_BRIDGE_KEY_SYMLINK_REFUSED")
     if BRIDGE_KEY.exists():
+        if not BRIDGE_KEY.is_file():
+            raise RuntimeError("NOSTR_BRIDGE_KEY_PATH_REFUSED")
+        mode = stat.S_IMODE(BRIDGE_KEY.stat().st_mode)
+        if mode & 0o077:
+            os.chmod(BRIDGE_KEY, 0o600)
         return serialization.load_pem_private_key(BRIDGE_KEY.read_bytes(), password=None)
     key = Ed25519PrivateKey.generate()
-    BRIDGE_KEY.write_bytes(key.private_bytes(
+    raw = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
-    ))
-    BRIDGE_KEY.chmod(0o600)
-    return key
+    )
+    fd, temporary = tempfile.mkstemp(prefix=".bridge-", dir=str(BRIDGE_DIR))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, BRIDGE_KEY)
+        except FileExistsError:
+            return serialization.load_pem_private_key(BRIDGE_KEY.read_bytes(), password=None)
+        directory_fd = os.open(BRIDGE_DIR, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return key
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def bridge_pubkey_hex() -> str:
