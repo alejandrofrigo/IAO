@@ -18,6 +18,7 @@ class _ClaimedTaskStore:
             "id": "queued-task-1",
             "owner": "operator:test-owner",
             "intent_json": json.dumps(intent),
+            "lease_until": (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat(),
         }
         self.final_state = None
         self.final_result = None
@@ -302,6 +303,21 @@ def test_worker_rejects_invalid_timeout_budget_before_tool_execution(timeout_val
     assert store.executions == []
     assert store.final_state == "FAILED"
     assert store.final_result["error"] == "INVALID_TOOL_TIMEOUT_POLICY"
+
+
+def test_worker_rechecks_remaining_lease_after_authority_gate():
+    worker, store, calls = _worker(_ActiveAuthority())
+    store.task["lease_until"] = (
+        datetime.now(timezone.utc) + timedelta(seconds=3)
+    ).isoformat()
+
+    assert worker.run_once() is True
+    assert calls == []
+    assert store.executions
+    assert store.executions[0][0][3] == "DENIED"
+    assert store.executions[0][0][6] == "LEASE_EXPIRING"
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "WORKER_LEASE_EXPIRING_BEFORE_TOOL"
 
 
 def test_worker_rejects_lease_without_timeout_and_cleanup_margin():
