@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 from omega.supervisor import supervise
 
@@ -78,3 +79,15 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(result, 1)
         events = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual([event["event"] for event in events], ["runtime_exit", "HALT"])
+
+
+    def test_preserves_operator_llm_router_setting(self) -> None:
+        with patch.dict(os.environ, {"IAO_LLM_ROUTER": "0"}):
+            with patch("omega.supervisor.subprocess.Popen") as popen:
+                popen.return_value.poll.return_value = 0
+                popen.return_value.wait.return_value = 0
+                self.assertEqual(
+                    supervise([sys.executable, "-c", "pass"]), 0
+                )
+                child_env = popen.call_args.kwargs["env"]
+                self.assertEqual(child_env["IAO_LLM_ROUTER"], "0")
