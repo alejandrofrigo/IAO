@@ -796,6 +796,7 @@ class FedServer:
                 not isinstance(ssl_context, ssl.SSLContext)
                 or ssl_context.protocol != ssl.PROTOCOL_TLS_SERVER
                 or ssl_context.verify_mode != ssl.CERT_REQUIRED
+                or ssl_context.minimum_version < ssl.TLSVersion.TLSv1_2
             ):
                 self.httpd.server_close()
                 raise ValueError("FEDERATION_MTLS_CLIENT_CERT_REQUIRED")
@@ -804,7 +805,8 @@ class FedServer:
             )
         self.port = self.httpd.server_address[1]
         self._node_for_publication = node
-        self.url = f"http://{host}:{self.port}/fed/v1/message"
+        scheme = "https" if ssl_context is not None else "http"
+        self.url = f"{scheme}://{host}:{self.port}/fed/v1/message"
         self._t = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
     def set_publication(self, publication: dict[str, Any]) -> None:
