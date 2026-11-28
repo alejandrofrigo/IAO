@@ -8,6 +8,19 @@ import unittest
 from omega.supervisor import supervise
 
 
+def _launch_supervisor(child_code: str, shutdown_grace: float = 5.0):
+    supervisor_code = (
+        "import subprocess,sys;from omega.supervisor import supervise;"
+        "raise SystemExit(supervise([sys.executable,'-c',sys.argv[1]], "
+        "shutdown_grace=float(sys.argv[2])))"
+    )
+    return subprocess.Popen(
+        [sys.executable, "-c", supervisor_code, child_code, str(shutdown_grace)],
+        stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "PYTHONPATH": "."},
+    )
+
+
 class SupervisorTests(unittest.TestCase):
     def test_halts_after_restart_limit(self) -> None:
         t0 = time.time()
@@ -15,14 +28,13 @@ class SupervisorTests(unittest.TestCase):
         self.assertLess(time.time() - t0, 10)
 
     def test_sigterm_stops_child_no_orphans(self) -> None:
-        code = ("import subprocess,sys,time;from omega.supervisor import supervise;"
-                "raise SystemExit(supervise([sys.executable,'-c','import time;print(__import__(\\"os\\").getpid(),flush=True);time.sleep(60)']))")
-        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True, env={**os.environ, "PYTHONPATH": "."})
+        child_code = "import os,time;print(os.getpid(),flush=True);time.sleep(60)"
+        p = _launch_supervisor(child_code)
         assert p.stdout is not None
         child = int(p.stdout.readline())
         p.send_signal(signal.SIGTERM)
         self.assertEqual(p.wait(10), 0)
-        time.sleep(0.3)
+        time.sleep(0.1)
         with self.assertRaises(ProcessLookupError):
             os.kill(child, 0)
 
@@ -32,14 +44,7 @@ class SupervisorTests(unittest.TestCase):
             "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
             "print(os.getpid(),flush=True);time.sleep(60)"
         )
-        supervisor_code = (
-            "import subprocess,sys;from omega.supervisor import supervise;"
-            "raise SystemExit(supervise([sys.executable,'-c',sys.argv[1]], shutdown_grace=0.2))"
-        )
-        p = subprocess.Popen(
-            [sys.executable, "-c", supervisor_code, child_code],
-            stdout=subprocess.PIPE, text=True, env={**os.environ, "PYTHONPATH": "."},
-        )
+        p = _launch_supervisor(child_code, shutdown_grace=0.2)
         assert p.stdout is not None
         child = int(p.stdout.readline())
         p.send_signal(signal.SIGTERM)
