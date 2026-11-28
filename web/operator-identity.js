@@ -515,9 +515,16 @@
     }
     async function run(button, action, success) {
       button.disabled = true;
-      try { show(success(await action()), false); }
-      catch (error) { show("ERROR: " + error.message, true); }
-      finally {
+      try {
+        const result = await action();
+        // Publish the success state only after the server-backed authority
+        // gates have been refreshed. Otherwise browser automation (and a
+        // fast operator tap) can observe stale disabled controls.
+        await refreshSessionGates();
+        show(success(result), false);
+      } catch (error) {
+        show("ERROR: " + error.message, true);
+      } finally {
         button.disabled = false;
         await refreshSessionGates();
       }
