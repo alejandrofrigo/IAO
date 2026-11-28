@@ -213,6 +213,25 @@ class EgressTests(unittest.TestCase):
             _check_url("http://arbitrary-public.example/", policy)
         self.assertEqual(caught.exception.code, "SCHEME_NOT_ALLOWED")
 
+
+    def test_runtime_egress_is_disabled_without_explicit_configuration(self) -> None:
+        from omega.egress import policy_from_env
+        self.assertIsNone(policy_from_env({}))
+
+    def test_runtime_allowlist_keeps_public_internet_disabled(self) -> None:
+        from omega.egress import policy_from_env
+        policy = policy_from_env({"OMEGA_EGRESS_ALLOWLIST": "Example.org, api.example.net"})
+        self.assertIsNotNone(policy)
+        self.assertEqual(policy.allow_hosts, frozenset({"example.org", "api.example.net"}))
+        self.assertFalse(policy.allow_public_hosts)
+
+    def test_runtime_public_internet_requires_explicit_opt_in(self) -> None:
+        from omega.egress import policy_from_env
+        policy = policy_from_env({"OMEGA_EGRESS_PUBLIC_INTERNET": "true"})
+        self.assertIsNotNone(policy)
+        self.assertTrue(policy.allow_public_hosts)
+        self.assertEqual(policy.allow_hosts, frozenset())
+
     def test_connection_refused_classified(self) -> None:
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
