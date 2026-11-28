@@ -600,6 +600,68 @@ def build_network(state_dir: str | Path | None = None) -> ExternalNetwork:
     return ExternalNetwork(state, sources)
 
 
+def network_status(state_dir: str | Path | None = None) -> dict[str, Any]:
+    """Return privacy-safe inventory metrics; never expose peer identifiers or endpoints."""
+    state = Path(state_dir) if state_dir is not None else _state_dir()
+    registry_path = state / "registry.json"
+    if registry_path.is_symlink():
+        return {"status": "restricted", "reason": "REGISTRY_SYMLINK_REFUSED"}
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {
+            "status": "unknown", "candidate_count": 0, "p2p_peer_count": 0,
+            "protocol_peer_count": 0, "last_updated": None,
+            "last_cycle": None, "external_connectivity_confirmed": False,
+        }
+    except (OSError, ValueError, UnicodeError):
+        return {"status": "degraded", "reason": "REGISTRY_UNREADABLE"}
+    if (not isinstance(registry, dict) or registry.get("schema") != 1
+            or not isinstance(registry.get("candidates"), dict)
+            or not isinstance(registry.get("p2p_peers", {}), dict)
+            or not isinstance(registry.get("protocol_peers", {}), dict)):
+        return {"status": "degraded", "reason": "REGISTRY_INVALID"}
+
+    last_cycle = None
+    audit_path = state / "events.jsonl"
+    if audit_path.is_file() and not audit_path.is_symlink():
+        try:
+            with audit_path.open("rb") as stream:
+                stream.seek(max(0, audit_path.stat().st_size - 262144))
+                lines = stream.read(262144).splitlines()
+            for line in reversed(lines):
+                try:
+                    event = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if event.get("event") == "EXTERNAL_NETWORK_CYCLE_COMPLETED":
+                    last_cycle = {
+                        key: event[key] for key in (
+                            "timestamp", "sources", "source_errors", "discovered",
+                            "added", "refreshed", "stale", "pruned",
+                        ) if key in event
+                    }
+                    break
+        except OSError:
+            pass
+    candidates = registry["candidates"]
+    p2p = registry.get("p2p_peers", {})
+    protocol = registry.get("protocol_peers", {})
+    status = "degraded" if last_cycle and last_cycle.get("source_errors", 0) else (
+        "observed" if last_cycle else "unknown"
+    )
+    return {
+        "status": status,
+        "candidate_count": len(candidates),
+        "p2p_peer_count": len(p2p),
+        "protocol_peer_count": len(protocol),
+        "last_updated": registry.get("updated_at"),
+        "last_cycle": last_cycle,
+        "external_connectivity_confirmed": False,
+        "cryptographic_trust_confirmed": False,
+    }
+
+
 def start_external_network(state_dir: str | Path | None = None, fed_node=None) -> bool:
     """Start one bounded discovery worker inside the IAO server process."""
     global _THREAD
