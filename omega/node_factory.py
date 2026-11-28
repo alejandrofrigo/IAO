@@ -203,14 +203,32 @@ def inspect_nodes(output_dir: str | Path = ".state/node-factory") -> list[dict[s
             identity = json.loads(public_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        public_key_hex = identity.get("public_key")
+        node_id = identity.get("node_id")
         if (
             manifest.get("schema") != 1
             or manifest.get("status") != "CREATED_UNENROLLED"
             or manifest.get("authority") != "NONE"
             or manifest.get("capabilities") != []
+            or manifest.get("role") not in VALID_ROLES
             or identity.get("protocol") != "iao-federation"
+            or identity.get("version") != 1
+            or not isinstance(node_id, str)
+            or len(node_id) != 16
+            or not isinstance(public_key_hex, str)
+            or len(public_key_hex) != 64
+            or any(ch not in "0123456789abcdef" for ch in public_key_hex)
             or identity.get("node_id") != manifest.get("node_id")
         ):
+            continue
+        # Recompute the node fingerprint from the actual public key. Matching
+        # two attacker-edited node_id fields is not proof of key consistency.
+        import hashlib
+        try:
+            public_key = bytes.fromhex(public_key_hex)
+        except ValueError:
+            continue
+        if hashlib.sha256(public_key).hexdigest()[:16] != node_id:
             continue
         results.append({
             "node_id": str(manifest["node_id"]),
