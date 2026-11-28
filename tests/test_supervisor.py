@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import os
 import signal
 import subprocess
@@ -63,3 +66,15 @@ class SupervisorTests(unittest.TestCase):
             check=False, timeout=5,
         )
         self.assertEqual(result.returncode, 0)
+
+    def test_restart_events_are_line_delimited_json(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            result = supervise(
+                [sys.executable, "-c", "raise SystemExit(3)"],
+                max_restarts=0,
+                window=60,
+            )
+        self.assertEqual(result, 1)
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([event["event"] for event in events], ["runtime_exit", "HALT"])
