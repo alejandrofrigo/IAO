@@ -127,3 +127,60 @@ IAO solo podrá declararse integral cuando existan pruebas reproducibles de:
 - operación sin servicios de pago obligatorios y sin depender de Render.
 
 **Conclusión:** IAO ya contiene una base considerable de autonomía, PADGE, federación HTTPS, registro de nodos, router LLM, seguridad y supervisión. Las brechas mayores no son la ausencia de más nombres de módulos: son la integración del mando del dispositivo, el estado real de los motores y proveedores, la participación P2P, los transportes Tor/I2P, la federación con terceros independientes y la certificación E2E.
+
+---
+
+## 5. Actualización de revisión — 2026-11-28
+
+**Rama revisada:** `codex/iao-node-factory-20261127`  
+**HEAD revisado:** `a35e888839a729bc962e24764ab128e6feac87da`  
+**PR:** #22, abierta y en borrador; no fusionada.  
+**Alcance:** revisión del código versionado y de las ejecuciones de GitHub Actions asociadas a ese HEAD. No es una certificación del runtime desplegado.
+
+### 5.1 Evidencia automatizada del HEAD
+
+Las seis verificaciones principales asociadas al HEAD indicado terminaron con conclusión `success`:
+
+- IAO CI (matriz Python 3.12 y 3.13).
+- IAO quality gate.
+- IAO candidate sandbox qualification.
+- IAO container build qualification.
+- IAO mobile browser integration (Chromium automatizado).
+- IAO node factory safety tests.
+
+Esta evidencia confirma los controles automatizados de esa revisión concreta. No demuestra ejecución física en Android, despliegue público, disponibilidad 24/7, uso gratuito de un proveedor LLM ni conectividad con peers independientes.
+
+### 5.2 Correcciones verificadas en la rama
+
+- El estado de red incluye explícitamente `cryptographic_trust_confirmed: false` cuando el inventario aún no existe; ausencia de datos no se interpreta como confianza.
+- Las pruebas de evolución crean correctamente el directorio de estado requerido y verifican el rechazo del manifiesto inválido.
+- El límite de descriptores del sandbox de candidatos se elevó de 64 a 1024 tanto en el workflow como en el ejecutor, para evitar agotamiento de descriptores durante la suite.
+- Las seis verificaciones anteriores pasaron después de esos cambios.
+
+### 5.3 Estado real de las capacidades críticas
+
+| Área | Estado verificado en código | Brecha para producción |
+|---|---|---|
+| Identidad del operador | Bootstrap, recuperación, rotación, revocación y login con claves P-256; sesión de solo lectura | Validar despliegue HTTPS/CORS, comportamiento físico Android y recuperación ante caída entre las dos bases SQLite |
+| Vinculación del teléfono | Vinculación de sesión y dispositivo; pruebas de navegador automatizadas | Prueba física en el teléfono registrado y demostración negativa desde otros dispositivos |
+| Mando privilegiado | Deshabilitado; los estados de identidad siguen siendo READ_ONLY | No habilitar hasta completar OIDC/identidad de producción, pruebas E2E y revisión de autorización |
+| Autenticación externa | `omega/auth.py` sigue siendo HMAC de desarrollo; OIDC permanece bloqueado | Integrar y probar un issuer OIDC/JWT con validación de firma, issuer, audience, expiración, rotación de claves y política de scopes |
+| Worker autónomo | Cola persistente y tareas de mantenimiento limitadas a diagnóstico/planificación; worker de producción bloqueado | Pruebas de muerte real del proceso, idempotencia, aislamiento OS/red, revalidación de autoridad y backend durable |
+| Sandbox de candidatos | Comparación baseline/candidate en contenedores Docker endurecidos; elegibilidad de promoción separada | Mantener la distinción entre aislamiento Docker y sandbox de kernel; validar en runtime soportado |
+| Router LLM | Adaptadores y failover presentes en el repositorio | Probar un modelo upstream realmente accesible y de coste cero; confirmar identidad del modelo, latencia, cuotas y failover sin activar gasto |
+| Red externa | Inventarios y descubrimiento de candidatos; confianza criptográfica no confirmada | Ejecutar pruebas reales de Tor/IPFS/Nostr y peers independientes; descubrimiento nunca debe otorgar autoridad |
+| Federación | El enrolamiento remoto falla cerrado mientras falte verificador mTLS vinculado a la conexión | Implementar verificación mutua real, consentimiento, revocación y pruebas bidireccionales con un operador independiente |
+| Producción | Contrato de runtime y build de contenedor presentes | No hay despliegue persistente certificado; faltan secretos externos, TLS, almacenamiento, copias, monitorización y prueba de restauración |
+
+### 5.4 Orden técnico inmediato
+
+1. Cerrar la autenticación de producción: OIDC/JWT verificable, sin sustituirlo por un HMAC de desarrollo ni conceder scopes por defecto.
+2. Validar el canal de identidad con pruebas físicas Android y pruebas negativas desde dispositivos no registrados.
+3. Resolver la atomicidad/recuperación entre las bases de identidad y dispositivo ante caída del proceso.
+4. Mantener deshabilitado el worker privilegiado y completar las pruebas de proceso, aislamiento e idempotencia antes de cualquier activación.
+5. Demostrar al menos un proveedor LLM upstream realmente operativo, seleccionable y sin coste obligatorio.
+6. Integrar un peer independiente con transporte autenticado, consentimiento, capacidades mínimas y revocación.
+7. Realizar pruebas reales de conectividad Tor/onion e IPFS/libp2p sin confundir inventario con una red IAO funcional.
+8. Ejecutar despliegue de cualificación con persistencia, TLS, copias y restauración; solo entonces reconsiderar el estado NORMAL.
+
+**Conclusión actualizada:** la rama tiene una base sustancial y los seis controles automatizados del HEAD revisado están verdes. IAO todavía no cumple producción: identidad externa OIDC, worker seguro de producción, proveedor LLM comprobado, federación independiente autenticada y despliegue persistente siguen siendo puertas explícitas. Ninguna de estas brechas debe ocultarse mediante etiquetas, estados de UI o simples procesos activos.
