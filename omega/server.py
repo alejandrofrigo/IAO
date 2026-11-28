@@ -175,13 +175,8 @@ def make_handler(svc: OmegaService, fed_node: Node | None = None) -> type[BaseHT
                     self._send_fed_json(404, {"error": "PUBLIC_PEERING_NOT_OFFERED"})
                     return
                 try:
-                    from urllib.parse import urlsplit
-                    parsed = urlsplit(origin)
-                    if (parsed.scheme != "https" or not parsed.hostname
-                            or parsed.username or parsed.password
-                            or parsed.port not in (None, 443)
-                            or parsed.path or parsed.query or parsed.fragment):
-                        raise ValueError("INVALID_PUBLIC_ORIGIN")
+                    from omega.federation_transport import validate_public_federation_origin
+                    validate_public_federation_origin(origin)
                     publication = fed_node.identity_publication(
                         origin + "/fed/v1/message",
                         capabilities=sorted(fed_node.served),
