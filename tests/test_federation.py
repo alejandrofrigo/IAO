@@ -152,6 +152,15 @@ class IdentityChallengeVerificationTests(FedBase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"], "INVALID_CHALLENGE")
 
+    def test_signed_publication_rejects_boolean_protocol_version(self):
+        publication = self.b.identity_publication(
+            "https://node.example.org", consent=False
+        )
+        body = {key: value for key, value in publication.items() if key != "sig"}
+        body["version"] = True
+        forged = {**body, "sig": _sign(self.b.key, body)["sig"]}
+        self.assertFalse(Node.verify_publication(forged))
+
     def test_signed_publication_requires_node_id_to_match_signing_key(self):
         publication = self.b.identity_publication(
             "https://node.example.org", consent=False
@@ -205,6 +214,18 @@ class HappyAndAuthTests(FedBase):
 
 
 class ReplayAndTimeTests(FedBase):
+    def test_boolean_protocol_version_is_rejected_even_when_signed(self) -> None:
+        status, payload = self.raw(self.env(v=True, nonce="boolean-version-0001"))
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_boolean_envelope_timestamp_is_rejected_even_when_signed(self) -> None:
+        status, payload = self.raw(self.env(ts=True, nonce="boolean-timestamp-01"))
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_non_object_envelope_is_rejected_without_exception(self) -> None:
+        status, payload = self.b.handle(b"[]")
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
     def test_replay_rejected(self) -> None:
         raw = json.dumps(_sign(self.a.key, self.env())).encode()
         self.assertEqual(self.b.handle(raw)[0], 200)
