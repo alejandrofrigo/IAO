@@ -39,12 +39,13 @@ class TaskWorker:
     ) -> None:
         if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3600:
             raise ValueError("INVALID_LEASE_SECONDS")
-        if (
-            isinstance(poll_seconds, bool)
-            or not isinstance(poll_seconds, (int, float))
-            or not math.isfinite(float(poll_seconds))
-            or not 0 < float(poll_seconds) <= 3600
-        ):
+        if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, (int, float)):
+            raise ValueError("INVALID_WORKER_POLL_SECONDS")
+        try:
+            poll_interval = float(poll_seconds)
+        except (OverflowError, TypeError, ValueError):
+            raise ValueError("INVALID_WORKER_POLL_SECONDS") from None
+        if not math.isfinite(poll_interval) or not 0 < poll_interval <= 3600:
             raise ValueError("INVALID_WORKER_POLL_SECONDS")
         self.store = store
         self.registry = registry
@@ -52,7 +53,7 @@ class TaskWorker:
         self.tool_executor = tool_executor or run_tool_isolated
         self.worker_id = worker_id or ("worker-" + uuid.uuid4().hex)
         self.lease_seconds = lease_seconds
-        self.poll_seconds = float(poll_seconds)
+        self.poll_seconds = poll_interval
         self._stop = threading.Event()
 
     def stop(self) -> None:
