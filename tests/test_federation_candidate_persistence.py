@@ -39,6 +39,7 @@ class FederationCandidatePersistenceTests(unittest.TestCase):
             self.assertIs(candidate["remote_code_execution"], False)
             self.assertEqual(candidate["requested_capabilities"], ["knowledge.search"])
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
 
     def test_persist_candidate_is_idempotent_and_preserves_revocation(self):
         with tempfile.TemporaryDirectory() as tmp:
