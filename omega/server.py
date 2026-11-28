@@ -39,11 +39,11 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
     reg = ToolRegistry()
     reg.register(ToolSpec("knowledge.search", "1.0.0", "knowledge.search", "READ_ONLY", 5.0,
                           corpus.validate_input, corpus.run, corpus.verify))
-    allow = {h.strip().lower() for h in os.environ.get("OMEGA_EGRESS_ALLOWLIST", "").split(",") if h.strip()}
-    if allow:  # F3: web.fetch exists only when an explicit allowlist is configured (deny-by-default)
-        from omega.egress import EgressPolicy
+    from omega.egress import policy_from_env
+    egress_policy = policy_from_env()
+    if egress_policy is not None:  # Explicit opt-in; deny-by-default otherwise.
         from omega.tools.web_fetch import make_web_fetch
-        reg.register(make_web_fetch(EgressPolicy(allow_hosts=frozenset(allow))))
+        reg.register(make_web_fetch(egress_policy))
     store.audit("system", "RUNTIME_START", "omega", docs=len(corpus.docs), tools=sorted(reg.names()))
     from omega.adapters.model import adapter_from_env
     router_enabled = os.environ.get("IAO_LLM_ROUTER", "").strip().lower() in {
