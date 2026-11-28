@@ -7,6 +7,8 @@ trusted-transport verifier is implemented and independently tested.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import ipaddress
@@ -70,6 +72,23 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
         raise
 
 
+def _is_tor_v3_hostname(host: str) -> bool:
+    """Validate the v3 onion address checksum and version, not just its alphabet."""
+    label = host[:-6] if host.endswith(".onion") else ""
+    if len(label) != 56 or any(ch not in "abcdefghijklmnopqrstuvwxyz234567" for ch in label):
+        return False
+    try:
+        decoded = base64.b32decode(label.upper())
+    except (ValueError, base64.binascii.Error):
+        return False
+    if len(decoded) != 35 or decoded[34] != 3:
+        return False
+    expected = hashlib.sha3_256(
+        b".onion checksum" + decoded[:32] + b"\\x03"
+    ).digest()[:2]
+    return decoded[32:34] == expected
+
+
 def _origin(value: Any) -> str:
     """Validate a public HTTPS origin or a Tor v3 onion HTTP origin."""
     if not isinstance(value, str) or not 1 <= len(value) <= 2048:
@@ -85,9 +104,7 @@ def _origin(value: Any) -> str:
         raise ValueError("INVALID_DISCOVERED_ORIGIN")
     host = host.lower()
     if host.endswith(".onion"):
-        if (parsed.scheme != "http" or len(host) != 62
-                or any(char not in "abcdefghijklmnopqrstuvwxyz234567"
-                       for char in host[:-6])
+        if (parsed.scheme != "http" or not _is_tor_v3_hostname(host)
                 or port not in (None, 80)):
             raise ValueError("INVALID_DISCOVERED_ONION_ORIGIN")
         return "http://" + host
