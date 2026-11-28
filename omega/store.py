@@ -2,6 +2,7 @@
 All reads of user data take the owner as a mandatory parameter (tenant isolation)."""
 import json
 import hashlib
+import hmac
 import os
 import sqlite3
 import threading
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from omega.audit import GENESIS_HASH, make_event, verify_chain
+
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversation(
@@ -71,34 +74,81 @@ class Store:
         if self.path != ":memory:":
             os.chmod(self.path, 0o600)
         self.db.row_factory = sqlite3.Row
+        # Inspect an existing migration ledger before any pragma or DDL that can
+        # modify the database. A newer schema must remain byte-for-byte untouched.
+        migration_table = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='schema_migrations'"
+        ).fetchone()
+        if migration_table is not None:
+            existing_version = self.db.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+            ).fetchone()[0]
+            if existing_version > SCHEMA_VERSION:
+                self.db.close()
+                raise RuntimeError("DATABASE_SCHEMA_VERSION_UNSUPPORTED")
+        self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA secure_delete=ON")  # overwrite freed pages: operational deletion must be physical
         self.db.executescript(SCHEMA)
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations("
+            "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        versions = self.db.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+        ).fetchone()[0]
+        if versions > SCHEMA_VERSION:
+            raise RuntimeError("DATABASE_SCHEMA_VERSION_UNSUPPORTED")
+        if versions == 0:
+            self.db.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)",
+                (now_iso(),),
+            )
         self._ensure_task_queue_columns()
         self._initialize_audit_v2()
+        integrity = self.db.execute("PRAGMA quick_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            raise RuntimeError("DATABASE_INTEGRITY_CHECK_FAILED")
 
     def _ensure_task_queue_columns(self) -> None:
-        """Additive migration for leases; safe for existing SQLite state files."""
+        """Apply the versioned, additive task-lease migration exactly once."""
         with self.lock:
-            columns = {
-                row["name"]
-                for row in self.db.execute("PRAGMA table_info(task)").fetchall()
-            }
-            additions = {
-                "lease_owner": "TEXT",
-                "lease_until": "TEXT",
-                "attempt_count": "INTEGER NOT NULL DEFAULT 0",
-            }
-            for name, declaration in additions.items():
-                if name not in columns:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                version = int(self.db.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()[0])
+                columns = {
+                    row["name"]
+                    for row in self.db.execute("PRAGMA table_info(task)").fetchall()
+                }
+                additions = {
+                    "lease_owner": "TEXT",
+                    "lease_until": "TEXT",
+                    "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+                }
+                if version < 2:
+                    for name, declaration in additions.items():
+                        if name not in columns:
+                            self.db.execute(
+                                f"ALTER TABLE task ADD COLUMN {name} {declaration}"
+                            )
                     self.db.execute(
-                        f"ALTER TABLE task ADD COLUMN {name} {declaration}"
+                        "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)",
+                        (now_iso(),),
                     )
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_task_queue "
-                "ON task(state, created_at, id)"
-            )
+                elif not set(additions).issubset(columns):
+                    raise RuntimeError("DATABASE_SCHEMA_MIGRATION_STATE_INVALID")
+                self.db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_task_queue "
+                    "ON task(state, created_at, id)"
+                )
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
 
     def close(self) -> None:
         self.db.close()
@@ -161,8 +211,17 @@ class Store:
                     )
                 """)
                 control = self.db.execute(
-                    "SELECT id FROM audit_control WHERE id=1"
+                    "SELECT id,key_fingerprint FROM audit_control WHERE id=1"
                 ).fetchone()
+
+                if control is not None:
+                    expected_fingerprint = hashlib.sha256(
+                        self.audit_key or b""
+                    ).hexdigest()
+                    if not hmac.compare_digest(
+                        str(control["key_fingerprint"]), expected_fingerprint
+                    ):
+                        raise RuntimeError("AUDIT_HMAC_KEY_MISMATCH")
 
                 if control is None:
                     snapshot = self._legacy_audit_snapshot()
@@ -206,6 +265,14 @@ class Store:
                             json.dumps(snapshot, sort_keys=True),
                             key_fp,
                         ),
+                    )
+                version = int(self.db.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()[0])
+                if version < 3:
+                    self.db.execute(
+                        "INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)",
+                        (now_iso(),),
                     )
                 self.db.execute("COMMIT")
             except BaseException:
@@ -288,6 +355,7 @@ class Store:
 
         return {
             "valid": bool(chain_valid and legacy_valid),
+            "authenticated": self.audit_key is not None,
             "event_count": len(events),
             "first_invalid_index": bad_index,
             "first_invalid_event_id": bad_event_id,

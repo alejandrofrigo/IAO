@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import os
 import subprocess
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -15,6 +17,7 @@ STATE = ROOT / ".state" / "iao-autonomy"
 REPORTS = ROOT / ".state" / "padge" / "reports"
 EVENTS = STATE / "coordinator-events.jsonl"
 LOCK = STATE / "coordinator.lock"
+HEARTBEAT = STATE / "coordinator-heartbeat.json"
 
 INTERVAL = 300
 
@@ -58,11 +61,12 @@ def now():
 
 
 def log(event, **data):
-    STATE.mkdir(parents=True, exist_ok=True)
-    record = {"time": now(), "event": event, **data}
-    with EVENTS.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(json.dumps(record, ensure_ascii=False), flush=True)
+    from omega.operational_log import append_private_jsonl
+
+    entry = append_private_jsonl(
+        EVENTS, {"time": now(), "event": event, **data},
+    )
+    print(json.dumps(entry, ensure_ascii=False), flush=True)
 
 
 def inventory():
@@ -135,6 +139,35 @@ def report_status(report):
     }
 
 
+def coordinator_lock_held():
+    """Check the advisory lock, not a PID file, before reporting active."""
+    from omega.supervision import read_lock_owner
+
+    return read_lock_owner(LOCK) is not None
+
+def write_coordinator_heartbeat(phase, interval, last_result=None):
+    try:
+        previous = json.loads(HEARTBEAT.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    completed_at = previous.get("last_cycle_completed_at")
+    previous_result = previous.get("last_cycle_result")
+    if phase == "cycle_completed":
+        previous_result = last_result
+    from omega.supervision import write_heartbeat
+
+    return write_heartbeat(
+        HEARTBEAT,
+        component="PADGE_AUTONOMY",
+        pid=os.getpid(),
+        phase=phase,
+        interval_seconds=interval,
+        stale_after_seconds=max(1800, interval * 2 + 900),
+        last_cycle_completed_at=completed_at,
+        last_cycle_result=previous_result,
+    )
+
+
 def status():
     print("\nIAO — ESTADO DEL COORDINADOR")
     print("==========================================")
@@ -151,10 +184,28 @@ def status():
     print("\nULTIMO RESULTADO PADGE:")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-    print("\nCOORDINATOR_STATUS=READY")
-    print("Nota: DISCOVERED no significa que un motor esté activo.")
+    from omega.supervision import read_heartbeat, read_lock_owner
 
-
+    heartbeat = read_heartbeat(
+        HEARTBEAT, expected_component="PADGE_AUTONOMY",
+    )
+    lock_owner = read_lock_owner(LOCK)
+    lock_held = lock_owner is not None
+    active = lock_held and lock_owner == heartbeat.get("pid")
+    if not lock_held:
+        state = "STOPPED"
+    elif not active:
+        state = "DEGRADED_UNVERIFIED"
+    elif heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
+        state = heartbeat["status"]
+    else:
+        state = "DEGRADED_UNVERIFIED"
+    print("\nCOORDINATOR_STATUS=" + state)
+    print("COORDINATOR_LOCK_HELD=" + ("YES" if lock_held else "NO"))
+    print("COORDINATOR_PROCESS_MATCH=" + ("YES" if active else "NO"))
+    print("COORDINATOR_LOCK_OWNER_PID=" + (str(lock_owner) if lock_owner else "UNKNOWN"))
+    print("COORDINATOR_HEARTBEAT=" + json.dumps(heartbeat, sort_keys=True))
+    return 0 if state in {"HEALTHY", "CYCLE_IN_PROGRESS"} else 1
 
 
 def run_expansion_once():
@@ -288,13 +339,33 @@ def run_once():
     return True
 
 def acquire_lock():
-    STATE.mkdir(parents=True, exist_ok=True)
-    stream = LOCK.open("a+", encoding="utf-8")
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not stat.S_ISDIR(os.lstat(STATE).st_mode):
+        raise RuntimeError("COORDINATOR_STATE_INVALID")
+    os.chmod(STATE, 0o700)
+    try:
+        fd = os.open(
+            LOCK,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError:
+        raise RuntimeError("COORDINATOR_LOCK_UNAVAILABLE") from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise RuntimeError("COORDINATOR_LOCK_INVALID")
+    stream = os.fdopen(fd, "r+", encoding="utf-8")
+    os.fchmod(stream.fileno(), 0o600)
     try:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         stream.close()
         raise RuntimeError("Ya existe otro coordinador activo")
+    stream.seek(0)
+    stream.truncate()
+    stream.write(str(os.getpid()))
+    stream.flush()
+    os.fsync(stream.fileno())
     return stream
 
 
@@ -311,8 +382,7 @@ def main():
         parser.error("El intervalo mínimo permitido es 60 segundos")
 
     if args.mode == "status":
-        status()
-        return 0
+        return status()
 
     try:
         lock = acquire_lock()
@@ -325,9 +395,15 @@ def main():
             return 0 if run_once() else 1
 
         log("COORDINATOR_LOOP_STARTED", interval=args.interval)
+        write_coordinator_heartbeat("starting", args.interval)
 
         while True:
+            write_coordinator_heartbeat("cycle_running", args.interval)
             padge_promoted = run_once()
+            write_coordinator_heartbeat(
+                "cycle_completed", args.interval,
+                last_result=padge_promoted,
+            )
             log(
                 "NEXT_CYCLE",
                 seconds=args.interval,

@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / ".state" / "iao-five-motors"
 LOGS = STATE / "logs"
 PID_FILE = STATE / "supervisor.pid"
+COORDINATOR_LOCK = ROOT / ".state" / "iao-autonomy" / "coordinator.lock"
 CHILD_FILE = STATE / "children.json"
 EVENTS = STATE / "events.jsonl"
 CONFIG = STATE / "adapters.json"
@@ -31,11 +33,12 @@ def now():
 
 
 def event(name, **data):
-    STATE.mkdir(parents=True, exist_ok=True)
-    record = {"time": now(), "event": name, **data}
-    with EVENTS.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(json.dumps(record, ensure_ascii=False), flush=True)
+    from omega.operational_log import append_private_jsonl
+
+    entry = append_private_jsonl(
+        EVENTS, {"time": now(), "event": name, **data},
+    )
+    print(json.dumps(entry, ensure_ascii=False), flush=True)
 
 
 def load_json(path, default):
@@ -46,58 +49,200 @@ def load_json(path, default):
 
 
 def save_json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temp, path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    fd, temporary = tempfile.mkstemp(prefix=".state-", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, ensure_ascii=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def adapters():
+    defaults = {
+        "PADGE": {
+            "command": [
+                sys.executable,
+                "tools/iao_autonomous_coordinator.py",
+                "loop",
+            ],
+            "enabled": True,
+            "group": "PADGE + AUTONOMIA CONTINUA",
+        },
+        "GUARDIAN": {
+            "command": [],
+            "enabled": False,
+            "group": "VIGILANCIA Y RECUPERACION",
+        },
+        "NODE_NETWORK": {
+            "command": [
+                sys.executable,
+                "tools/iao_libp2p_discovery.py",
+                "--run",
+            ],
+            "enabled": True,
+            "group": "RED P2P LIBP2P — DESCUBRIMIENTO AISLADO",
+        },
+        "DISTRIBUTED_INTELLIGENCE": {
+            "command": [],
+            "enabled": False,
+            "group": "WORKERS + MULTI-LLM",
+        },
+    }
     if not CONFIG.exists():
-        save_json(CONFIG, {
-            "motors": {
-                "PADGE": {
-                    "command": [
-                        sys.executable,
-                        "tools/iao_autonomous_coordinator.py",
-                        "loop",
-                    ],
-                    "enabled": True,
-                    "group": "PADGE + AUTONOMIA CONTINUA",
-                },
-                "GUARDIAN": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "VIGILANCIA Y RECUPERACION",
-                },
-                "NODE_NETWORK": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "RED DE NODOS",
-                },
-                "DISTRIBUTED_INTELLIGENCE": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "WORKERS + MULTI-LLM",
-                },
-            }
-        })
-    return load_json(CONFIG, {}).get("motors", {})
+        save_json(CONFIG, {"motors": defaults})
+        return defaults
+    data = load_json(CONFIG, {})
+    motors = data.get("motors", {})
+    if not isinstance(motors, dict):
+        return {}
+    # Migration additive: preserve every operator-defined setting. Only add
+    # the P2P worker when this motor has never been configured.
+    if "NODE_NETWORK" not in motors:
+        motors["NODE_NETWORK"] = defaults["NODE_NETWORK"]
+        data["motors"] = motors
+        save_json(CONFIG, data)
+    return motors
 
 
 def read_children():
     return load_json(CHILD_FILE, {})
 
 
+def _valid_pid(pid):
+    if isinstance(pid, bool):
+        return None
+    if isinstance(pid, int):
+        value = pid
+    elif isinstance(pid, str) and pid.isascii() and pid.isdigit():
+        value = int(pid)
+    else:
+        return None
+    return value if value > 1 else None
+
+
 def process_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (ProcessLookupError, PermissionError, ValueError):
+    value = _valid_pid(pid)
+    if value is None:
         return False
+    try:
+        os.kill(value, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists, but the current user cannot signal it.
+        return True
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def process_start_ticks(pid):
+    """Read Linux process start ticks to distinguish a child from PID reuse."""
+    value = _valid_pid(pid)
+    if value is None:
+        return None
+    try:
+        raw = Path(f"/proc/{value}/stat").read_text(encoding="ascii")
+        fields = raw[raw.rfind(")") + 2:].split()
+        ticks = fields[19]
+        return ticks if ticks.isascii() and ticks.isdigit() else None
+    except (OSError, UnicodeError, IndexError):
+        return None
+
+
+def process_identity_matches(child):
+    pid = _valid_pid(child.get("pid")) if isinstance(child, dict) else None
+    expected = child.get("process_start_ticks") if isinstance(child, dict) else None
+    return bool(
+        pid is not None and isinstance(expected, str)
+        and expected.isascii() and expected.isdigit()
+        and process_alive(pid)
+        and process_start_ticks(pid) == expected
+    )
+
+
+def managed_process_group(pid):
+    """Only signal process groups created with start_new_session=True."""
+    value = _valid_pid(pid)
+    if value is None or not process_alive(value):
+        return False
+    try:
+        return os.getpgid(value) == value
+    except (OSError, ProcessLookupError, PermissionError, ValueError):
+        return False
+
+
+
+
+def motor_heartbeat_status(name, pid):
+    """Require a fresh heartbeat from the exact launched process for long-lived motors."""
+    components = {
+        "NODE_NETWORK": ("NODE_NETWORK", "node-network-heartbeat.json"),
+        "DISTRIBUTED_INTELLIGENCE": (
+            "DISTRIBUTED_INTELLIGENCE",
+            "distributed-intelligence-heartbeat.json",
+        ),
+    }
+    spec = components.get(name)
+    if spec is None:
+        return "PROCESS_ALIVE_UNVERIFIED"
+    from omega.supervision import read_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get("OMEGA_STATE_DIR", ".state"),
+        )
+    )
+    component, filename = spec
+    heartbeat = read_heartbeat(
+        state_dir / filename,
+        expected_component=component,
+    )
+    if heartbeat.get("status") == "UNVERIFIED" or heartbeat.get("pid") != _valid_pid(pid):
+        return "PROCESS_ALIVE_UNVERIFIED"
+    return {
+        "HEALTHY": "HEALTHY",
+        "CYCLE_IN_PROGRESS": "CYCLE_IN_PROGRESS",
+        "DEGRADED": "DEGRADED",
+        "STALE": "STALE_HEARTBEAT",
+        "STARTING": "STARTING",
+    }.get(heartbeat.get("status"), "PROCESS_ALIVE_UNVERIFIED")
+
+
+def task_worker_status():
+    """Read TaskWorker functional health from its process-bound heartbeat."""
+    from omega.supervision import read_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get("OMEGA_STATE_DIR", ".state"),
+        )
+    )
+    heartbeat = read_heartbeat(
+        state_dir / "task-worker-heartbeat.json",
+        expected_component="TASK_WORKER",
+    )
+    return {
+        "HEALTHY": "HEALTHY",
+        "CYCLE_IN_PROGRESS": "CYCLE_IN_PROGRESS",
+        "DEGRADED": "DEGRADED",
+        "STALE": "STALE_HEARTBEAT",
+        "STARTING": "STARTING",
+        "UNVERIFIED": "UNVERIFIED",
+    }.get(heartbeat.get("status"), "UNVERIFIED")
 
 
 def status():
@@ -116,10 +261,31 @@ def status():
         spec = configured.get(name, {})
         child = children.get(name, {})
         pid = child.get("pid")
-        alive = bool(pid and process_alive(pid))
+        pid_alive = bool(pid and process_alive(pid))
+        alive = bool(pid_alive and process_identity_matches(child))
 
         if alive:
-            state = "RUNNING"
+            state = "PROCESS_ALIVE_UNVERIFIED"
+            if name in {"NODE_NETWORK", "DISTRIBUTED_INTELLIGENCE"}:
+                state = motor_heartbeat_status(name, pid)
+            if name in {"PADGE", "AUTONOMY_CONTINUOUS"}:
+                from omega.supervision import read_heartbeat, read_lock_owner
+
+                heartbeat = read_heartbeat(
+                    ROOT / ".state" / "iao-autonomy" / "coordinator-heartbeat.json",
+                    expected_component="PADGE_AUTONOMY",
+                )
+                lock_owner = read_lock_owner(COORDINATOR_LOCK)
+                if heartbeat.get("pid") == int(pid) == lock_owner:
+                    if heartbeat["status"] in {"HEALTHY", "CYCLE_IN_PROGRESS"}:
+                        state = heartbeat["status"]
+                    elif heartbeat["status"] == "DEGRADED":
+                        state = "DEGRADED"
+                    elif heartbeat["status"] == "STALE":
+                        state = "STALE_HEARTBEAT"
+        elif pid_alive:
+            # A reused PID is not the child we launched and cannot inherit its health.
+            state = "STALE_PROCESS_IDENTITY"
         elif not spec.get("enabled") or not spec.get("command"):
             state = "NOT_CONFIGURED"
         else:
@@ -129,12 +295,13 @@ def status():
         if alive:
             print(f"  PID={pid}")
         elif spec.get("command"):
-            print(f"  COMMAND_CONFIGURED=YES")
+            print("  COMMAND_CONFIGURED=YES")
         else:
             print("  COMMAND_CONFIGURED=NO")
 
+    print(f"\nTASK_WORKER: {task_worker_status()}")
     print("\nPADGE y autonomía continua comparten el coordinador.")
-    print("La presencia de un proceso no demuestra salud funcional.")
+    print("Solo un heartbeat reciente del ciclo valida el coordinador; los demás PID quedan sin verificar.")
     print(f"EVENTS={EVENTS}")
 
 
@@ -143,10 +310,12 @@ def stop_children():
 
     for name, child in children.items():
         pid = child.get("pid")
-        if not pid or not process_alive(pid):
+        if not process_identity_matches(child) or not managed_process_group(pid):
+            if pid and process_alive(pid):
+                event("stop_skipped_unverified_process_group", motor=name)
             continue
         try:
-            os.killpg(int(pid), signal.SIGTERM)
+            os.killpg(_valid_pid(pid), signal.SIGTERM)
             event("stop_requested", motor=name, pid=pid)
         except ProcessLookupError:
             pass
@@ -164,15 +333,23 @@ def stop_children():
 
     for name, child in children.items():
         pid = child.get("pid")
-        if pid and process_alive(pid):
+        if pid and process_identity_matches(child) and managed_process_group(pid):
             try:
-                os.killpg(int(pid), signal.SIGKILL)
+                os.killpg(_valid_pid(pid), signal.SIGKILL)
                 event("forced_stop", motor=name, pid=pid)
             except ProcessLookupError:
                 pass
 
-    save_json(CHILD_FILE, {})
+    remaining = {
+        name: child for name, child in children.items()
+        if child.get("pid") and process_alive(child["pid"])
+    }
+    save_json(CHILD_FILE, remaining)
+    if remaining:
+        event("stop_incomplete", active_children=len(remaining))
+        return False
     event("all_children_stopped")
+    return True
 
 
 def launch(name, spec):
@@ -192,11 +369,14 @@ def launch(name, spec):
             return None
         target = ROOT / command[1]
         if not target.is_file():
-            event("entrypoint_missing", motor=name, path=str(target))
+            event("entrypoint_missing", motor=name)
             return None
 
+    LOGS.mkdir(parents=True, exist_ok=True)
+    os.chmod(LOGS, 0o700)
     log_path = LOGS / f"{name.lower()}.log"
     stream = log_path.open("a", encoding="utf-8")
+    os.fchmod(stream.fileno(), 0o600)
     stream.write(f"\n--- START {now()} ---\n")
     stream.flush()
 
@@ -218,8 +398,7 @@ def launch(name, spec):
     child = {
         "pid": proc.pid,
         "started": now(),
-        "command": command,
-        "log": str(log_path),
+        "process_start_ticks": process_start_ticks(proc.pid),
     }
     children = read_children()
     children[name] = child
@@ -235,8 +414,10 @@ def handle_signal(_signum, _frame):
 
 def run():
     global STOP
-    STATE.mkdir(parents=True, exist_ok=True)
-    LOGS.mkdir(parents=True, exist_ok=True)
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    LOGS.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(STATE, 0o700)
+    os.chmod(LOGS, 0o700)
 
     if PID_FILE.exists():
         old_pid = PID_FILE.read_text(errors="replace").strip()
@@ -339,11 +520,14 @@ def main():
             print("SUPERVISOR_STOPPED")
             return 0
 
-        stop_children()
+        stopped = stop_children()
         try:
             PID_FILE.unlink()
         except FileNotFoundError:
             pass
+        if not stopped:
+            print("STOP_INCOMPLETE: quedan procesos sin verificación de parada")
+            return 1
         print("STALE_CHILDREN_CLEANED")
         return 0
 

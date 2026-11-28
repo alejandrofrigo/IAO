@@ -6,7 +6,6 @@ import os
 import re
 import sys
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +15,7 @@ from pathlib import Path
 _INTERVAL = max(300, int(os.environ.get("IAO_FED_DISCOVERY_INTERVAL", "1800")))
 _THREAD = None
 _LOCK = threading.Lock()
+_STOP_EVENT = threading.Event()
 
 QUERIES = (
     "iao-federation",
@@ -51,17 +51,11 @@ def _request_json(url, timeout=12):
 
 
 def _append(state, event):
-    state.mkdir(parents=True, exist_ok=True)
-    path = state / "federation-discovery.jsonl"
+    from omega.operational_log import append_private_jsonl
+
     record = dict(event)
     record["timestamp"] = _now()
-    data = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n").encode()
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    append_private_jsonl(Path(state) / "federation-discovery.jsonl", record)
 
 
 def _valid_manifest(obj):
@@ -197,11 +191,14 @@ def discover_once(state_dir):
     return totals
 
 
-def run_forever(state_dir):
+def run_forever(state_dir, stop_event=None):
+    stop_event = stop_event or _STOP_EVENT
     state = Path(state_dir)
-    state.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(state, 0o700)
     lock_path = state / "federation-discovery.lock"
     lock_file = open(lock_path, "a")
+    os.fchmod(lock_file.fileno(), 0o600)
 
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -212,13 +209,14 @@ def run_forever(state_dir):
 
     print("IAO_FEDERATION_DISCOVERY_STARTED", flush=True)
     try:
-        while True:
+        while not stop_event.is_set():
             try:
                 result = discover_once(state)
                 print("DISCOVERY_CYCLE", json.dumps(result), flush=True)
             except Exception as exc:
                 print("DISCOVERY_ERROR", type(exc).__name__, flush=True)
-            time.sleep(_INTERVAL)
+            if stop_event.wait(_INTERVAL):
+                break
     finally:
         lock_file.close()
 
@@ -228,14 +226,33 @@ def start_federation_discovery(state_dir):
     with _LOCK:
         if _THREAD is not None and _THREAD.is_alive():
             return True
+        _STOP_EVENT.clear()
         _THREAD = threading.Thread(
             target=run_forever,
-            args=(state_dir,),
+            args=(state_dir, _STOP_EVENT),
             name="iao-federation-discovery",
             daemon=True,
         )
         _THREAD.start()
     return True
+
+
+def stop_federation_discovery(timeout: float = 5.0) -> bool:
+    """Request discovery shutdown and wait a bounded time for its thread."""
+    global _THREAD
+    _STOP_EVENT.set()
+    thread = _THREAD
+    if thread is None:
+        return True
+    if thread is threading.current_thread():
+        return False
+    thread.join(max(0.0, timeout))
+    stopped = not thread.is_alive()
+    if stopped:
+        with _LOCK:
+            if _THREAD is thread:
+                _THREAD = None
+    return stopped
 
 
 if __name__ == "__main__" and "--run" in sys.argv:

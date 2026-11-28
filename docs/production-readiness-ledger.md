@@ -107,3 +107,14 @@ Commit `367b96785cd283b1781866c02fea9570330e5872`:
 - Validation commit `7e0c6beeaf943f6e9067461fd3af20e793ada2a1`: Production Gates succeeded on Python 3.12 and 3.13 (158 deterministic tests passed per version; Ruff passed); full IAO CI succeeded on both Python versions (458 passed, 1 skipped per version); quality gate, container API contract/build and mobile Chromium integration all succeeded. The full-repository lint stage still reports 174 legacy findings outside the focused production-gate surface.
 - This makes outbound DHT exploration part of the autonomous cycle when the optional libp2p extra is installed. It does not mean arbitrary DHT peers provide an IAO task API, are enrolled, or are verified inference workers. No external peer was claimed as assimilated by this CI run.
 
+
+
+## Verified IPFS content retrieval adapter (2026-11-27)
+
+- Added an optional `ipfs.fetch` read-only tool for CIDv1 DAG-JSON blocks using SHA-256 multihashes. It accepts only a CID, not a caller-supplied URL.
+- Gateway hosts must be explicitly configured with `IAO_IPFS_GATEWAY_HOSTS`; each request uses the shared mediated egress policy (HTTPS only, exact host allowlist, DNS/IP checks, TLS validation, redirect refusal, 512 KB response cap and 8-second timeout).
+- The adapter verifies the returned raw-response SHA-256 against the CID before returning the body. Content is explicitly marked untrusted and never grants peer trust, execution authority, or private-data access.
+- The adapter is not included in the queued-task allowlist; it cannot be submitted as an autonomous task under the current `knowledge.search`-only grant.
+- Added deterministic tests for CID parsing, gateway configuration rejection, content integrity, mismatch denial and strict input schema.
+- This is a code-level adapter with mocked transport tests. No gateway was contacted, no IPFS node or content availability is claimed, and the tool remains disabled unless an operator configures gateway hosts.
+- Next acceptance step: run production gates and full CI on the exact PR head, then separately qualify at least one real public gateway without placing operator secrets or private data in the test.

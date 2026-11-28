@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
-import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -16,23 +14,21 @@ from urllib.parse import urlsplit
 INTERVAL_SECONDS = 300
 MAX_CONTRACT_BYTES = 65536
 _LOCK = threading.Lock()
-_STARTED = False
+_THREAD: threading.Thread | None = None
+_STOP_EVENT = threading.Event()
 
 
 def _record(state_dir: Path, event: str, **details: object) -> None:
+    from omega.operational_log import append_private_jsonl
+
     path = state_dir / "federation-autojoin.jsonl"
     entry = {
         "time": datetime.now(timezone.utc).isoformat(),
         "event": event,
         **details,
     }
-    state_dir.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-        try:
-            os.write(fd, (json.dumps(entry, sort_keys=True) + "\n").encode())
-        finally:
-            os.close(fd)
+        append_private_jsonl(path, entry)
 
 
 def _origin(node: dict) -> str:
@@ -183,7 +179,7 @@ def run_cycle(fed_node, state_dir: Path) -> dict:
                     node.get("node_id", node.get("peer_id", "unknown"))
                     if isinstance(node, dict) else "invalid"
                 ),
-                reason=str(exc)[:180],
+                error_type=type(exc).__name__,
             )
 
     result = {
@@ -197,32 +193,52 @@ def run_cycle(fed_node, state_dir: Path) -> dict:
 
 
 def start_federation_autojoin(fed_node, state_dir: Path) -> bool:
-    """Start one background worker in the existing server process."""
-    global _STARTED
+    """Start one stoppable background worker in the existing server process."""
+    global _THREAD
     with _LOCK:
-        if _STARTED:
-            return False
-        _STARTED = True
+        if _THREAD is not None and _THREAD.is_alive():
+            return True
+        _STOP_EVENT.clear()
 
-    def worker():
-        _record(state_dir, "AUTOJOIN_WORKER_STARTED",
-                interval_seconds=INTERVAL_SECONDS)
-        while True:
-            try:
-                result = run_cycle(fed_node, state_dir)
-                print("IAO_FEDERATION_AUTOJOIN " +
-                      json.dumps(result, sort_keys=True), flush=True)
-            except Exception as exc:
-                _record(state_dir, "AUTOJOIN_CYCLE_ERROR",
-                        reason=str(exc)[:180])
-                print("IAO_FEDERATION_AUTOJOIN_ERROR " +
-                      type(exc).__name__, flush=True)
-            time.sleep(INTERVAL_SECONDS)
+        def worker():
+            _record(state_dir, "AUTOJOIN_WORKER_STARTED",
+                    interval_seconds=INTERVAL_SECONDS)
+            while not _STOP_EVENT.is_set():
+                try:
+                    result = run_cycle(fed_node, state_dir)
+                    print("IAO_FEDERATION_AUTOJOIN " +
+                          json.dumps(result, sort_keys=True), flush=True)
+                except Exception as exc:
+                    _record(state_dir, "AUTOJOIN_CYCLE_ERROR",
+                            error_type=type(exc).__name__)
+                    print("IAO_FEDERATION_AUTOJOIN_ERROR " +
+                          type(exc).__name__, flush=True)
+                if _STOP_EVENT.wait(INTERVAL_SECONDS):
+                    break
+            _record(state_dir, "AUTOJOIN_WORKER_STOPPED")
 
-    thread = threading.Thread(
-        target=worker,
-        name="iao-federation-autojoin",
-        daemon=True,
-    )
-    thread.start()
-    return True
+        _THREAD = threading.Thread(
+            target=worker,
+            name="iao-federation-autojoin",
+            daemon=True,
+        )
+        _THREAD.start()
+        return True
+
+
+def stop_federation_autojoin(timeout: float = 5.0) -> bool:
+    """Request worker shutdown and wait a bounded time for its thread."""
+    global _THREAD
+    _STOP_EVENT.set()
+    thread = _THREAD
+    if thread is None:
+        return True
+    if thread is threading.current_thread():
+        return False
+    thread.join(max(0.0, timeout))
+    stopped = not thread.is_alive()
+    if stopped:
+        with _LOCK:
+            if _THREAD is thread:
+                _THREAD = None
+    return stopped

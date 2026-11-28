@@ -2,22 +2,37 @@
 """Federacion autonoma externa de IAO - pipeline con validacion mutua."""
 from __future__ import annotations
 import ssl
-import argparse, asyncio, base64, hashlib, json, os, secrets, sys, time, urllib.request
+import argparse
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import secrets
+import sys
+import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from omega.store import Store
-from omega.tools.registry import ToolRegistry
-from omega.federation import Node, verify_identity_challenge
-from omega.federation_transport import fetch_public_json, fetch_onion_json
-import omega.federation_protocols.native  # noqa: F401
-import omega.federation_protocols.nostr   # noqa: F401
-from omega.federation_protocols import probe_any, get as get_adapter
+from cryptography.hazmat.primitives.serialization import load_pem_private_key  # noqa: E402
+from omega.store import Store  # noqa: E402
+from omega.tools.registry import ToolRegistry  # noqa: E402
+from omega.federation import Node, verify_identity_challenge  # noqa: E402
+from omega.federation_transport import fetch_public_json  # noqa: E402
+from omega.onion_discovery import (  # noqa: E402
+    discover_onion_feed as _discover_onion_feed,
+    merge_onion_candidates as _merge_onion_candidates,
+)
+from omega.p2p_assimilation import assimilate_discovered_peers  # noqa: E402
+from omega.libp2p_discovery import _state_dir as _libp2p_state_dir  # noqa: E402
+import omega.federation_protocols.native  # noqa: E402, F401
+import omega.federation_protocols.nostr  # noqa: E402, F401
+from omega.federation_protocols import probe_any, get as get_adapter  # noqa: E402
 # El bridge real se importa DESPUÉS del stub para sobrescribir el registro global:
-import omega.federation_protocols.nostr_bridge  # noqa: F401
+import omega.federation_protocols.nostr_bridge  # noqa: E402, F401
 
 STATE    = ROOT / ".state"
 NODES    = STATE / "iao-external-nodes.json"
@@ -142,86 +157,18 @@ def _validate_onion_peer_url(value):
 
 
 def discover_onion_feed(url, timeout=15):
-    """Read a bounded Tor v3 JSON directory; returned peers remain unverified."""
-    try:
-        data = fetch_onion_json(url, timeout=timeout, max_bytes=500_000)
-    except Exception as exc:
-        audit("onion_discovery_feed_failed", error_type=type(exc).__name__)
-        return []
-    if isinstance(data, list):
-        peers = data
-    elif isinstance(data, dict):
-        peers = data.get("peers", [])
-    else:
-        return []
-    if not isinstance(peers, list):
-        return []
-    out = []
-    seen = set()
-    for peer in peers[:500]:
-        if not isinstance(peer, dict):
-            continue
-        endpoint = peer.get("url")
-        if not _validate_onion_peer_url(endpoint) or endpoint in seen:
-            continue
-        peer_id = peer.get("id")
-        if peer_id is not None and (
-            not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 128
-        ):
-            continue
-        seen.add(endpoint)
-        out.append({
-            "url": endpoint,
-            "id": peer_id,
-            "capabilities": [],
-            "source": "onion_feed",
-            "status": "DISCOVERED_UNVERIFIED",
-            "granted_capabilities": [],
-        })
-    audit("onion_discovery_feed_ok", peers=len(out))
-    return out
+    """Use the strict Tor transport module; all results remain unverified."""
+    candidates = _discover_onion_feed(url, timeout=timeout)
+    audit("onion_discovery_feed_observed", candidates=len(candidates))
+    return candidates
 
 
 def merge_onion_candidates(candidates):
-    """Persist onion endpoints separately; never treat them as trusted IAO peers."""
-    path = STATE / "iao-onion-candidates.json"
-    data = load(path, {"schema": 1, "candidates": {}})
-    entries = data.get("candidates", {})
-    if not isinstance(entries, dict):
-        entries = {}
-    now = utc()
-    added = 0
-    for candidate in candidates:
-        if (
-            not isinstance(candidate, dict)
-            or candidate.get("source") != "onion_feed"
-            or not _validate_onion_peer_url(candidate.get("url"))
-        ):
-            continue
-        endpoint = candidate["url"]
-        candidate_id = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
-        old = entries.get(candidate_id, {})
-        entries[candidate_id] = {
-            "candidate_id": candidate_id,
-            "url": endpoint,
-            "remote_id": candidate.get("id"),
-            "source": "onion_feed",
-            "status": "DISCOVERED_UNVERIFIED",
-            "identity_verified": False,
-            "enrolled": False,
-            "granted_capabilities": [],
-            "first_seen": old.get("first_seen", now),
-            "last_seen": now,
-        }
-        if not old:
-            added += 1
-    ordered = sorted(
-        entries.values(), key=lambda item: item.get("last_seen", ""), reverse=True
-    )[:1000]
-    data["schema"] = 1
-    data["candidates"] = {item["candidate_id"]: item for item in ordered}
-    save(path, data)
-    return added
+    """Persist onion candidates in a private, atomic, untrusted inventory."""
+    result = _merge_onion_candidates(candidates, state_dir=STATE)
+    audit("onion_candidate_inventory_updated", **result)
+    return result
+
 
 def _validate_local_ipfs_api(value):
     """IPFS HTTP API is a local control endpoint, never an arbitrary remote URL."""
@@ -297,40 +244,25 @@ def discover_dht(ipfs_api):
     return out
 
 def merge_p2p_candidates(candidates):
-    """Persist discovered libp2p addresses separately from HTTP federation nodes."""
-    path = STATE / "iao-p2p-candidates.json"
-    data = load(path, {"schema": 1, "peers": {}})
-    peers = data.get("peers", {})
-    if not isinstance(peers, dict):
-        peers = {}
-    added = 0
-    now = utc()
+    """Assimilate observed Kubo peers into a private quarantine inventory only."""
+    peers = []
     for candidate in candidates:
-        if not isinstance(candidate, dict) or candidate.get("source") != "ipfs_swarm_peer":
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("source") != "ipfs_swarm_peer"
+            or not isinstance(candidate.get("peer_id"), str)
+            or not isinstance(candidate.get("multiaddr"), str)
+        ):
             continue
-        peer_id = candidate.get("peer_id")
-        multiaddr = candidate.get("multiaddr")
-        if not isinstance(peer_id, str) or not isinstance(multiaddr, str):
-            continue
-        existing = peers.get(peer_id, {})
-        peers[peer_id] = {
-            "peer_id": peer_id,
-            "multiaddr": multiaddr,
-            "source": "ipfs_swarm_peer",
-            "status": "DISCOVERED_UNVERIFIED",
-            "granted_capabilities": [],
-            "first_seen": existing.get("first_seen", now),
-            "last_seen": now,
-        }
-        if not existing:
-            added += 1
-    # Bounded registry: preserve most recently seen entries.
-    ordered = sorted(
-        peers.values(), key=lambda item: item.get("last_seen", ""), reverse=True
-    )[:1000]
-    data["peers"] = {item["peer_id"]: item for item in ordered}
-    save(path, data)
-    return added
+        peers.append({
+            "peer_id": candidate["peer_id"],
+            "multiaddrs": [candidate["multiaddr"]],
+        })
+    result = assimilate_discovered_peers(
+        peers, state_dir=_libp2p_state_dir(),
+    )
+    audit("p2p_peer_assimilation_completed", **result)
+    return result["new"]
 
 
 def run_discovery():
@@ -346,8 +278,13 @@ def run_discovery():
         if isinstance(onion_feed, str):
             candidates.extend(discover_onion_feed(onion_feed))
     dht = sources.get("dht", {})
-    if dht.get("enabled"):
+    direct_p2p_allowed = os.environ.get(
+        "IAO_P2P_ALLOW_DIRECT", ""
+    ).strip().lower() == "true"
+    if dht.get("enabled") and direct_p2p_allowed:
         candidates.extend(discover_dht(dht.get("ipfs_api", "http://127.0.0.1:5001")))
+    elif dht.get("enabled"):
+        audit("dht_discovery_skipped_privacy_policy", direct_connections=False)
     bridges = sources.get("bridges", {})
     nostr_cfg = bridges.get("nostr", {})
     if nostr_cfg.get("enabled"):
@@ -388,12 +325,15 @@ def merge_candidates_into_nodes(candidates):
             "authorized": False,
             "capabilities": c.get("capabilities", []),
             "source": c.get("source", "unknown")})
-        ids.add(c["id"]); added += 1
-    save(NODES, cfg); return added
+        ids.add(c["id"])
+        added += 1
+    save(NODES, cfg)
+    return added
 
 def probe_and_verify(addr):
     hit = probe_any(addr)
-    if not hit: return None
+    if not hit:
+        return None
     protocol, candidate = hit
     if protocol != "iao-federation":
         return protocol, candidate, {"ok": False, "error": "NO_BRIDGE"}
@@ -521,9 +461,11 @@ def enroll_if_consented(node, protocol, candidate, verified, item, policy):
         return {"status": "SKIPPED_HANDSHAKE_FAILED", "peer_id": peer_id,
                 "error": verified.get("error")}
     adapter = get_adapter(protocol)
-    if not adapter: return {"status": "SKIPPED_NO_ADAPTER", "protocol": protocol}
+    if not adapter:
+        return {"status": "SKIPPED_NO_ADAPTER", "protocol": protocol}
     contract = adapter.to_participation_contract(candidate)
-    if not contract: return {"status": "SKIPPED_NO_BRIDGE", "protocol": protocol}
+    if not contract:
+        return {"status": "SKIPPED_NO_BRIDGE", "protocol": protocol}
     allowed = set(policy.get("allowed_capabilities", []))
     requested = set(item.get("capabilities", [])) & allowed
     if not requested:
@@ -565,16 +507,9 @@ def enroll_if_consented(node, protocol, candidate, verified, item, policy):
             # de validación y reinscripción, sin darlo por válido.
             pass
 
-    # Registro autónomo de la autorización en el ledger de candidatos.
-    try:
-        registry = CandidateRegistry(STATE / "iao-federation-candidates.json")
-        try:
-            registry.authorize(item["candidate_id"])
-        except Exception:
-            # Si ya estaba autorizado o el registro no está, continuar.
-            pass
-    except Exception:
-        pass
+    # The durable candidate registry is updated by run_discovered_cycle;
+    # this transport-level enrollment path must not create a second,
+    # process-local authority or silently swallow an incompatible API call.
 
     try:
         node.enroll(contract, granted_capabilities=sorted(requested))
@@ -705,18 +640,33 @@ def run_trusted_public_enrollment(node, items):
 
 def run_cycle(dry_run=False, discover=True):
     policy = load(POLICY, {})
-    if not policy.get("enabled"): return {"status": "FEDERATION_DISABLED"}
+    if not policy.get("enabled"):
+        return {"status": "FEDERATION_DISABLED"}
 
     discovery_summary = {"candidates_added": 0}
     if discover:
         candidates = run_discovery()
         discovery_summary["candidates_added"] = merge_candidates_into_nodes(candidates)
         discovery_summary["p2p_peers_added"] = merge_p2p_candidates(candidates)
-        discovery_summary["onion_candidates_added"] = merge_onion_candidates(candidates)
+        onion_summary = merge_onion_candidates(candidates)
+        discovery_summary["onion_candidates_added"] = onion_summary["new"]
+        discovery_summary["onion_candidates_observed"] = onion_summary["observed"]
         discovery_summary["candidates_discovered"] = len(candidates)
         try:
             from omega.libp2p_discovery import discover_sync
-            p2p = discover_sync()
+            direct_p2p_allowed = os.environ.get(
+                "IAO_P2P_ALLOW_DIRECT", ""
+            ).strip().lower() == "true"
+            p2p = (
+                discover_sync()
+                if direct_p2p_allowed
+                else {
+                    "status": "DIRECT_P2P_DISABLED_PRIVACY_POLICY",
+                    "connected_bootstrappers": 0,
+                    "routing_peers_discovered": 0,
+                    "persisted_new_peers": 0,
+                }
+            )
             discovery_summary["libp2p"] = {
                 "status": p2p.get("status"),
                 "connected_bootstrappers": p2p.get("connected_bootstrappers", 0),
@@ -756,7 +706,8 @@ def run_cycle(dry_run=False, discover=True):
         })
     for item in items:
         addr = item.get("url")
-        if not isinstance(addr, str): continue
+        if not isinstance(addr, str):
+            continue
         # Los endpoints públicos HTTPS ya pasan por el transporte fijado,
         # challenge firmado y consentimiento explícito de run_discovered_cycle.
         # Nunca volver al probe urllib heredado para esos peers.
@@ -796,7 +747,8 @@ def run_cycle(dry_run=False, discover=True):
             continue
         probed = probe_and_verify(addr)
         if not probed:
-            results.append({"addr": addr, "status": "NO_PROTOCOL_MATCH"}); continue
+            results.append({"addr": addr, "status": "NO_PROTOCOL_MATCH"})
+            continue
         protocol, candidate, verified = probed
         if dry_run:
             results.append({"addr": addr, "protocol": protocol,
@@ -815,7 +767,8 @@ def run_cycle(dry_run=False, discover=True):
             "failed": sum(1 for r in results if r.get("status") == "ENROLL_FAILED")
                 + discovery_summary.get("trusted_public_federation", {}).get("failed", 0)}}
     if not dry_run:
-        save(REPORT, report); audit("autonomous_cycle_completed", **report["summary"])
+        save(REPORT, report)
+        audit("autonomous_cycle_completed", **report["summary"])
     return report
 
 def main():

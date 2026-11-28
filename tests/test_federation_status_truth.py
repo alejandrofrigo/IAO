@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from omega.server import build_service
 
-KEY = "unit-test-key-0123456789"
+KEY = "unit-test-auth-key-0123456789-abcdef"
 CORPUS = Path(__file__).resolve().parents[1] / "docs" / "corpus"
 
 

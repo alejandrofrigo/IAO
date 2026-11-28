@@ -17,16 +17,37 @@ LOG = LOGDIR / "iao-federation-worker.log"
 INTERVAL = 300
 TIMEOUT = 150
 STOP = False
+HEARTBEAT_STATE = Path(
+    os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", str(ROOT / ".state")))
+)
+HEARTBEAT_PATH = HEARTBEAT_STATE / "distributed-intelligence-heartbeat.json"
+
+
+def heartbeat(phase, result=None):
+    from omega.supervision import write_heartbeat
+
+    return write_heartbeat(
+        HEARTBEAT_PATH,
+        component="DISTRIBUTED_INTELLIGENCE",
+        pid=os.getpid(),
+        phase=phase,
+        interval_seconds=INTERVAL,
+        stale_after_seconds=INTERVAL * 3,
+        last_cycle_result=result,
+    )
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
 
 def log(message):
-    line = f"{now()} {message}"
-    print(line, flush=True)
-    LOGDIR.mkdir(exist_ok=True)
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    from omega.operational_log import append_private_jsonl
+
+    entry = append_private_jsonl(
+        LOG,
+        {"time": now(), "event": "FEDERATION_WORKER_LOG", "message": message},
+    )
+    print(json.dumps(entry, ensure_ascii=False, sort_keys=True), flush=True)
 
 def stop_handler(signum, frame):
     global STOP
@@ -80,10 +101,13 @@ def save_report(cycle, results):
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    os.chmod(REPORT, 0o600)
 
 def main():
-    STATE.mkdir(exist_ok=True)
-    LOGDIR.mkdir(exist_ok=True)
+    STATE.mkdir(exist_ok=True, mode=0o700)
+    os.chmod(STATE, 0o700)
+    LOGDIR.mkdir(exist_ok=True, mode=0o700)
+    os.chmod(LOGDIR, 0o700)
 
     if PIDFILE.exists():
         try:
@@ -95,14 +119,17 @@ def main():
             pass
 
     PIDFILE.write_text(str(os.getpid()), encoding="utf-8")
+    os.chmod(PIDFILE, 0o600)
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
 
     log(f"WORKER_STARTED pid={os.getpid()} interval={INTERVAL}s")
+    heartbeat("starting")
     cycle = 0
     try:
         while not STOP:
             cycle += 1
+            heartbeat("cycle_running")
             log(f"CYCLE={cycle} START")
 
             results = []
@@ -119,6 +146,7 @@ def main():
             ))
 
             save_report(cycle, results)
+            heartbeat("cycle_completed", all(item.get("status") == "PASS" for item in results))
             log(f"CYCLE={cycle} FINISHED")
             for _ in range(INTERVAL):
                 if STOP:

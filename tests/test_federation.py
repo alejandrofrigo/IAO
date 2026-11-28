@@ -205,7 +205,8 @@ class PolicyTests(FedBase):
 
     def test_capability_not_granted_or_not_readonly(self) -> None:
         for cap in ("danger.write", "shell.execute", "web.fetch", ""):
-            s, p = self.raw(self.env(capability=cap, nonce=("c" + cap).ljust(20, "_")))
+            nonce = ("c" + cap).replace(".", "_").ljust(20, "_")
+            s, p = self.raw(self.env(capability=cap, nonce=nonce))
             self.assertEqual((s, p["error"]), (403, "CAPABILITY_NOT_GRANTED"), cap)
 
     def test_peer_granted_write_capability_still_refused(self) -> None:
@@ -276,16 +277,39 @@ class PartitionAndHostilePeerTests(FedBase):
     def test_forged_result_signed_by_attacker_rejected(self) -> None:
         evil = Ed25519PrivateKey.generate()
         s = self._hostile(lambda req: _sign(evil, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
-                                                    "in_reply_to": req["nonce"], "result": {"items": [{"fake": 1}]}, "verification": "PASS"}))
+                                                    "in_reply_to": req["nonce"], "capability": "knowledge.search", "result": {"items": [{"fake": 1}]}, "verification": "PASS"}))
         self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
         self.assertEqual((r["ok"], r["error"]), (False, "BAD_RESPONSE_SIGNATURE"))
+
+    def test_valid_peer_signature_does_not_replace_local_result_verification(self) -> None:
+        hostile = self._hostile(
+            lambda req: _sign(
+                self.b.key,
+                {
+                    "v": 1,
+                    "from": self.b.node_id,
+                    "to": self.a.node_id,
+                    "ts": self.clock(),
+                    "in_reply_to": req["nonce"],
+                    "capability": "knowledge.search",
+                    "result": {"tool": "knowledge.search", "items": [{"fake": True}]},
+                    "verification": "PASS",
+                },
+            )
+        )
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
+        self.assertEqual(
+            (result["ok"], result["error"]),
+            (False, "RESULT_VERIFICATION_FAILED"),
+        )
 
     def test_old_valid_response_replayed_by_man_in_the_middle_rejected(self) -> None:
         good = self.a.send(self.b.node_id, self.sb.url, "knowledge.search", Q)
         self.assertTrue(good["ok"])
         captured = _sign(self.b.key, {"v": 1, "from": self.b.node_id, "to": self.a.node_id, "ts": self.clock(),
-                                       "in_reply_to": "old-nonce", "result": {"items": []}, "verification": "PASS"})
+                                       "in_reply_to": "old-nonce", "capability": "knowledge.search", "result": {"items": []}, "verification": "PASS"})
         s = self._hostile(lambda req: captured)
         self.a.bind_peer_endpoint(self.b.node_id, s.url)
         r = self.a.send(self.b.node_id, s.url, "knowledge.search", Q)
@@ -296,6 +320,38 @@ class PartitionAndHostilePeerTests(FedBase):
         self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
         r = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
         self.assertFalse(r["ok"])
+
+    def test_signed_response_with_unknown_member_is_rejected(self) -> None:
+        def response(req):
+            payload = {
+                "v": 1, "from": self.b.node_id, "to": self.a.node_id,
+                "ts": self.clock(), "in_reply_to": req["nonce"],
+                "capability": "knowledge.search", "result": {"items": []},
+                "verification": "PASS", "unexpected": True,
+            }
+            return _sign(self.b.key, payload)
+
+        hostile = self._hostile(response)
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
+        self.assertEqual((result["ok"], result["error"]), (False, "BAD_RESPONSE"))
+
+    def test_signed_response_with_non_finite_timestamp_is_rejected(self) -> None:
+        def response(req):
+            return _sign(
+                self.b.key,
+                {
+                    "v": 1, "from": self.b.node_id, "to": self.a.node_id,
+                    "ts": float("nan"), "in_reply_to": req["nonce"],
+                    "capability": "knowledge.search", "result": {"items": []},
+                    "verification": "PASS",
+                },
+            )
+
+        hostile = self._hostile(response)
+        self.a.bind_peer_endpoint(self.b.node_id, hostile.url)
+        result = self.a.send(self.b.node_id, hostile.url, "knowledge.search", Q)
+        self.assertEqual((result["ok"], result["error"]), (False, "CLOCK_SKEW"))
 
     def test_loopback_http_requires_explicit_integration_flag(self) -> None:
         os.environ.pop("IAO_ALLOW_LOOPBACK_HTTP", None)
@@ -343,10 +399,6 @@ class PartitionAndHostilePeerTests(FedBase):
         self.assertEqual(self.a.send("0" * 16, self.sb.url, "knowledge.search", Q)["error"], "UNKNOWN_PEER")
         self.a.revoke(self.b.node_id)
         self.assertEqual(self.a.send(self.b.node_id, self.sb.url, "knowledge.search", Q)["error"], "UNKNOWN_PEER")
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PersistentPeerStoreTests(FedBase):
@@ -432,3 +484,88 @@ class PersistentPeerStoreTests(FedBase):
             restored.peers[self.b.node_id]["granted_capabilities"],
             [],
         )
+
+
+class StrictFederationEnvelopeTests(FedBase):
+    def test_duplicate_json_members_are_rejected(self):
+        signed = _sign(self.a.key, self.env(nonce="duplicate-member-nonce-0001"))
+        raw = json.dumps(signed, separators=(",", ":"))
+        raw = raw[:-1] + ',"nonce":"duplicate-member-nonce-0002"}'
+        status, payload = self.b.handle(raw.encode())
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_unknown_or_missing_envelope_members_are_rejected(self):
+        for mutate in (
+            lambda env: env.pop("body"),
+            lambda env: env.update({"admin": True}),
+        ):
+            env = self.env(nonce="closed-envelope-member-0001")
+            mutate(env)
+            status, payload = self.raw(env)
+            self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_non_finite_boolean_and_string_timestamps_are_rejected(self):
+        for index, timestamp in enumerate((float("nan"), float("inf"), float("-inf"), True, "1000000", 10**400)):
+            status, payload = self.raw(self.env(
+                ts=timestamp, nonce=f"invalid-ts-envelope-{index:02d}",
+            ))
+            self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+        version_float = self.env(nonce="invalid-version-float-0001")
+        version_float["v"] = 1.0
+        status, payload = self.raw(version_float)
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_invalid_nonce_and_non_object_body_are_rejected(self):
+        for index, changes in enumerate((
+            {"nonce": "short"},
+            {"nonce": "non-ascii-ñ-123456"},
+            {"nonce": "x" * 129},
+            {"body": []},
+        )):
+            envelope_changes = {"nonce": f"invalid-envelope-body-{index:02d}"}
+            envelope_changes.update(changes)
+            status, payload = self.raw(self.env(**envelope_changes))
+            self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_duplicate_or_non_finite_challenge_fields_are_rejected(self):
+        request = {
+            "v": 1, "from": self.a.node_id, "to": self.b.node_id,
+            "nonce": "a" * 64, "ts": self.clock(),
+        }
+        raw = json.dumps(request, separators=(",", ":"))
+        raw = raw[:-1] + ',"v":1}'
+        self.assertEqual(self.b.answer_challenge(raw.encode())[0], 400)
+        for timestamp in (float("nan"), float("inf"), True, "1000000", 10**400):
+            request["ts"] = timestamp
+            self.assertEqual(self.b.answer_challenge(json.dumps(request).encode())[0], 400)
+        request["ts"] = self.clock()
+        request["v"] = 1.0
+        self.assertEqual(self.b.answer_challenge(json.dumps(request).encode())[0], 400)
+
+
+class DeepJsonFederationTests(FedBase):
+    def test_deeply_nested_message_is_rejected_as_malformed(self) -> None:
+        nested = b"[" * 1100 + b"0" + b"]" * 1100
+        raw = (
+            b'{"v":1,"from":"' + self.a.node_id.encode()
+            + b'","to":"' + self.b.node_id.encode()
+            + b'","ts":1000000,"nonce":"deep-json-message-nonce-0001",'
+            + b'"capability":"knowledge.search","body":' + nested
+            + b',"sig":"' + b"0" * 88 + b'"}'
+        )
+        status, payload = self.b.handle(raw)
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_deeply_nested_challenge_is_rejected_as_invalid(self) -> None:
+        nested = b"[" * 1100 + b"0" + b"]" * 1100
+        raw = (
+            b'{"v":1,"from":"' + self.a.node_id.encode()
+            + b'","to":"' + self.b.node_id.encode()
+            + b'","nonce":"' + b"a" * 64
+            + b'","ts":1000000,"extra":' + nested + b'}'
+        )
+        self.assertEqual(self.b.answer_challenge(raw)[0], 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

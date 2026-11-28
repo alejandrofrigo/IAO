@@ -47,10 +47,16 @@ button:disabled{opacity:.5}
   const messageEl = document.querySelector("#message");
   const connectBtn = document.querySelector("#connect");
   const sendBtn = document.querySelector("#send");
+  const apiConfigured = window.IAO_API_CONFIG_STATUS === "configured";
   let token = null, conversationId = null, busy = false;
   window.iaoGetSessionToken = () => token;
 
   function status(s) { statusEl.textContent = s; }
+  connectBtn.disabled = !apiConfigured;
+  sendBtn.disabled = true;
+  if (!apiConfigured) {
+    status("API bloqueada: " + (window.IAO_API_CONFIG_ERROR || "API_BASE_NOT_CONFIGURED"));
+  }
 
   async function request(path, method = "GET", body) {
     const headers = {};
@@ -72,6 +78,7 @@ button:disabled{opacity:.5}
   }
 
   window.iaoActivateOperatorSession = async accessToken => {
+    if (!apiConfigured) throw new Error(window.IAO_API_CONFIG_ERROR || "API_BASE_NOT_CONFIGURED");
     if (typeof accessToken !== "string" || !accessToken) throw new Error("INVALID_OPERATOR_SESSION");
     token = accessToken;
     conversationId = null;
@@ -118,7 +125,7 @@ button:disabled{opacity:.5}
   }
 
   connectBtn.addEventListener("click", async () => {
-    if (busy) return;
+    if (!apiConfigured || busy) return;
     busy = true;
     connectBtn.disabled = true;
     status("Creando sesión pública...");
@@ -167,7 +174,7 @@ button:disabled{opacity:.5}
 
   async function sendMessage() {
     const message = messageEl.value.trim();
-    if (!message || !conversationId || busy) return;
+    if (!apiConfigured || !message || !conversationId || busy) return;
     busy = true;
     sendBtn.disabled = true;
     messageEl.value = "";
@@ -190,7 +197,7 @@ button:disabled{opacity:.5}
       }
     } finally {
       busy = false;
-      sendBtn.disabled = !conversationId;
+      sendBtn.disabled = !conversationId || !apiConfigured;
       messageEl.focus();
     }
   }

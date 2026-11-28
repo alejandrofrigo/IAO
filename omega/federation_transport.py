@@ -19,6 +19,16 @@ from urllib.parse import urlsplit
 MAX_DISCOVERY_BYTES = 1_000_000
 
 
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject duplicate JSON members rather than silently accepting last-wins."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("DUPLICATE_JSON_MEMBER")
+        result[key] = value
+    return result
+
+
 class FederationTransportError(RuntimeError):
     """Safe transport failure with a stable machine-readable reason."""
 
@@ -289,8 +299,8 @@ def _request_json(
             if len(raw) > max_bytes:
                 raise FederationTransportError("RESPONSE_TOO_LARGE")
             try:
-                decoded = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
+            except (UnicodeDecodeError, ValueError, RecursionError) as exc:
                 raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
             return response.status, decoded
         except FederationTransportError:
@@ -318,12 +328,12 @@ def _parse_onion_url(url: str) -> tuple[str, int, str]:
         or len(host) != 62
         or any(char not in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
         or parsed.username is not None or parsed.password is not None
-        or port not in (None, 80) or not parsed.path.startswith("/")
+        or port not in (None, 80, 8443) or not parsed.path.startswith("/")
         or parsed.fragment or parsed.query
         or any(ord(char) < 33 or ord(char) == 127 for char in url)
     ):
         raise FederationTransportError("V3_ONION_HTTP_ENDPOINT_REQUIRED")
-    return host, 80, parsed.path or "/"
+    return host, port or 80, parsed.path or "/"
 
 
 def _tor_proxy() -> tuple[str, int]:
@@ -340,8 +350,8 @@ def _tor_proxy() -> tuple[str, int]:
 
 
 class _TorOnionHTTPConnection(http.client.HTTPConnection):
-    def __init__(self, hostname: str, *, timeout: float, proxy_host: str, proxy_port: int):
-        super().__init__(hostname, 80, timeout=timeout)
+    def __init__(self, hostname: str, port: int, *, timeout: float, proxy_host: str, proxy_port: int):
+        super().__init__(hostname, port, timeout=timeout)
         self._proxy_host = proxy_host
         self._proxy_port = proxy_port
 
@@ -372,7 +382,7 @@ def fetch_onion_json(
     except ImportError as exc:
         raise FederationTransportError("TOR_SOCKS_DEPENDENCY_MISSING") from exc
     connection = _TorOnionHTTPConnection(
-        host, timeout=timeout, proxy_host=proxy_host, proxy_port=proxy_port
+        host, port, timeout=timeout, proxy_host=proxy_host, proxy_port=proxy_port
     )
     try:
         connection.request("GET", target, headers={
@@ -398,8 +408,8 @@ def fetch_onion_json(
         if len(raw) > max_bytes:
             raise FederationTransportError("RESPONSE_TOO_LARGE")
         try:
-            return json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
+        except (UnicodeDecodeError, ValueError, RecursionError) as exc:
             raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
     except FederationTransportError:
         raise

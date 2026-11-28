@@ -230,6 +230,9 @@ def test_onion_transport_accepts_only_v3_onion_http():
     assert transport._parse_onion_url(f"http://{host}/directory.json") == (
         host, 80, "/directory.json"
     )
+    assert transport._parse_onion_url(f"http://{host}:8443/directory.json") == (
+        host, 8443, "/directory.json"
+    )
     for url in (
         "https://"+host+"/directory.json",
         "http://short.onion/feed",
@@ -240,6 +243,12 @@ def test_onion_transport_accepts_only_v3_onion_http():
     ):
         with pytest.raises(transport.FederationTransportError):
             transport._parse_onion_url(url)
+
+
+def test_tor_proxy_defaults_to_iao_node_configured_port(monkeypatch):
+    monkeypatch.delenv("IAO_TOR_SOCKS_HOST", raising=False)
+    monkeypatch.delenv("IAO_TOR_SOCKS_PORT", raising=False)
+    assert transport._tor_proxy() == ("127.0.0.1", 9050)
 
 
 def test_tor_proxy_must_be_loopback(monkeypatch):
@@ -267,8 +276,8 @@ def test_fetch_onion_json_uses_configured_socks_and_bounds_response(monkeypatch)
             return b'{"peers": []}'
 
     class Connection:
-        def __init__(self, hostname, *, timeout, proxy_host, proxy_port):
-            calls.append((hostname, timeout, proxy_host, proxy_port))
+        def __init__(self, hostname, port, *, timeout, proxy_host, proxy_port):
+            calls.append((hostname, port, timeout, proxy_host, proxy_port))
         def request(self, method, target, headers=None):
             calls.append((method, target, headers["Host"]))
         def getresponse(self):
@@ -279,8 +288,12 @@ def test_fetch_onion_json_uses_configured_socks_and_bounds_response(monkeypatch)
     monkeypatch.setattr(transport, "_TorOnionHTTPConnection", Connection)
     host = "b" * 56 + ".onion"
     assert transport.fetch_onion_json(f"http://{host}/feed") == {"peers": []}
-    assert calls[0] == (host, 15.0, "127.0.0.1", 9050)
+    assert calls[0] == (host, 80, 15.0, "127.0.0.1", 9050)
     assert calls[1][0:2] == ("GET", "/feed")
+    assert calls[2] == ("closed",)
+    assert transport.fetch_onion_json(f"http://{host}:8443/feed") == {"peers": []}
+    assert calls[3] == (host, 8443, 15.0, "127.0.0.1", 9050)
+    assert calls[4][0:2] == ("GET", "/feed")
     assert calls[-1] == ("closed",)
 
 
@@ -331,3 +344,26 @@ def test_post_public_json_rejects_redirect(monkeypatch):
     FakeConnection.response = FakeResponse(status=307, headers={"Location": "https://other.example/"})
     with pytest.raises(transport.FederationTransportError, match="REDIRECT_REFUSED"):
         transport.post_public_json("https://peer.example.org/fed/v1/handshake", {"x": 1})
+
+def test_fetch_public_json_rejects_duplicate_object_members(monkeypatch):
+    monkeypatch.setattr(
+        FakeConnection,
+        "response",
+        FakeResponse(body=b'{"peers":[],"peers":[{"peer_id":"attacker"}]}'),
+    )
+    monkeypatch.setattr(
+        transport, "resolve_public_addresses", lambda *args: ["8.8.8.8"]
+    )
+    monkeypatch.setattr(transport, "_client_tls_context", lambda: object())
+    monkeypatch.setattr(
+        transport,
+        "_PinnedHTTPSConnection",
+        lambda *args, **kwargs: FakeConnection(
+            args[0], args[1], port=kwargs["port"],
+            timeout=kwargs["timeout"], context=kwargs["context"],
+        ),
+    )
+    with pytest.raises(
+        transport.FederationTransportError, match="INVALID_JSON_RESPONSE"
+    ):
+        transport.fetch_public_json("https://directory.example.org/peers")

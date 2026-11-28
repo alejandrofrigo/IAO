@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import math
+import time
 import signal
 import threading
 import uuid
@@ -35,7 +37,18 @@ class TaskWorker:
         poll_seconds: float = 1.0,
         operator_identity_authority: Any = None,
         tool_executor: Any = None,
+        heartbeat_path: Path | None = None,
+        heartbeat_stale_after_seconds: int | None = None,
     ) -> None:
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int) or lease_seconds < 1:
+            raise ValueError("INVALID_WORKER_LEASE")
+        if (
+            isinstance(poll_seconds, bool)
+            or not isinstance(poll_seconds, (int, float))
+            or not math.isfinite(float(poll_seconds))
+            or poll_seconds <= 0
+        ):
+            raise ValueError("INVALID_WORKER_POLL_INTERVAL")
         self.store = store
         self.registry = registry
         self.operator_identity_authority = operator_identity_authority
@@ -44,6 +57,23 @@ class TaskWorker:
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
         self._stop = threading.Event()
+        self.heartbeat_path = Path(heartbeat_path) if heartbeat_path is not None else None
+        self._heartbeat_interval = max(1, math.ceil(float(poll_seconds)))
+        configured_stale_after = (
+            max(60, lease_seconds * 2)
+            if heartbeat_stale_after_seconds is None
+            else heartbeat_stale_after_seconds
+        )
+        if (
+            isinstance(configured_stale_after, bool)
+            or not isinstance(configured_stale_after, int)
+            or configured_stale_after < self._heartbeat_interval
+        ):
+            raise ValueError("INVALID_WORKER_HEARTBEAT_STALENESS")
+        self._heartbeat_stale_after = configured_stale_after
+        self._last_cycle_completed_at: float | None = None
+        self._last_cycle_result: bool | None = None
+        self._last_run_succeeded = True
 
     def stop(self) -> None:
         self._stop.set()
@@ -215,6 +245,7 @@ class TaskWorker:
         except Exception:
             # No automatic retry: an unexpected worker failure leaves the lease
             # to expire, after which startup recovery marks it FAILED.
+            self._last_run_succeeded = False
             self.store.audit(
                 owner, "TASK_WORKER_ERROR", task_id,
                 worker=self.worker_id, decision="FAIL_CLOSED",
@@ -241,9 +272,41 @@ class TaskWorker:
         )
         return True
 
+    def _heartbeat(self, phase: str, *, cycle_result: bool | None = None) -> None:
+        if self.heartbeat_path is None:
+            return
+        from omega.supervision import write_heartbeat
+
+        write_heartbeat(
+            self.heartbeat_path,
+            component="TASK_WORKER",
+            pid=os.getpid(),
+            phase=phase,
+            interval_seconds=self._heartbeat_interval,
+            stale_after_seconds=self._heartbeat_stale_after,
+            last_cycle_completed_at=self._last_cycle_completed_at,
+            last_cycle_result=(
+                cycle_result if phase == "cycle_completed" else self._last_cycle_result
+            ),
+        )
+        if phase == "cycle_completed":
+            self._last_cycle_completed_at = time.time()
+            self._last_cycle_result = cycle_result
+
     def run_forever(self) -> None:
+        self._heartbeat("starting")
         while not self._stop.is_set():
-            if not self.run_once():
+            self._heartbeat("cycle_running")
+            self._last_run_succeeded = True
+            try:
+                self.run_once()
+            except Exception:
+                self._heartbeat("cycle_completed", cycle_result=False)
+                raise
+            self._heartbeat(
+                "cycle_completed", cycle_result=self._last_run_succeeded,
+            )
+            if not self._stop.is_set():
                 self._stop.wait(self.poll_seconds)
 
 
@@ -256,7 +319,7 @@ def main() -> None:
     token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
     if len(token_key) < 16:
         raise RuntimeError("OMEGA_DEV_TOKEN_KEY is required")
-    state_dir = Path(os.environ.get("OMEGA_STATE_DIR", ".state"))
+    state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
     service = build_service(
         state_dir,
         token_key,
@@ -269,6 +332,7 @@ def main() -> None:
         lease_seconds=int(os.environ.get("IAO_WORKER_LEASE_SECONDS", "60")),
         poll_seconds=float(os.environ.get("IAO_WORKER_POLL_SECONDS", "1")),
         operator_identity_authority=service.operator_identity_authority,
+        heartbeat_path=state_dir / "task-worker-heartbeat.json",
     )
     # Startup reconciliation is fail-closed: expired RUNNING and VERIFYING
     # leases are marked FAILED and are never automatically re-enqueued.

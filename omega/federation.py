@@ -48,9 +48,25 @@ def _sign(key: Ed25519PrivateKey, env: dict[str, Any]) -> dict[str, Any]:
     return {**env, "sig": _b64(key.sign(canonical_json(env)))}
 
 
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate JSON members at every object nesting level."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("DUPLICATE_JSON_MEMBER")
+        result[key] = value
+    return result
+
 def _verify(pub_raw: bytes, env: dict[str, Any]) -> bool:
     try:
-        sig = base64.b64decode(env["sig"], validate=True)
+        encoded = env["sig"]
+        if not isinstance(encoded, str) or len(encoded) != 88:
+            return False
+        sig = base64.b64decode(encoded, validate=True)
+        if len(sig) != 64 or _b64(sig) != encoded:
+            return False
         body = {k: v for k, v in env.items() if k != "sig"}
         Ed25519PublicKey.from_public_bytes(pub_raw).verify(sig, canonical_json(body))
         return True
@@ -377,17 +393,17 @@ class Node:
         if not isinstance(raw, bytes) or len(raw) > MAX_MSG:
             return 413, {"error": "PAYLOAD_TOO_LARGE"}
         try:
-            request = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
+            request = json.loads(raw, object_pairs_hook=_unique_json_object)
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return 400, {"error": "INVALID_CHALLENGE"}
-        if not isinstance(request, dict):
+        if not isinstance(request, dict) or set(request) != {"v", "from", "to", "nonce", "ts"}:
             return 400, {"error": "INVALID_CHALLENGE"}
 
         requester = request.get("from")
         recipient = request.get("to")
         nonce = request.get("nonce")
         ts = request.get("ts")
-        if (request.get("v") != 1
+        if (not isinstance(request.get("v"), int) or isinstance(request.get("v"), bool) or request.get("v") != 1
                 or not isinstance(requester, str)
                 or len(requester) != 16
                 or any(ch not in "0123456789abcdef" for ch in requester)
@@ -397,7 +413,8 @@ class Node:
                 or any(ch not in "0123456789abcdef" for ch in nonce)
                 or isinstance(ts, bool)
                 or not isinstance(ts, (int, float))
-                or not math.isfinite(float(ts))):
+                or (isinstance(ts, int) and abs(ts) > 2**53)
+                or (isinstance(ts, float) and not math.isfinite(ts))):
             return 400, {"error": "INVALID_CHALLENGE"}
         if abs(self.clock() - float(ts)) > self.skew:
             return 400, {"error": "CHALLENGE_CLOCK_SKEW"}
@@ -517,25 +534,38 @@ class Node:
             if len(raw) > MAX_MSG:
                 raise FedDenied(413, "PAYLOAD_TOO_LARGE")
             try:
-                env = json.loads(raw)
-                peer = str(env["from"])
-                if not isinstance(env, dict) or env.get("v") != 1:
-                    raise ValueError
-            except (ValueError, KeyError, TypeError):
+                env = json.loads(raw, object_pairs_hook=_unique_json_object)
+            except (ValueError, UnicodeDecodeError, RecursionError):
                 raise FedDenied(400, "MALFORMED") from None
+            required = {"v", "from", "to", "ts", "nonce", "capability", "body", "sig"}
+            if not isinstance(env, dict) or set(env) != required:
+                raise FedDenied(400, "MALFORMED")
+            peer = env.get("from")
+            ts = env.get("ts")
+            nonce = env.get("nonce")
+            capability = env.get("capability")
+            if (not isinstance(env.get("v"), int) or isinstance(env.get("v"), bool) or env.get("v") != 1
+                    or not isinstance(peer, str) or len(peer) != 16
+                    or any(ch not in "0123456789abcdef" for ch in peer)
+                    or not isinstance(env.get("to"), str)
+                    or not isinstance(ts, (int, float)) or isinstance(ts, bool)
+                    or (isinstance(ts, int) and abs(ts) > 2**53)
+                    or (isinstance(ts, float) and not math.isfinite(ts))
+                    or not isinstance(nonce, str) or not 16 <= len(nonce) <= 128
+                    or not nonce.isascii() or not all(ch.isalnum() or ch in "_-" for ch in nonce)
+                    or not isinstance(capability, str) or len(capability) > 128
+                    or not isinstance(env.get("body"), dict)):
+                raise FedDenied(400, "MALFORMED")
             if env.get("to") != self.node_id:
-                raise FedDenied(403, "WRONG_RECIPIENT")          # a message captured for node X is useless at node Y
+                raise FedDenied(403, "WRONG_RECIPIENT")
             c = self.peers.get(peer)
             if c is None:
                 raise FedDenied(403, "UNKNOWN_PEER")
             if not _verify(c["pub"], env):
                 raise FedDenied(403, "BAD_SIGNATURE")
             now = self.clock()
-            if abs(now - float(env.get("ts", 0))) > self.skew:
+            if abs(now - float(ts)) > self.skew:
                 raise FedDenied(403, "CLOCK_SKEW")
-            nonce = str(env.get("nonce", ""))
-            if len(nonce) < 16:
-                raise FedDenied(400, "MALFORMED")
             with self._lock:
                 self._seen = {k: t for k, t in self._seen.items() if now - t <= 2 * self.skew}
                 if (peer, nonce) in self._seen:
@@ -587,7 +617,11 @@ class Node:
             return {"ok": False, "error": "LEASE_EXPIRED"}
         if not isinstance(capability, str):
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
-        if capability not in c["capabilities"] or capability not in self.served:
+        spec = self.registry.get(capability)
+        if (
+            capability not in c["capabilities"] or capability not in self.served
+            or spec is None or spec.effect_class != "READ_ONLY"
+        ):
             return {"ok": False, "error": "CAPABILITY_NOT_GRANTED"}
         try:
             endpoint_scheme = validate_message_endpoint(url)[0]
@@ -606,7 +640,7 @@ class Node:
         nonce = os.urandom(16).hex()
         env = _sign(self.key, {"v": 1, "from": self.node_id, "to": peer_id, "ts": self.clock(), "nonce": nonce,
                                "capability": capability, "body": body})
-        return self._post(c, url, env, nonce, timeout)
+        return self._post(c, url, env, nonce, capability, spec, timeout)
 
     def _ssl_context(self) -> "ssl.SSLContext | None":
         """Contexto TLS desde IAO_TLS_CA_FILE si está definido."""
@@ -618,7 +652,16 @@ class Node:
         ctx.verify_mode = ssl.CERT_REQUIRED
         return ctx
 
-    def _post(self, c: dict[str, Any], url: str, env: dict[str, Any], nonce: str, timeout: float) -> dict[str, Any]:
+    def _post(
+        self,
+        c: dict[str, Any],
+        url: str,
+        env: dict[str, Any],
+        nonce: str,
+        capability: str,
+        spec: Any,
+        timeout: float,
+    ) -> dict[str, Any]:
         try:
             status, resp = post_federation_json(
                 url, env, timeout=timeout, max_bytes=MAX_MSG * 8
@@ -638,25 +681,53 @@ class Node:
             return {"ok": False, "status": status, "error": error}
         if not isinstance(resp, dict):
             return {"ok": False, "error": "BAD_RESPONSE"}
+        required = {
+            "v", "from", "to", "ts", "in_reply_to",
+            "capability", "result", "verification", "sig",
+        }
+        if (
+            set(resp) != required
+            or not isinstance(resp.get("v"), int)
+            or isinstance(resp.get("v"), bool)
+            or resp.get("v") != 1
+            or not isinstance(resp.get("from"), str)
+            or not isinstance(resp.get("to"), str)
+            or not isinstance(resp.get("in_reply_to"), str)
+            or not isinstance(resp.get("capability"), str)
+            or not isinstance(resp.get("verification"), str)
+            or len(resp["verification"]) > 64
+            or not isinstance(resp.get("result"), dict)
+        ):
+            return {"ok": False, "error": "BAD_RESPONSE"}
         if not _verify(c["pub"], resp):
             return {"ok": False, "error": "BAD_RESPONSE_SIGNATURE"}
-        if "result" not in resp:
-            return {"ok": False, "error": "BAD_RESPONSE"}
         if (
             resp.get("to") != self.node_id
             or resp.get("from") != c["peer_id"]
             or resp.get("in_reply_to") != nonce
+            or resp.get("capability") != capability
         ):
             return {"ok": False, "error": "REPLAYED_OR_MISROUTED_RESPONSE"}
+        response_ts = resp.get("ts")
+        if (
+            not isinstance(response_ts, (int, float))
+            or isinstance(response_ts, bool)
+            or (isinstance(response_ts, int) and abs(response_ts) > 2**53)
+            or (isinstance(response_ts, float) and not math.isfinite(response_ts))
+        ):
+            return {"ok": False, "error": "CLOCK_SKEW"}
+        if abs(self.clock() - float(response_ts)) > self.skew:
+            return {"ok": False, "error": "CLOCK_SKEW"}
         try:
-            response_ts = float(resp.get("ts", 0))
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "CLOCK_SKEW"}
-        if not math.isfinite(response_ts) or abs(self.clock() - response_ts) > self.skew:
-            return {"ok": False, "error": "CLOCK_SKEW"}
+            local_verification = spec.verify(resp["result"])
+        except Exception:
+            return {"ok": False, "error": "RESULT_VERIFICATION_FAILED"}
+        if local_verification != "PASS":
+            return {"ok": False, "error": "RESULT_VERIFICATION_FAILED"}
         return {
             "ok": True,
-            "verification": resp.get("verification"),
+            "verification": local_verification,
+            "peer_verification": resp["verification"],
             "result": resp["result"],
             "untrusted": True,
         }

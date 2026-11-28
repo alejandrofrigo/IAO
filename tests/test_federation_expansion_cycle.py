@@ -7,6 +7,7 @@ from tools import iao_federation_autonomy
 
 
 def test_libp2p_discovery_records_public_peers_without_enrolling(monkeypatch):
+    monkeypatch.setenv("IAO_P2P_ALLOW_DIRECT", "true")
     monkeypatch.setattr(
         libp2p_discovery,
         "discover_sync",
@@ -33,6 +34,7 @@ def test_libp2p_discovery_records_public_peers_without_enrolling(monkeypatch):
 
 
 def test_libp2p_discovery_failure_is_reported_without_crashing(monkeypatch):
+    monkeypatch.setenv("IAO_P2P_ALLOW_DIRECT", "true")
     def fail(timeout):
         raise OSError("private endpoint detail")
 
@@ -95,3 +97,16 @@ def test_expansion_cycle_timeout_is_nonfatal(monkeypatch):
             {"reason": "TIMEOUT", "timeout_seconds": 120},
         )
     ]
+
+
+def test_libp2p_discovery_is_disabled_without_privacy_opt_in(monkeypatch):
+    monkeypatch.delenv("IAO_P2P_ALLOW_DIRECT", raising=False)
+    monkeypatch.setattr(
+        libp2p_discovery,
+        "discover_sync",
+        lambda timeout: (_ for _ in ()).throw(AssertionError("direct egress forbidden")),
+    )
+    result = iao_federation_autonomy.run_libp2p_discovery()
+    assert result["status"] == "DIRECT_P2P_DISABLED_PRIVACY_POLICY"
+    assert result["enrollment_performed"] is False
+    assert result["capabilities_granted"] == []

@@ -64,14 +64,16 @@ def cfg():
     return json.loads(CFG.read_text())
 
 def save_config(c):
-    CFG.parent.mkdir(parents=True, exist_ok=True)
+    CFG.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(CFG.parent, 0o700)
     tmp = CFG.with_suffix(".tmp")
     tmp.write_text(json.dumps(c, indent=2))
     os.chmod(tmp, 0o600)
     tmp.replace(CFG)
 
 def dbopen():
-    DATA.mkdir(parents=True, exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(DATA, 0o700)
     db = sqlite3.connect(DB, timeout=20)
     db.execute("PRAGMA journal_mode=WAL")
 
@@ -122,13 +124,19 @@ def dbopen():
     );
     """)
     db.commit()
+    for private_path in (DB, Path(str(DB) + "-wal"), Path(str(DB) + "-shm")):
+        if private_path.exists():
+            os.chmod(private_path, 0o600)
     return db
 
 def log_event(name, details=""):
+    # Peer identifiers, endpoints and task metadata must not be persisted raw.
+    raw = str(details)[:1000]
+    details_digest = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
     db = dbopen()
     db.execute(
         "INSERT INTO events(timestamp,event,details) VALUES(?,?,?)",
-        (now(), name, str(details)[:1000])
+        (now(), name, details_digest)
     )
     db.commit()
     db.close()
@@ -830,16 +838,49 @@ def handler_factory(c):
 
     return API
 
+
+def write_node_network_heartbeat(phase, *, interval_seconds=60, result=None):
+    from omega.supervision import write_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get(
+                "OMEGA_STATE_DIR",
+                str(Path(__file__).resolve().parents[1] / ".state"),
+            ),
+        )
+    )
+    return write_heartbeat(
+        state_dir / "node-network-heartbeat.json",
+        component="NODE_NETWORK",
+        pid=os.getpid(),
+        phase=phase,
+        interval_seconds=interval_seconds,
+        stale_after_seconds=max(180, interval_seconds * 3),
+        last_cycle_result=result,
+    )
+
+
 def serve():
     # ENGINE_CONFIG_RELOAD_V1
     server = None
+    heartbeat_interval = 60
 
+    def heartbeat(phase, result=None):
+        return write_node_network_heartbeat(
+            phase, interval_seconds=heartbeat_interval, result=result,
+        )
+
+    heartbeat("starting")
     print("IAO_NODE_NETWORK_STARTING", flush=True)
 
     while True:
+        heartbeat("cycle_running")
         try:
             if server is None:
                 c = cfg()
+                heartbeat_interval = max(1, int(c["heartbeat_interval"]))
                 bind_host = str(c["listen_host"])
                 bind_port = int(c["listen_port"])
                 server = ThreadingHTTPServer(
@@ -860,6 +901,7 @@ def serve():
             heartbeat_all()
             dispatch_pending()
             autobuilder()
+            heartbeat("cycle_completed", True)
 
             time.sleep(max(30, int(c["heartbeat_interval"])))
 
@@ -870,6 +912,7 @@ def serve():
             return
 
         except Exception as exc:
+            heartbeat("cycle_completed", False)
             log_event("ENGINE_RECOVERY", type(exc).__name__)
             print("ENGINE_RECOVERY", type(exc).__name__, flush=True)
             time.sleep(30)

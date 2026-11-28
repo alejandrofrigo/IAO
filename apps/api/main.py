@@ -6,36 +6,198 @@ this module never silently creates a replacement audit identity.
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from omega.config import validate_persistent_keys
+from omega.service import MAX_BODY
+
+class _PersistentRuntimeUnavailable(RuntimeError):
+    """Expected fail-closed error for missing or invalid persistent credentials."""
+
+
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # Start persistent service and network workers during configured production boot.
-    # Liveness-only qualification may omit secrets; in that case the API remains
-    # live but readiness and service routes stay fail-closed.
-    if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
-            and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
+    # The task worker is a separate explicit opt-in. Missing persistent keys
+    # keep liveness available but block worker startup and readiness.
+    if not _task_worker_requested():
+        _set_task_worker_state("disabled_by_default")
+    elif (
+        len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) < 32
+        or len(os.environ.get("AUDIT_HMAC_KEY", "")) < 32
+    ):
+        _set_task_worker_state("blocked", "PERSISTENT_KEYS_UNAVAILABLE")
+    if os.environ.get("OMEGA_DEV_TOKEN_KEY") or os.environ.get("AUDIT_HMAC_KEY"):
         try:
-            _get_service()
-        except Exception:
-            pass
-    yield
+            service = _get_service()
+            if _task_worker_requested():
+                _start_task_worker(service)
+        except RuntimeError as exc:
+            reason = str(exc)
+            if reason not in {
+                "PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED",
+                "TASK_WORKER_SETTINGS_INVALID",
+                "TASK_WORKER_SETTINGS_OUT_OF_RANGE",
+            }:
+                reason = "WORKER_START_FAILED"
+            if _task_worker_requested():
+                _set_task_worker_state("start_failed", reason)
+            logging.getLogger("iao.runtime").error(
+                "RUNTIME_START_FAILED error_type=%s",
+                type(exc).__name__,
+            )
+        except Exception as exc:
+            if _task_worker_requested():
+                _set_task_worker_state("start_failed", "WORKER_START_FAILED")
+            logging.getLogger("iao.runtime").error(
+                "RUNTIME_START_FAILED error_type=%s",
+                type(exc).__name__,
+            )
+    try:
+        yield
+    finally:
+        _stop_task_worker()
+        _stop_background_workers()
+
+
+def _stop_background_workers() -> None:
+    """Stop API-owned discovery workers with bounded joins before store teardown."""
+    stops = (
+        ("autojoin", "omega.federation_autojoin", "stop_federation_autojoin"),
+        ("discovery", "omega.federation_discovery", "stop_federation_discovery"),
+        ("external_network", "omega.external_network", "stop_external_network"),
+    )
+    logger = logging.getLogger("iao.runtime")
+    for worker_name, module_name, function_name in stops:
+        try:
+            module = __import__(module_name, fromlist=[function_name])
+            stop = getattr(module, function_name)
+            stopped = stop(timeout=15.0)
+        except Exception as exc:
+            logger.error(
+                "RUNTIME_WORKER_STOP_FAILED worker=%s error_type=%s",
+                worker_name,
+                type(exc).__name__,
+            )
+            continue
+        if stopped is not True:
+            logger.error("RUNTIME_WORKER_STOP_TIMEOUT worker=%s", worker_name)
 
 
 app = FastAPI(title="IAO API", version="11.2.0", lifespan=_runtime_lifespan)
 _service = None
-_device_authority = None
 _federation_node = None
 _federation_lock = threading.Lock()
 _federation_worker_status = {"autojoin": False, "discovery": False, "external_network": False}
 _service_lock = threading.Lock()
+_task_worker = None
+_task_worker_thread = None
+_task_worker_lock = threading.RLock()
+_task_worker_state = {"status": "disabled_by_default", "reason": None}
+
+
+def _set_task_worker_state(status: str, reason: str | None = None) -> None:
+    with _task_worker_lock:
+        _task_worker_state["status"] = status
+        _task_worker_state["reason"] = reason
+
+
+def _task_worker_requested() -> bool:
+    return os.environ.get("IAO_TASK_WORKER_ENABLED", "").strip().lower() == "true"
+
+
+def _task_worker_readiness() -> dict[str, str | None]:
+    with _task_worker_lock:
+        thread = _task_worker_thread
+        state = dict(_task_worker_state)
+    if thread is not None and thread.is_alive():
+        return {"status": "running", "reason": None}
+    if state["status"] == "running":
+        return {"status": "worker_exited", "reason": "WORKER_THREAD_NOT_ALIVE"}
+    return state
+
+
+def _start_task_worker(service) -> bool:
+    """Start one opt-in worker using the API's existing Store and identity authority."""
+    global _task_worker, _task_worker_thread
+    if not _task_worker_requested():
+        _set_task_worker_state("disabled_by_default")
+        return False
+    with _task_worker_lock:
+        if _task_worker_thread is not None and _task_worker_thread.is_alive():
+            _set_task_worker_state("running")
+            return True
+        try:
+            lease_seconds = int(os.environ.get("IAO_TASK_WORKER_LEASE_SECONDS", "60"))
+            poll_seconds = float(os.environ.get("IAO_TASK_WORKER_POLL_SECONDS", "1"))
+        except (TypeError, ValueError):
+            raise RuntimeError("TASK_WORKER_SETTINGS_INVALID") from None
+        if not 15 <= lease_seconds <= 300 or not 0.1 <= poll_seconds <= 30:
+            raise RuntimeError("TASK_WORKER_SETTINGS_OUT_OF_RANGE")
+        from omega.task_worker import TaskWorker
+
+        state_dir = Path(os.environ.get(
+            "IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")
+        ))
+        worker = TaskWorker(
+            service.store,
+            service.registry,
+            lease_seconds=lease_seconds,
+            poll_seconds=poll_seconds,
+            operator_identity_authority=service.operator_identity_authority,
+            heartbeat_path=state_dir / "task-worker-heartbeat.json",
+            heartbeat_stale_after_seconds=max(60, lease_seconds * 2),
+        )
+        service.store.audit("system", "TASK_WORKER_START", "api_lifespan")
+        thread = threading.Thread(
+            target=worker.run_forever,
+            name="iao-task-worker",
+            daemon=True,
+        )
+        _task_worker = worker
+        _task_worker_thread = thread
+        try:
+            thread.start()
+        except Exception:
+            _task_worker = None
+            _task_worker_thread = None
+            service.store.audit(
+                "system", "TASK_WORKER_START_FAILED", "api_lifespan",
+                decision="FAIL_CLOSED",
+            )
+            _set_task_worker_state("start_failed", "WORKER_START_FAILED")
+            raise
+        _set_task_worker_state("running")
+        return True
+
+
+def _stop_task_worker() -> None:
+    global _task_worker, _task_worker_thread
+    with _task_worker_lock:
+        worker = _task_worker
+        thread = _task_worker_thread
+    if worker is None or thread is None:
+        return
+    worker.stop()
+    thread.join(timeout=10)
+    if thread.is_alive():
+        _set_task_worker_state("stop_timeout", "WORKER_DID_NOT_STOP_WITHIN_DEADLINE")
+        return
+    with _task_worker_lock:
+        if _task_worker_thread is thread:
+            _task_worker = None
+            _task_worker_thread = None
+    _set_task_worker_state("stopped")
+
 
 _allowed_origins = [
     item.strip().rstrip("/")
@@ -55,19 +217,113 @@ app.add_middleware(
 
 
 def _get_device_authority():
-    global _device_authority
-    if _device_authority is not None:
-        return _device_authority
-    with _service_lock:
-        if _device_authority is None:
-            from omega.device_authority import DeviceAuthority
+    """Return the authority owned by the process-wide OmegaService."""
+    authority = _get_service().device_authority
+    if authority is None:
+        raise RuntimeError("DEVICE_AUTHORITY_UNAVAILABLE")
+    return authority
 
-            state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
-            _device_authority = DeviceAuthority(
-                state_dir / "device-authority.sqlite3",
-                os.environ.get("IAO_DEVICE_ENROLLMENT_CODE", ""),
+
+async def _read_bounded_service_body(request: Request):
+    """Read API bodies incrementally and reject invalid or oversized requests."""
+    if request.headers.get("transfer-encoding"):
+        return None, _service_response(
+            400, {"error": "INVALID_TRANSFER_ENCODING", "correlation_id": uuid.uuid4().hex}
+        )
+    raw_length = request.headers.get("content-length")
+    if raw_length is not None:
+        try:
+            if not raw_length.isascii() or not raw_length.isdigit():
+                raise ValueError
+            declared_length = int(raw_length)
+        except ValueError:
+            return None, _service_response(
+                400, {"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex}
             )
-    return _device_authority
+        if declared_length < 0:
+            return None, _service_response(
+                400, {"error": "INVALID_CONTENT_LENGTH", "correlation_id": uuid.uuid4().hex}
+            )
+        if declared_length > MAX_BODY:
+            return None, _service_response(
+                413, {"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex}
+            )
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > MAX_BODY:
+            return None, _service_response(
+                413, {"error": "PAYLOAD_TOO_LARGE", "correlation_id": uuid.uuid4().hex}
+            )
+        chunks.extend(chunk)
+    if raw_length is not None and len(chunks) != declared_length:
+        return None, _service_response(
+            400, {"error": "INCOMPLETE_BODY", "correlation_id": uuid.uuid4().hex}
+        )
+    return bytes(chunks), None
+
+
+def _service_response(status: int, payload: dict):
+    correlation_id = payload.get("correlation_id")
+    if (
+        not isinstance(correlation_id, str)
+        or len(correlation_id) != 32
+        or any(char not in "0123456789abcdef" for char in correlation_id.lower())
+    ):
+        correlation_id = uuid.uuid4().hex
+        payload = {**payload, "correlation_id": correlation_id}
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Correlation-ID": correlation_id,
+    }
+    allowed = payload.get("allowed_methods")
+    if status == 405 and isinstance(allowed, list) and allowed and all(
+        isinstance(item, str) and item.isalpha() for item in allowed
+    ):
+        headers["Allow"] = ", ".join(allowed)
+    return JSONResponse(status_code=status, content=payload, headers=headers)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Normalize framework-generated 404/405 responses without echoing details."""
+    code = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}.get(
+        exc.status_code, "HTTP_ERROR",
+    )
+    correlation_id = uuid.uuid4().hex
+    response = _service_response(
+        exc.status_code,
+        {"error": code, "correlation_id": correlation_id},
+    )
+    raw_allow = exc.headers.get("Allow") if exc.headers else None
+    if isinstance(raw_allow, str):
+        allowed = [item.strip() for item in raw_allow.split(",")]
+        if allowed and all(item and item.isalpha() for item in allowed):
+            response.headers["Allow"] = ", ".join(allowed)
+    response.headers["X-Correlation-ID"] = correlation_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Return a stable, non-disclosing envelope for uncaught route failures."""
+    logging.getLogger("iao.http").error(
+        "UNHANDLED_HTTP_ERROR error_type=%s", type(exc).__name__,
+    )
+    correlation_id = uuid.uuid4().hex
+    return _service_response(
+        500, {"error": "INTERNAL_ERROR", "correlation_id": correlation_id},
+    )
+
+def _method_not_allowed(allowed_methods: tuple[str, ...]):
+    return _service_response(
+        405,
+        {
+            "error": "METHOD_NOT_ALLOWED",
+            "allowed_methods": list(allowed_methods),
+            "correlation_id": uuid.uuid4().hex,
+        },
+    )
 
 
 async def _device_json(request: Request):
@@ -148,11 +404,13 @@ def _get_service():
             if _service is None:
                 token_key = os.environ.get("OMEGA_DEV_TOKEN_KEY", "")
                 audit_key = os.environ.get("AUDIT_HMAC_KEY", "")
-                if len(token_key) < 32 or len(audit_key) < 32:
-                    raise RuntimeError("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED")
+                try:
+                    validate_persistent_keys(token_key, audit_key)
+                except ValueError:
+                    raise _PersistentRuntimeUnavailable("PERSISTENT_AUTH_AND_AUDIT_KEYS_REQUIRED") from None
                 from omega.server import build_service
 
-                state_dir = Path(os.environ.get("IAO_STATE_DIR", "/var/lib/iao"))
+                state_dir = Path(os.environ.get("IAO_STATE_DIR", os.environ.get("OMEGA_STATE_DIR", ".state")))
                 corpus_dir = Path(os.environ.get("IAO_CORPUS_DIR", "/app/knowledge"))
                 _service = build_service(state_dir, token_key, corpus_dir)
     service = _service
@@ -172,10 +430,31 @@ def _get_service():
 
 
 def _federation_json(status: int, payload: dict):
-    return JSONResponse(
-        status_code=status,
-        content=payload,
-        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    correlation_id = payload.get("correlation_id")
+    if (
+        not isinstance(correlation_id, str)
+        or len(correlation_id) != 32
+        or any(char not in "0123456789abcdef" for char in correlation_id.lower())
+    ):
+        correlation_id = uuid.uuid4().hex
+    content = {**payload, "correlation_id": correlation_id}
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Correlation-ID": correlation_id,
+    }
+    allowed = content.get("allowed_methods")
+    if status == 405 and isinstance(allowed, list) and allowed and all(
+        isinstance(item, str) and item.isalpha() for item in allowed
+    ):
+        headers["Allow"] = ", ".join(allowed)
+    return JSONResponse(status_code=status, content=content, headers=headers)
+
+
+def _federation_method_not_allowed(allowed_methods: tuple[str, ...]):
+    return _federation_json(
+        405,
+        {"error": "METHOD_NOT_ALLOWED", "allowed_methods": list(allowed_methods)},
     )
 
 
@@ -184,7 +463,9 @@ async def _federation_body(request: Request):
         return None, _federation_json(400, {"error": "INVALID_TRANSFER_ENCODING"})
     raw_length = request.headers.get("content-length")
     try:
-        length = int(raw_length) if raw_length is not None else -1
+        if raw_length is None or not raw_length.isascii() or not raw_length.isdigit():
+            raise ValueError
+        length = int(raw_length)
     except ValueError:
         length = -1
     from omega.federation import MAX_MSG
@@ -192,14 +473,20 @@ async def _federation_body(request: Request):
         return None, _federation_json(411, {"error": "CONTENT_LENGTH_REQUIRED"})
     if length > MAX_MSG:
         return None, _federation_json(413, {"error": "PAYLOAD_TOO_LARGE"})
-    body = await request.body()
-    if len(body) != length:
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > MAX_MSG:
+            return None, _federation_json(413, {"error": "PAYLOAD_TOO_LARGE"})
+        chunks.extend(chunk)
+    if len(chunks) != length:
         return None, _federation_json(400, {"error": "INCOMPLETE_BODY"})
-    return body, None
+    return bytes(chunks), None
 
 
-@app.get("/fed/v1/contract")
-def federation_contract():
+@app.api_route("/fed/v1/contract", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+def federation_contract(request: Request):
+    if request.method != "GET":
+        return _federation_method_not_allowed(("GET",))
     try:
         node = _get_federation_node()
         return _federation_json(200, node.contract_for_self(sorted(node.served)))
@@ -207,8 +494,10 @@ def federation_contract():
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.get("/fed/v1/publication")
-def federation_publication():
+@app.api_route("/fed/v1/publication", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+def federation_publication(request: Request):
+    if request.method != "GET":
+        return _federation_method_not_allowed(("GET",))
     try:
         node = _get_federation_node()
         origin = os.environ.get("IAO_FEDERATION_PUBLIC_ORIGIN", "").strip().rstrip("/")
@@ -231,16 +520,20 @@ def federation_publication():
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.get("/fed/v1/identity")
-def federation_identity():
+@app.api_route("/fed/v1/identity", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+def federation_identity(request: Request):
+    if request.method != "GET":
+        return _federation_method_not_allowed(("GET",))
     try:
         return _federation_json(200, _get_federation_node().identity_document())
     except Exception:
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.post("/fed/v1/handshake")
+@app.api_route("/fed/v1/handshake", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def federation_handshake(request: Request):
+    if request.method != "POST":
+        return _federation_method_not_allowed(("POST",))
     try:
         node = _get_federation_node()
         body, error = await _federation_body(request)
@@ -252,8 +545,10 @@ async def federation_handshake(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.post("/fed/v1/message")
+@app.api_route("/fed/v1/message", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def federation_message(request: Request):
+    if request.method != "POST":
+        return _federation_method_not_allowed(("POST",))
     try:
         node = _get_federation_node()
         body, error = await _federation_body(request)
@@ -265,88 +560,167 @@ async def federation_message(request: Request):
         return _federation_json(503, {"error": "FEDERATION_UNAVAILABLE"})
 
 
-@app.get("/health/live")
-def live() -> dict[str, str]:
-    return {"status": "live"}
+@app.api_route(
+    "/fed/v1/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+)
+def federation_not_found(path: str, request: Request):
+    return _federation_json(404, {"error": "NOT_FOUND"})
 
 
-@app.get("/health/ready")
-def ready():
+def _task_worker_health() -> str:
+    """Require a fresh worker-cycle heartbeat and a live matching process PID."""
+    from omega.supervision import read_heartbeat
+
+    state_dir = Path(
+        os.environ.get(
+            "IAO_STATE_DIR",
+            os.environ.get("OMEGA_STATE_DIR", ".state"),
+        )
+    )
+    heartbeat = read_heartbeat(
+        state_dir / "task-worker-heartbeat.json",
+        expected_component="TASK_WORKER",
+    )
+    state = heartbeat.get("status")
+    if state == "UNVERIFIED":
+        return "heartbeat_unverified"
+    if state == "STALE":
+        return "stale_heartbeat"
+    pid = heartbeat.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid < 2:
+        return "heartbeat_unverified"
     try:
-        status, payload = _get_service().handle("GET", "/health/ready", {}, b"")
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "process_not_alive"
+    except PermissionError:
+        pass
+    except (OSError, OverflowError, ValueError):
+        return "process_not_alive"
+    return {
+        "HEALTHY": "healthy",
+        "CYCLE_IN_PROGRESS": "cycle_in_progress",
+        "DEGRADED": "degraded",
+        "STARTING": "starting",
+    }.get(state, "heartbeat_unverified")
+
+
+@app.api_route(
+    "/health/live",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+)
+def live(request: Request):
+    if request.method != "GET":
+        return _method_not_allowed(("GET",))
+    return _service_response(
+        200,
+        {"status": "live", "correlation_id": uuid.uuid4().hex},
+    )
+
+
+@app.api_route("/health/ready", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def ready(request: Request):
+    if request.method != "GET":
+        return _method_not_allowed(("GET",))
+    try:
+        service = _get_service()
+        status, payload = service.handle("GET", "/health/ready", {}, b"")
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={
+        return _service_response(
+            503,
+            {
                 "status": "not_ready",
                 "reason": "PERSISTENT_RUNTIME_UNAVAILABLE",
+                "correlation_id": uuid.uuid4().hex,
             },
         )
     if status != 200 or payload.get("status") == "not_ready":
         payload["status"] = "not_ready"
-        return JSONResponse(status_code=503, content=payload)
-    # Infrastructure readiness is not equivalent to production readiness:
-    # device-bound command authority and independent federation are still
-    # explicit acceptance gates, even when the database and audit chain work.
+        return _service_response(503, payload)
+
+    # Local dependency checks are not proof of production readiness.
+    # Worker start flags are not heartbeats or functional health checks.
+    worker_checks = {
+        name: ("start_reported_unverified" if started else "not_started_or_unavailable")
+        for name, started in _federation_worker_status.items()
+    }
+    model_state = (
+        "configured_unverified" if service.model is not None else "not_configured"
+    )
     payload["status"] = "degraded"
+    payload["readiness_scope"] = "local_infrastructure_only"
+    payload["production_ready"] = False
+    payload["checks"] = {
+        **payload.get("checks", {}),
+        "federation_workers": worker_checks,
+        "model_adapter": model_state,
+        "task_worker": (
+            _task_worker_health()
+            if _task_worker_requested() and _task_worker_readiness()["status"] == "running"
+            else _task_worker_readiness()["status"]
+        ),
+        "task_worker_reason": _task_worker_readiness()["reason"],
+    }
     payload["production_gates"] = {
         "device_identity_verification": "integrated_read_only",
         "operator_session_association": "api_available_read_only",
         "operator_root_bootstrap": "out_of_band_configurable_not_verified",
         "privileged_device_commands": "disabled",
         "identity_provider": "dev_hmac_not_oidc",
-        "independent_federation": (
-            "discovery_workers_started_unverified"
-            if any(_federation_worker_status.values())
-            else "not_started_or_unavailable"
-        ),
-        "model_provider": (
-            "configured_unverified"
-            if _get_service().model is not None
-            else "not_configured"
-        ),
+        "independent_federation": "not_verified",
+        "model_provider": model_state,
     }
-    return JSONResponse(status_code=200, content=payload)
+    return _service_response(200, payload)
 
-
-@app.post("/v1/device/enroll")
+@app.api_route("/v1/device/enroll", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def device_enroll(request: Request):
     return await _device_service_route(request, "/v1/device/enroll")
 
 
-@app.post("/v1/device/challenge")
+@app.api_route("/v1/device/challenge", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def device_challenge(request: Request):
     return await _device_service_route(request, "/v1/device/challenge")
 
 
-@app.post("/v1/device/command")
+@app.api_route("/v1/device/command", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def device_command(request: Request):
     return await _device_service_route(request, "/v1/device/command")
 
 
 async def _device_service_route(request: Request, path: str):
     """Keep device endpoints behind the same authenticated service boundary."""
+    if request.method != "POST":
+        return _method_not_allowed(("POST",))
     try:
         service = _get_service()
-        body = await request.body()
+        body, body_error = await _read_bounded_service_body(request)
+        if body_error is not None:
+            return body_error
         headers = {key.lower(): value for key, value in request.headers.items()}
         status, payload = service.handle("POST", path, headers, body)
-        return JSONResponse(status_code=status, content=payload)
-    except RuntimeError:
-        return JSONResponse(
-            status_code=503, content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE"}
+        return _service_response(status, payload)
+    except _PersistentRuntimeUnavailable:
+        return _service_response(
+            503, {"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex}
+        )
+    except Exception:
+        return _service_response(
+            503, {"error": "IAO_SERVICE_UNAVAILABLE", "correlation_id": uuid.uuid4().hex}
         )
 
 
 @app.api_route(
     "/v1/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
 )
 async def api_v1(path: str, request: Request):
     """Pass the complete v1 API through the audited persistent service."""
     try:
         service = _get_service()
-        body = await request.body()
+        body, body_error = await _read_bounded_service_body(request)
+        if body_error is not None:
+            return body_error
         headers = {key.lower(): value for key, value in request.headers.items()}
         # Use the socket peer only for the public-session rate limiter. Never
         # accept a caller-supplied forwarding header as device identity.
@@ -361,14 +735,14 @@ async def api_v1(path: str, request: Request):
             headers,
             body,
         )
-        return JSONResponse(status_code=status, content=payload)
-    except RuntimeError:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "PERSISTENT_RUNTIME_UNAVAILABLE"},
+        return _service_response(status, payload)
+    except _PersistentRuntimeUnavailable:
+        return _service_response(
+            503,
+            {"error": "PERSISTENT_RUNTIME_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
         )
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "IAO_SERVICE_UNAVAILABLE"},
+        return _service_response(
+            503,
+            {"error": "IAO_SERVICE_UNAVAILABLE", "correlation_id": uuid.uuid4().hex},
         )

@@ -101,7 +101,17 @@ def fetch_feed(url):
 
 
 def run_libp2p_discovery():
-    """Discover public DHT peers without enrolling or trusting them."""
+    """Discover public DHT peers only when direct egress is explicitly permitted."""
+    if os.environ.get("IAO_P2P_ALLOW_DIRECT", "").strip().lower() != "true":
+        return {
+            "status": "DIRECT_P2P_DISABLED_PRIVACY_POLICY",
+            "connected_bootstrappers": 0,
+            "routing_peers_discovered": 0,
+            "persisted_new_peers": 0,
+            "enrollment_performed": False,
+            "capabilities_granted": [],
+            "remote_code_executed": False,
+        }
     try:
         from omega.libp2p_discovery import discover_sync
     except ImportError:

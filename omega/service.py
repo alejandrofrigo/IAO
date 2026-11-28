@@ -34,8 +34,11 @@ _EXEC = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool")
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str) -> None:
+    def __init__(
+        self, status: int, code: str, allowed_methods: tuple[str, ...] = ()
+    ) -> None:
         self.status, self.code = status, code
+        self.allowed_methods = allowed_methods
 
 
 def _digest(obj: Any) -> str:
@@ -84,6 +87,20 @@ class OmegaService:
     def handle(self, method: str, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
         cid = uuid.uuid4().hex
         try:
+            if headers.get("transfer-encoding"):
+                raise ApiError(400, "INVALID_TRANSFER_ENCODING")
+            raw_length = headers.get("content-length")
+            if raw_length is not None:
+                try:
+                    declared_length = int(raw_length)
+                except (TypeError, ValueError):
+                    raise ApiError(400, "INVALID_CONTENT_LENGTH") from None
+                if declared_length < 0:
+                    raise ApiError(400, "INVALID_CONTENT_LENGTH")
+                if declared_length > MAX_BODY:
+                    raise ApiError(413, "PAYLOAD_TOO_LARGE")
+                if declared_length != len(body):
+                    raise ApiError(400, "INCOMPLETE_BODY")
             if len(body) > MAX_BODY:
                 raise ApiError(413, "PAYLOAD_TOO_LARGE")
             normalized_method = method.upper()
@@ -122,6 +139,8 @@ class OmegaService:
                 status, payload = self._route(normalized_method, path, headers, body)
         except ApiError as e:
             status, payload = e.status, {"error": e.code}
+            if e.allowed_methods:
+                payload["allowed_methods"] = list(e.allowed_methods)
         except Exception as exc:  # never expose internals to the caller
             from omega.identity_rollback_anchor import IdentityRollbackAnchorError
             if isinstance(exc, IdentityRollbackAnchorError):
@@ -129,7 +148,8 @@ class OmegaService:
             else:
                 try:
                     self.store.audit(
-                        "system", "API_INTERNAL_ERROR", path,
+                        "system", "API_INTERNAL_ERROR", "request",
+                        method=str(method).upper()[:16],
                         error_type=type(exc).__name__,
                     )
                 except Exception:
@@ -188,6 +208,49 @@ class OmegaService:
     def _route(self, method: str, path: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, Any]]:
         u = urlsplit(path)
         p = u.path.rstrip("/") or "/"
+        exact_methods = {
+            "/health/live": ("GET",),
+            "/health/ready": ("GET",),
+            "/v1/public/session": ("POST",),
+            "/v1/operator/bootstrap/status": ("POST",),
+            "/v1/operator/bootstrap": ("POST",),
+            "/v1/operator/recovery/status": ("POST",),
+            "/v1/operator/recovery/challenge": ("POST",),
+            "/v1/operator/recovery/complete": ("POST",),
+            "/v1/operator/login/challenge": ("POST",),
+            "/v1/operator/login/complete": ("POST",),
+            "/v1/operator/identity/revoke": ("POST",),
+            "/v1/operator/device/bind": ("POST",),
+            "/v1/operator/session/challenge": ("POST",),
+            "/v1/operator/session/bind": ("POST",),
+            "/v1/operator/session/status": ("GET",),
+            "/v1/federation/status": ("GET",),
+            "/v1/federation/internet": ("POST",),
+            "/v1/me": ("GET",),
+            "/v1/conversations": ("POST",),
+            "/v1/chat": ("POST",),
+            "/v1/tasks": ("POST",),
+            "/v1/audit/events": ("GET",),
+            "/v1/device/enroll": ("POST",),
+            "/v1/device/challenge": ("POST",),
+            "/v1/device/command": ("POST",),
+        }
+        allowed_methods = exact_methods.get(p, ())
+        if not allowed_methods:
+            if re.fullmatch(r"/v1/conversations/[0-9a-f-]{36}/messages", p):
+                allowed_methods = ("GET",)
+            elif re.fullmatch(r"/v1/tasks/[0-9a-f-]{36}", p):
+                allowed_methods = ("GET",)
+            elif p == "/v1/memory":
+                allowed_methods = ("GET", "POST", "DELETE")
+            elif p == "/v1/memory/export":
+                allowed_methods = ("GET",)
+            elif re.fullmatch(r"/v1/memory/[0-9a-f-]{36}", p):
+                allowed_methods = ("PUT", "DELETE")
+            elif p.startswith("/v1/memory/"):
+                raise ApiError(404, "NOT_FOUND")
+        if allowed_methods and method not in allowed_methods:
+            raise ApiError(405, "METHOD_NOT_ALLOWED", allowed_methods)
         if method == "GET" and p == "/health/live":
             return 200, {"status": "live"}
         if method == "GET" and p == "/health/ready":
@@ -195,7 +258,11 @@ class OmegaService:
             audit = self.store.audit_status()
             legacy = self.store.legacy_audit_status()
             chain_ok = audit["valid"]
-            operational = ok_db and chain_ok and bool(self.registry.names())
+            audit_authenticated = bool(audit.get("authenticated", False))
+            operational = (
+                ok_db and chain_ok and audit_authenticated
+                and bool(self.registry.names())
+            )
             degraded = legacy["status"] != "no_legacy_history"
             status = (
                 "not_ready" if not operational
@@ -207,6 +274,7 @@ class OmegaService:
                 "checks": {
                     "database": ok_db,
                     "audit_chain": chain_ok,
+                    "audit_authenticated": audit_authenticated,
                     "audit_event_count": audit["event_count"],
                     "audit_first_invalid_index": audit["first_invalid_index"],
                     "audit_first_invalid_event_id": audit["first_invalid_event_id"],
@@ -637,24 +705,39 @@ class OmegaService:
 
         if method == "POST" and p == "/v1/federation/internet":
             pr = self._auth(headers)
+            decision = authorize(
+                "federation.internet", authenticated=True,
+                approved_capabilities=set(pr.scopes),
+            )
+            self.store.audit(
+                pr.subject, "DECISION", "federation.internet",
+                decision="ALLOW" if decision.allowed else "DENY",
+                reason=decision.reason, capability="federation.internet",
+                policy_version=POLICY_VERSION,
+            )
+            if not decision.allowed:
+                raise ApiError(403, decision.reason)
             data = self._json(body)
             pregunta = data.get("query", "")
             if not pregunta:
                 raise ApiError(400, "MISSING_QUERY")
             from omega.deepseek_web import obtener_respuesta_internet
             respuesta = obtener_respuesta_internet(pregunta)
-            self.store.audit(pr.subject, "INTERNET_QUERY", "federation", query=pregunta[:100])
+            self.store.audit(
+                pr.subject, "INTERNET_QUERY", "federation",
+                query_digest=_digest(pregunta),
+            )
             return 200, {"answer": respuesta}
 
 
         if method == "POST" and p == "/v1/device/enroll":
+            pr = self._auth(headers)
+            if not pr.subject.startswith("operator:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
             if os.environ.get("IAO_DEVICE_ENROLLMENT_ENABLED", "").strip() != "1":
                 raise ApiError(403, "DEVICE_ENROLLMENT_DISABLED")
-            pr = self._auth(headers)
-            if pr.subject.startswith("guest:"):
-                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             data = self._json(body)
             try:
                 enrolled = self.device_authority.enroll(
@@ -671,9 +754,11 @@ class OmegaService:
             return 201, {"algorithm": enrolled["algorithm"]}
 
         if method == "POST" and p == "/v1/device/command":
+            pr = self._auth(headers)
+            if not pr.subject.startswith("operator:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
-            pr = self._auth(headers)
             try:
                 result = self.device_authority.verify_status(self._json(body), owner_subject=pr.subject)
             except DeviceAuthorityError as exc:
@@ -690,10 +775,10 @@ class OmegaService:
 
         pr = self._auth(headers)
         if method == "POST" and p == "/v1/device/challenge":
+            if not pr.subject.startswith("operator:"):
+                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             if self.device_authority is None:
                 raise ApiError(503, "DEVICE_AUTHORITY_UNAVAILABLE")
-            if pr.subject.startswith("guest:"):
-                raise ApiError(403, "OPERATOR_SESSION_REQUIRED")
             data = self._json(body)
             try:
                 challenge = self.device_authority.challenge(data.get("device_id"), owner_subject=pr.subject)

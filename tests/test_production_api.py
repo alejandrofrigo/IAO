@@ -29,7 +29,10 @@ def configured_client(monkeypatch, tmp_path):
 def test_liveness_does_not_require_database_or_model() -> None:
     response = TestClient(main.app).get("/health/live")
     assert response.status_code == 200
-    assert response.json() == {"status": "live"}
+    assert response.json()["status"] == "live"
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_readiness_never_claims_full_production_before_security_gates(monkeypatch, tmp_path) -> None:
@@ -41,7 +44,7 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert body["production_gates"]["device_identity_verification"] == "integrated_read_only"
     assert body["production_gates"]["privileged_device_commands"] == "disabled"
     assert body["production_gates"]["identity_provider"] == "dev_hmac_not_oidc"
-    assert body["production_gates"]["independent_federation"] == "not_started_or_unavailable"
+    assert body["production_gates"]["independent_federation"] == "not_verified"
     assert body["production_gates"]["model_provider"] == "not_configured"
 
 
@@ -234,3 +237,82 @@ def test_federation_initialization_failure_does_not_take_down_local_api(monkeypa
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
     assert (tmp_path / "state" / "omega.db").is_file()
+
+
+def test_known_route_wrong_method_returns_stable_405_and_allow_header(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/v1/chat")
+    assert response.status_code == 405
+    assert response.json()["error"] == "METHOD_NOT_ALLOWED"
+    assert response.json()["allowed_methods"] == ["POST"]
+    assert response.headers["allow"] == "POST"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_service_errors_include_correlation_header(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/v1/me")
+    assert response.status_code == 401
+    assert response.json()["correlation_id"]
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_api_rejects_oversized_body_before_service_dispatch(monkeypatch, tmp_path):
+    from omega.service import MAX_BODY
+
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/v1/chat",
+        content=b"x" * (MAX_BODY + 1),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "PAYLOAD_TOO_LARGE"
+    assert response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_device_api_rejects_oversized_body_before_authentication(monkeypatch, tmp_path):
+    from omega.service import MAX_BODY
+
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/v1/device/command",
+        content=b"x" * (MAX_BODY + 1),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "PAYLOAD_TOO_LARGE"
+
+
+def test_device_route_wrong_method_uses_shared_405_contract(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.get("/v1/device/enroll")
+    assert response.status_code == 405
+    assert response.json()["error"] == "METHOD_NOT_ALLOWED"
+    assert response.json()["allowed_methods"] == ["POST"]
+    assert response.headers["allow"] == "POST"
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+
+
+def test_health_route_wrong_method_uses_shared_405_contract():
+    response = TestClient(main.app).post("/health/live")
+    assert response.status_code == 405
+    assert response.json()["error"] == "METHOD_NOT_ALLOWED"
+    assert response.headers["allow"] == "GET"
+
+
+def test_api_rejects_transfer_encoding_with_stable_error(monkeypatch, tmp_path):
+    client = configured_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/v1/chat",
+        content=b"{}",
+        headers={"Transfer-Encoding": "chunked", "Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "INVALID_TRANSFER_ENCODING"
+    assert response.headers["x-correlation-id"] == response.json()["correlation_id"]
+    assert response.headers["cache-control"] == "no-store"
