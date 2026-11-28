@@ -410,6 +410,53 @@ class AutonomousCore:
         result["scanned_at"] = self._now()
         return result
 
+    def _build_improvement_plan(self):
+        """Build a deterministic, read-only repository quality-gap report."""
+        repo = Path(__file__).resolve().parent.parent
+        omega_dir = repo / "omega"
+        tests_dir = repo / "tests"
+        if not omega_dir.is_dir() or not tests_dir.is_dir():
+            return {
+                "status": "INCOMPLETE_REPOSITORY_LAYOUT",
+                "code_changes_applied": False,
+                "candidate_code_executed": False,
+            }
+
+        modules = sorted(
+            path.stem for path in omega_dir.rglob("*.py")
+            if path.name != "__init__.py"
+            and "__pycache__" not in path.parts
+        )
+        test_names = {
+            path.stem[len("test_"):]
+            for path in tests_dir.rglob("test_*.py")
+            if "__pycache__" not in path.parts
+        }
+        uncovered = [
+            name for name in modules
+            if name not in test_names and name.replace("_", "") not in {
+                item.replace("_", "") for item in test_names
+            }
+        ]
+        return {
+            "status": "READ_ONLY_REPOSITORY_SCAN",
+            "module_count": len(modules),
+            "test_file_count": len(test_names),
+            "modules_without_directly_named_test_file": uncovered[:50],
+            "unpaired_module_count": len(uncovered),
+            "recommendations": [
+                "Add focused regression tests for modules without a directly named test file.",
+                "Run the complete CI matrix before accepting candidate changes.",
+                "Require functional and security tests in an OS-isolated candidate workspace.",
+            ],
+            "coverage_interpretation": (
+                "Heuristic filename mapping only; this is not measured code coverage "
+                "and does not prove that listed modules lack indirect tests."
+            ),
+            "code_changes_applied": False,
+            "candidate_code_executed": False,
+        }
+
     def _execute(self, task):
         kind = task["kind"]
         if kind == "self_check":
@@ -420,10 +467,7 @@ class AutonomousCore:
         if kind == "capability_scan":
             return self._federation_capability_scan()
         if kind == "improvement_plan":
-            return {
-                "recommendation": "Measure failures, propose reversible improvements.",
-                "code_changes_applied": False,
-            }
+            return self._build_improvement_plan()
         raise AutonomousCoreError("UNKNOWN_TASK")
 
     def run_one(self):
