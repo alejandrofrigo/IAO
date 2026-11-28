@@ -28,6 +28,19 @@ service = OmegaService(..., model_adapter=model)
 
 The constructor defaults to two-pass planning. Set `planning_enabled=False` for a single-pass deployment or tests. The production service wrapper is wired in `omega/server.py` but remains OFF by default; enable it only with `IAO_COGNITIVE_ENGINE_ENABLED=1`. Set `IAO_COGNITIVE_PLANNING_ENABLED=false` to retain the adapter wrapper while using one model pass. No new provider, secret, paid service or deployment is activated by this module.
 
+## Reproducible evaluation coverage
+
+The cognitive-kernel tests include:
+- valid structured plan → two-pass answer and metadata;
+- malformed, oversized, and provider-failed planning → safe one-pass fallback;
+- fenced JSON normalization and strict schema rejection;
+- bounded input/output and rejection of invalid conversation shapes;
+- preservation of service-supplied evidence context and provider identity metadata;
+- adversarial plan text remaining explicitly advisory, with no tool or permission authority;
+- opt-in runtime wiring and consent-/owner-scoped memory retrieval.
+
+These are deterministic contract and resilience tests, not a benchmark of general intelligence. They do not establish factual accuracy, reasoning superiority, low hallucination rates, or consciousness. Before production, add a versioned representative task set with human-reviewed expected criteria, regression thresholds, latency/cost measurements for the actual provider configuration, and red-team review. Evaluation must not silently authorize tools or promote model-generated code.
+
 ## Limits and next gates
 
 - This is model-assisted orchestration, not a trained foundation model or independent symbolic reasoner.
