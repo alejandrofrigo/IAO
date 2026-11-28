@@ -283,3 +283,33 @@ def test_autonomous_core_can_be_disabled_explicitly(monkeypatch, tmp_path):
     assert main._ensure_autonomous_core() is None
     assert main._autonomous_core_status["enabled"] is False
     assert main._autonomous_core_status["running"] is False
+
+
+def test_runtime_startup_failure_is_visible_without_breaking_liveness(monkeypatch):
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "x" * 40)
+    monkeypatch.setenv("AUDIT_HMAC_KEY", "y" * 48)
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "false")
+    main._runtime_startup_status = {"status": "not_started", "reason": None}
+
+    def fail_startup():
+        raise RuntimeError("sensitive details must not escape")
+
+    monkeypatch.setattr(main, "_get_service", fail_startup)
+    with TestClient(main.app) as client:
+        assert client.get("/health/live").status_code == 200
+
+    assert main._runtime_startup_status == {
+        "status": "degraded", "reason": "RuntimeError",
+    }
+
+
+def test_runtime_startup_reports_missing_keys_as_blocked(monkeypatch):
+    monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
+    monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
+    main._runtime_startup_status = {"status": "not_started", "reason": None}
+    with TestClient(main.app) as client:
+        assert client.get("/health/live").status_code == 200
+    assert main._runtime_startup_status == {
+        "status": "blocked", "reason": "PERSISTENT_KEYS_NOT_CONFIGURED",
+    }
+
