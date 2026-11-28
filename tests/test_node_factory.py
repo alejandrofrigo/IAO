@@ -91,6 +91,15 @@ class NodeFactoryTests(unittest.TestCase):
             self.assertEqual(list(output.glob("node-*")), [])
             self.assertEqual(list(output.glob(".staging-*")), [])
 
+    def test_status_ignores_valid_json_that_is_not_an_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nodes = create_nodes(2, output_dir=tmp)
+            first_manifest = Path(nodes[0]["directory"]) / "manifest.json"
+            second_identity = Path(nodes[1]["directory"]) / "identity/public.json"
+            first_manifest.write_text("[]", encoding="utf-8")
+            second_identity.write_text("null", encoding="utf-8")
+            self.assertEqual(inspect_nodes(tmp), [])
+
     def test_status_rejects_public_key_fingerprint_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             node = create_nodes(1, output_dir=tmp)[0]
