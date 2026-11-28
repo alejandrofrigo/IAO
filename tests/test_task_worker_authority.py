@@ -386,6 +386,10 @@ def test_tool_completion_and_task_state_commit_atomically_after_lease_expiry(tmp
     assert executions[0]["status"] == "SUCCEEDED"
     assert executions[0]["error_code"] == "LEASE_EXPIRED_AFTER_TOOL_COMPLETION"
     assert executions[0]["output_digest"] == "b" * 64
+    event_types = [event["event_type"] for event in store._all_events()]
+    assert event_types[-1] == "TASK_WORKER_STALE_COMPLETION"
+    assert "TASK_STATE" not in event_types
+    assert "EVIDENCE" not in event_types
     store.close()
 
 
@@ -416,6 +420,13 @@ def test_tool_completion_and_task_success_commit_in_one_transaction(tmp_path):
     assert executions[0]["error_code"] is None
     assert final["lease_owner"] is None
     assert final["lease_until"] is None
+    events = store._all_events()
+    assert [event["event_type"] for event in events[-2:]] == [
+        "TASK_STATE", "EVIDENCE",
+    ]
+    assert events[-2]["details"]["to"] == "SUCCEEDED"
+    assert events[-1]["details"]["output_digest"] == "b" * 64
+    assert store.verify_audit()[0] is True
     store.close()
 
 
@@ -438,4 +449,40 @@ def test_tool_completion_does_not_create_execution_for_missing_task(tmp_path):
     )
     assert committed is False
     assert store.tool_executions(task_id) == []
+    store.close()
+
+
+def test_tool_completion_and_audit_roll_back_together_on_audit_failure(tmp_path, monkeypatch):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-audit-rollback.db", b"worker-test-audit-key-0123456789")
+    task_id = "atomic-audit-rollback-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    assert store.claim_next_task("atomic-worker", lease_seconds=60) is not None
+    before_events = len(store._all_events())
+    original = store._append_audit_event_in_transaction
+
+    def fail_on_evidence(actor, event_type, subject, **details):
+        if event_type == "EVIDENCE":
+            raise RuntimeError("SIMULATED_AUDIT_WRITE_FAILURE")
+        return original(actor, event_type, subject, **details)
+
+    monkeypatch.setattr(store, "_append_audit_event_in_transaction", fail_on_evidence)
+    with pytest.raises(RuntimeError, match="SIMULATED_AUDIT_WRITE_FAILURE"):
+        store.finalize_claimed_tool_execution(
+            task_id, "atomic-worker", owner, "SUCCEEDED",
+            {"decision": "ALLOW", "verification": "PASS", "result": {}},
+            "knowledge.search", "1", "a" * 64, "b" * 64,
+            datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+        )
+    final = store.get_task(task_id, owner)
+    assert final["state"] == "RUNNING"
+    assert final["lease_owner"] == "atomic-worker"
+    assert store.tool_executions(task_id) == []
+    assert len(store._all_events()) == before_events
+    assert store.verify_audit()[0] is True
     store.close()
