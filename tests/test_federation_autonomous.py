@@ -195,3 +195,36 @@ def test_registry_write_rejects_symlink_parent(tmp_path):
             {"schema": 1, "candidates": {}},
         )
     assert list(outside.iterdir()) == []
+
+
+def test_cycle_audit_refuses_symlink_target_and_keeps_external_file(tmp_path):
+    import os
+    import pytest
+    from omega.federation_autonomous import _append_cycle_audit
+
+    state = tmp_path / "state"
+    state.mkdir()
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text("preserve-me", encoding="utf-8")
+    link = state / "federation-autonomous.jsonl"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(RuntimeError, match="AUDIT_FILE_REFUSED"):
+        _append_cycle_audit(state, {"checked": 1})
+    assert outside.read_text(encoding="utf-8") == "preserve-me"
+
+
+def test_cycle_audit_writes_private_jsonl(tmp_path):
+    import os
+    from omega.federation_autonomous import _append_cycle_audit
+
+    state = tmp_path / "state"
+    _append_cycle_audit(state, {"checked": 2, "enrolled": 0})
+    audit = state / "federation-autonomous.jsonl"
+    record = json.loads(audit.read_text(encoding="utf-8"))
+    assert record["event"] == "FEDERATION_AUTOJOIN_CYCLE"
+    assert record["checked"] == 2
+    if os.name == "posix":
+        assert audit.stat().st_mode & 0o777 == 0o600
