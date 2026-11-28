@@ -56,36 +56,50 @@ def save_json(path, value):
 
 
 def adapters():
+    default_motors = {
+        "PADGE": {
+            "command": [
+                sys.executable,
+                "tools/iao_autonomous_coordinator.py",
+                "loop",
+            ],
+            "enabled": True,
+            "group": "PADGE + AUTONOMIA CONTINUA",
+        },
+        "GUARDIAN": {
+            "command": [],
+            "enabled": False,
+            "group": "VIGILANCIA Y RECUPERACION",
+        },
+        "NODE_NETWORK": {
+            "command": [
+                sys.executable,
+                "-m",
+                "omega.federation_discovery",
+                "--run",
+            ],
+            "enabled": True,
+            "group": "DESCUBRIMIENTO PUBLICO SIN CONFIANZA NI ENROLAMIENTO",
+        },
+        "DISTRIBUTED_INTELLIGENCE": {
+            "command": [],
+            "enabled": False,
+            "group": "WORKERS + MULTI-LLM",
+        },
+    }
     if not CONFIG.exists():
-        save_json(CONFIG, {
-            "motors": {
-                "PADGE": {
-                    "command": [
-                        sys.executable,
-                        "tools/iao_autonomous_coordinator.py",
-                        "loop",
-                    ],
-                    "enabled": True,
-                    "group": "PADGE + AUTONOMIA CONTINUA",
-                },
-                "GUARDIAN": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "VIGILANCIA Y RECUPERACION",
-                },
-                "NODE_NETWORK": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "RED DE NODOS",
-                },
-                "DISTRIBUTED_INTELLIGENCE": {
-                    "command": [],
-                    "enabled": False,
-                    "group": "WORKERS + MULTI-LLM",
-                },
-            }
-        })
-    return load_json(CONFIG, {}).get("motors", {})
+        save_json(CONFIG, {"motors": default_motors})
+    config = load_json(CONFIG, {})
+    motors = config.get("motors", {}) if isinstance(config, dict) else {}
+    if not isinstance(motors, dict):
+        return {}
+    # Upgrade only a missing adapter. An explicit operator disable/command
+    # remains untouched; discovery performs bounded public GET requests only.
+    if "NODE_NETWORK" not in motors:
+        motors["NODE_NETWORK"] = default_motors["NODE_NETWORK"]
+        config["motors"] = motors
+        save_json(CONFIG, config)
+    return motors
 
 
 def read_children():
