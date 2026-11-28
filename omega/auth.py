@@ -36,7 +36,8 @@ def verify_token(key: str, token: str, now: float | None = None) -> Principal | 
         if not hmac.compare_digest(sig, expected):
             return None
         data = json.loads(_unb64(payload))
-        if int(data["exp"]) < (time.time() if now is None else now):
+        # JWT-style exp is exclusive: a token is invalid at the exact expiry instant.
+        if int(data["exp"]) <= (time.time() if now is None else now):
             return None
         sub = data["sub"]
         if not isinstance(sub, str) or not sub:
