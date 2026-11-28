@@ -613,6 +613,7 @@ def network_status(state_dir: str | Path | None = None) -> dict[str, Any]:
             "status": "unknown", "candidate_count": 0, "p2p_peer_count": 0,
             "protocol_peer_count": 0, "last_updated": None,
             "last_cycle": None, "external_connectivity_confirmed": False,
+            "cryptographic_trust_confirmed": False,
         }
     except (OSError, ValueError, UnicodeError):
         return {"status": "degraded", "reason": "REGISTRY_UNREADABLE"}
