@@ -57,6 +57,19 @@ class NodeFactoryTests(unittest.TestCase):
             with self.assertRaises(NodeFactoryError):
                 create_nodes(1, output_dir=link)
 
+    def test_status_rejects_symlinked_identity_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            node = create_nodes(1, output_dir=Path(tmp) / "nodes")[0]
+            root = Path(node["directory"])
+            identity_dir = root / "identity"
+            external_identity = Path(tmp) / "external-identity"
+            identity_dir.rename(external_identity)
+            try:
+                identity_dir.symlink_to(external_identity, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable")
+            self.assertEqual(inspect_nodes(Path(tmp) / "nodes"), [])
+
     def test_status_ignores_modified_or_incomplete_manifests(self):
         with tempfile.TemporaryDirectory() as tmp:
             node = create_nodes(1, output_dir=tmp)[0]
