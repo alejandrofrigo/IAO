@@ -40,7 +40,7 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
     temporary = Path(temporary_name)
     try:
         os.fchmod(fd, 0o600)
-        payload = (json.dumps(data, sort_keys=True, ensure_ascii=False) + "\\n").encode()
+        payload = (json.dumps(data, sort_keys=True, ensure_ascii=False) + "\n").encode()
         with os.fdopen(fd, "wb") as stream:
             stream.write(payload)
             stream.flush()
