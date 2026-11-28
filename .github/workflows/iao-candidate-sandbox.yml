@@ -18,6 +18,7 @@ jobs:
         env:
           WORKSPACE: ${{ github.workspace }}
         run: |
+          mkdir -p "${WORKSPACE}/.state"
           docker run --rm \
             --network=none \
             --read-only \
