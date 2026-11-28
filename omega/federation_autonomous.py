@@ -92,110 +92,15 @@ def _origin(value: Any) -> str:
 
 
 def _enroll_one(fed_node, candidate: dict[str, Any]) -> dict[str, Any]:
-    from omega.federation import verify_identity_challenge
-    from omega.federation_transport import fetch_public_json, post_public_json
+    """Fail closed until a connection-bound mutual-TLS verifier is integrated.
 
-    origin = _origin(candidate.get("origin"))
-    expected_id = candidate.get("node_id")
-    if (not isinstance(expected_id, str) or len(expected_id) != 16
-            or any(ch not in "0123456789abcdef" for ch in expected_id)):
-        raise ValueError("DISCOVERY_NODE_ID_INVALID")
-
-    publication = fetch_public_json(
-        origin + "/fed/v1/publication", timeout=8, max_bytes=16_384
-    )
-    if not isinstance(publication, dict) or not fed_node.verify_publication(publication):
-        raise ValueError("PUBLICATION_SIGNATURE_INVALID")
-    if publication.get("consent") is not True:
-        raise ValueError("REMOTE_PEERING_CONSENT_MISSING")
-    if publication.get("node_id") != expected_id:
-        raise ValueError("PUBLICATION_NODE_ID_MISMATCH")
-    endpoint = origin + "/fed/v1/message"
-    if publication.get("endpoint") != endpoint:
-        raise ValueError("PUBLICATION_ENDPOINT_MISMATCH")
-    now = float(fed_node.clock())
-    issued = publication.get("issued_at")
-    expires = publication.get("lease_expires_at")
-    if (isinstance(issued, bool) or not isinstance(issued, (int, float))
-            or isinstance(expires, bool) or not isinstance(expires, (int, float))
-            or not 0 < float(expires) - now <= MAX_LEASE_SECONDS
-            or abs(now - float(issued)) > 300):
-        raise ValueError("PUBLICATION_LEASE_INVALID")
-
-    identity = fetch_public_json(
-        origin + "/fed/v1/identity", timeout=8, max_bytes=4096
-    )
-    if (not isinstance(identity, dict)
-            or identity.get("node_id") != expected_id
-            or identity.get("public_key") != publication.get("public_key")):
-        raise ValueError("IDENTITY_PUBLICATION_MISMATCH")
-
-    nonce = secrets.token_hex(32)
-    request_ts = now
-    challenge = {
-        "v": 1, "from": fed_node.node_id, "to": expected_id,
-        "nonce": nonce, "ts": request_ts,
-    }
-    status, response = post_public_json(
-        origin + "/fed/v1/handshake", challenge,
-        timeout=8, max_bytes=4096,
-    )
-    if status != 200 or not isinstance(response, dict):
-        raise ValueError("IDENTITY_CHALLENGE_HTTP_FAILED")
-    verified = verify_identity_challenge(
-        identity, response, requester_id=fed_node.node_id,
-        nonce=nonce, request_ts=request_ts,
-        now=float(fed_node.clock()), skew=60.0,
-    )
-    if not verified.get("ok") or verified.get("peer_id") != expected_id:
-        raise ValueError("IDENTITY_CHALLENGE_REJECTED")
-
-    contract = fetch_public_json(
-        origin + "/fed/v1/contract", timeout=8, max_bytes=16_384
-    )
-    if not isinstance(contract, dict) or contract.get("peer_id") != expected_id:
-        raise ValueError("PARTICIPATION_CONTRACT_ID_MISMATCH")
-    if contract.get("pubkey") != __import__("base64").b64encode(
-        bytes.fromhex(publication["public_key"])
-    ).decode():
-        raise ValueError("PARTICIPATION_CONTRACT_KEY_MISMATCH")
-
-    published_caps = publication.get("capabilities", [])
-    contract_caps = contract.get("capabilities", [])
-    if not isinstance(published_caps, list) or not isinstance(contract_caps, list):
-        raise ValueError("CAPABILITY_DOCUMENT_INVALID")
-    capabilities = sorted(
-        set(x for x in published_caps if isinstance(x, str))
-        & set(x for x in contract_caps if isinstance(x, str))
-        & set(fed_node.served)
-    )
-    if not capabilities:
-        raise ValueError("NO_MUTUALLY_SUPPORTED_READ_ONLY_CAPABILITIES")
-    contract["capabilities"] = capabilities
-    contract["endpoint"] = endpoint
-    contract["lease_expires_at"] = min(
-        float(contract.get("lease_expires_at", 0)), float(expires)
-    )
-    fed_node._validate_peer_contract(contract)
-    existing = fed_node.peers.get(expected_id)
-    if existing is not None and existing.get("revoked"):
-        raise ValueError("PEER_REVOKED_LOCALLY")
-    if existing is not None:
-        old_pub = existing.get("pub")
-        new_pub = __import__("base64").b64decode(contract["pubkey"], validate=True)
-        if old_pub != new_pub:
-            raise ValueError("ENROLLED_PEER_KEY_CHANGED")
-        if existing.get("endpoint") != endpoint:
-            raise ValueError("ENROLLED_PEER_ENDPOINT_CHANGED")
-        return {"status": "ALREADY_ENROLLED", "peer_id": expected_id}
-    fed_node.enroll(contract, granted_capabilities=[])
-    if expected_id not in fed_node.peers:
-        raise RuntimeError("FEDERATION_ENROLLMENT_NOT_PERSISTED")
-    return {
-        "status": "ENROLLED", "peer_id": expected_id,
-        "capabilities": capabilities, "granted_inbound_capabilities": [],
-    }
-
+    Ed25519 proves key possession and the pinned HTTPS client protects the
+    transport to this client. Neither proves that the remote server required
+    and validated this client's certificate. Optional client-certificate
+    configuration is not remote mTLS attestation, so no remote handshake,
+    contract fetch, or peer enrollment is allowed here.
+    """
+    raise RuntimeError("TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED")
 
 
 def _append_cycle_audit(state_dir: Path, summary: dict[str, Any]) -> None:
