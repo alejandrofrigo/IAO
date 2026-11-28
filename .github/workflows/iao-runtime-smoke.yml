@@ -79,12 +79,29 @@ jobs:
 
       - name: Install and start Kubo through Tor
         run: |
-          curl --fail --silent --show-error --location --max-time 300 \
-            --retry 3 --retry-delay 5 --retry-all-errors \
-            --socks5-hostname 127.0.0.1:9050 \
-            https://dist.ipfs.tech/kubo/v0.42.0/kubo_v0.42.0_linux-amd64.tar.gz \
-            -o "$RUNNER_TEMP/kubo.tar.gz"
-          test -s "$RUNNER_TEMP/kubo.tar.gz"
+          KUBO_ARCHIVE="kubo_v0.42.0_linux-amd64.tar.gz"
+          KUBO_URLS=(
+            "https://github.com/ipfs/kubo/releases/download/v0.42.0/$KUBO_ARCHIVE"
+            "https://dist.ipfs.tech/kubo/v0.42.0/$KUBO_ARCHIVE"
+          )
+          downloaded=0
+          for url in "${KUBO_URLS[@]}"; do
+            echo "KUBO_SOURCE=$url"
+            if curl --fail --silent --show-error --location --max-time 180 \
+              --retry 1 --retry-delay 5 --retry-all-errors \
+              --socks5-hostname 127.0.0.1:9050 "$url" \
+              -o "$RUNNER_TEMP/kubo.tar.gz" && \
+              test -s "$RUNNER_TEMP/kubo.tar.gz" && \
+              tar -tzf "$RUNNER_TEMP/kubo.tar.gz" >/dev/null; then
+              downloaded=1
+              break
+            fi
+            rm -f "$RUNNER_TEMP/kubo.tar.gz"
+          done
+          if [ "$downloaded" -ne 1 ]; then
+            echo "KUBO_DOWNLOAD_FAILED: all Tor-routed official sources unavailable"
+            exit 1
+          fi
           tar -tzf "$RUNNER_TEMP/kubo.tar.gz" >/dev/null
           tar -xzf "$RUNNER_TEMP/kubo.tar.gz" -C "$RUNNER_TEMP"
           sudo "$RUNNER_TEMP/kubo/install.sh"
