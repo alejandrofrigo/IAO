@@ -83,3 +83,42 @@ def test_tool_child_does_not_receive_parent_environment(monkeypatch):
     # The isolation boundary must not mutate the API process environment.
     assert os.environ["IAO_PROCESS_RUNNER_TEST_SECRET"] == "must-not-cross-boundary"
 
+
+
+def _inspect_child_resource_limits(_payload):
+    import resource
+
+    return {
+        "nofile_soft": resource.getrlimit(resource.RLIMIT_NOFILE)[0],
+        "core_soft": (
+            resource.getrlimit(resource.RLIMIT_CORE)[0]
+            if hasattr(resource, "RLIMIT_CORE") else None
+        ),
+        "address_space_soft": resource.getrlimit(resource.RLIMIT_AS)[0],
+    }
+
+
+def _verify_child_resource_limits(output):
+    if os.name != "posix":
+        return "SKIP"
+    valid = (
+        output["nofile_soft"] <= 64
+        and output["core_soft"] == 0
+        and output["address_space_soft"] <= 2_147_483_648
+    )
+    return "PASS" if valid else "FAIL"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX resource limits required")
+def test_tool_child_applies_resource_limits():
+    output, verdict = run_tool_isolated(
+        _inspect_child_resource_limits,
+        _verify_child_resource_limits,
+        {},
+        5,
+    )
+
+    assert verdict == "PASS"
+    assert output["nofile_soft"] <= 64
+    assert output["core_soft"] == 0
+    assert output["address_space_soft"] <= 2_147_483_648
