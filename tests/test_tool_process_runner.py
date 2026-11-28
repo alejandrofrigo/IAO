@@ -59,3 +59,27 @@ def test_bound_local_corpus_tool_is_pickleable_in_spawned_process(tmp_path):
     assert output["tool"] == "knowledge.search"
     assert output["items"][0]["document_id"] == "security"
     assert verdict == "PASS"
+
+def _inspect_child_environment(_payload):
+    return {"secret_visible": "IAO_PROCESS_RUNNER_TEST_SECRET" in os.environ}
+
+
+def _verify_secret_is_hidden(output):
+    return "PASS" if output == {"secret_visible": False} else "FAIL"
+
+
+def test_tool_child_does_not_receive_parent_environment(monkeypatch):
+    monkeypatch.setenv("IAO_PROCESS_RUNNER_TEST_SECRET", "must-not-cross-boundary")
+
+    output, verdict = run_tool_isolated(
+        _inspect_child_environment,
+        _verify_secret_is_hidden,
+        {},
+        5,
+    )
+
+    assert output == {"secret_visible": False}
+    assert verdict == "PASS"
+    # The isolation boundary must not mutate the API process environment.
+    assert os.environ["IAO_PROCESS_RUNNER_TEST_SECRET"] == "must-not-cross-boundary"
+
