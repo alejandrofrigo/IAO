@@ -112,6 +112,22 @@ def test_fetch_public_json_pins_ip_and_parses_json(monkeypatch):
     assert created[0].closed
 
 
+def test_fetch_public_json_rejects_duplicate_nested_keys(monkeypatch):
+    monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
+    monkeypatch.setattr(
+        transport,
+        "_PinnedHTTPSConnection",
+        lambda *args, **kwargs: FakeConnection(*args, **kwargs),
+    )
+    FakeConnection.response = FakeResponse(
+        body=b'{"peers":[{"id":"first","id":"second"}]}'
+    )
+    with pytest.raises(
+        transport.FederationTransportError, match="INVALID_JSON_RESPONSE"
+    ):
+        transport.fetch_public_json("https://directory.example.org/peers")
+
+
 def test_fetch_public_json_rejects_redirect(monkeypatch):
     monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
     monkeypatch.setattr(
