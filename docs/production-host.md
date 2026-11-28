@@ -1,5 +1,10 @@
 # IAO single-host production runtime
 
+This deployment path is independent of Vercel. Vercel is not a runtime,
+compute, storage, or networking dependency for IAO and is not part of the
+production acceptance path. See [hosting independence](hosting-independence.md)
+for the supported infrastructure boundary.
+
 This is the reproducible, persistent single-host deployment target for the
 current SQLite-backed runtime. It is intentionally a **single API instance**:
 do not scale replicas or place the SQLite state volume on a network filesystem.
