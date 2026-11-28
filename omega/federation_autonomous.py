@@ -84,7 +84,7 @@ def _is_tor_v3_hostname(host: str) -> bool:
     if len(decoded) != 35 or decoded[34] != 3:
         return False
     expected = hashlib.sha3_256(
-        b".onion checksum" + decoded[:32] + b"\\x03"
+        b".onion checksum" + decoded[:32] + b"\x03"
     ).digest()[:2]
     return decoded[32:34] == expected
 
