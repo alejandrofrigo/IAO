@@ -12,7 +12,7 @@ import json
 from typing import Any, Protocol
 
 VERSION = "0.1.0"
-MAX_MESSAGES = 20
+MAX_MESSAGES = 24
 MAX_PROMPT_CHARS = 40_000
 MAX_REPLY_CHARS = 40_000
 
@@ -42,7 +42,7 @@ class CognitiveEngine:
             if not isinstance(item, dict):
                 raise CognitiveEngineError("INVALID_COGNITIVE_INPUT")
             role, content = item.get("role"), item.get("content")
-            if role not in {"user", "assistant"} or not isinstance(content, str):
+            if role not in {"system", "user", "assistant"} or not isinstance(content, str):
                 raise CognitiveEngineError("INVALID_COGNITIVE_INPUT")
             if not content.strip() or len(content) > MAX_PROMPT_CHARS:
                 raise CognitiveEngineError("INVALID_COGNITIVE_INPUT")
