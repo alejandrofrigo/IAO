@@ -242,16 +242,28 @@ def test_v3_onion_peers_are_kept_in_unverified_inventory():
 
 
 
-def test_ipfs_adapter_imports_local_swarm_peers_without_http_promotion(monkeypatch):
-    from tools import iao_federation_autonomous
+def test_ipfs_adapter_reads_only_local_swarm_api(monkeypatch):
+    import io
+    import json
+    import urllib.request
     from omega.external_network import IPFSSwarmDiscovery
-    monkeypatch.setattr(iao_federation_autonomous, "discover_dht", lambda api: [{
-        "peer_id": "12D3KooWJ5xExamplePeerIdentifier",
-        "multiaddr": "/ip4/203.0.113.10/tcp/4001",
-    }])
+
+    calls = []
+    payload = {"Peers": [{
+        "Peer": "12D3KooWJ5xExamplePeerIdentifier",
+        "Addr": "/ip4/203.0.113.10/tcp/4001",
+    }]}
+    class Response(io.BytesIO):
+        pass
+    def fake_open(request, timeout):
+        calls.append((request.full_url, request.get_method(), timeout))
+        return Response(json.dumps(payload).encode())
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
     found = IPFSSwarmDiscovery("http://127.0.0.1:5001").discover()
     assert found[0]["peer_id"] == "12D3KooWJ5xExamplePeerIdentifier"
     assert found[0]["multiaddr"] == ["/ip4/203.0.113.10/tcp/4001"]
+    assert calls == [("http://127.0.0.1:5001/api/v0/swarm/peers", "POST", 8)]
+    assert IPFSSwarmDiscovery("http://8.8.8.8:5001").discover() == []
 
 
 def test_nostr_authorizations_are_kept_separate_from_node_identity(tmp_path):
