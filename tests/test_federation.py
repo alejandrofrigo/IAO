@@ -234,7 +234,10 @@ class ReplayAndTimeTests(FedBase):
     def test_duplicate_nested_json_key_is_rejected(self) -> None:
         envelope = _sign(self.a.key, self.env(nonce="duplicate-key-nest-01"))
         raw = json.dumps(envelope).encode()
-        raw = raw.replace(b'"query": "hello"', b'"query": "hello", "query": "other"')
+        raw = raw.replace(
+            b'"query": "audit chain restore"',
+            b'"query": "audit chain restore", "query": "other"',
+        )
         status, payload = self.b.handle(raw)
         self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
 
