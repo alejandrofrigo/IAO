@@ -147,3 +147,29 @@ def test_proposal_hash_mismatch_is_rejected(isolated_evolution_state):
     assert evaluated["status"] == "REJECTED"
     assert evaluated["validation"]["content_hashes_valid"] is False
     assert "PROPOSAL_HASH_MISMATCH" in evaluated["failures"]
+
+
+def test_submit_rejects_symlinked_candidates_root(isolated_evolution_state, tmp_path, monkeypatch):
+    redirected = tmp_path / "outside-candidates"
+    redirected.mkdir()
+    link = isolated_evolution_state / "candidates"
+    link.symlink_to(redirected, target_is_directory=True)
+    monkeypatch.setattr(evolution, "CANDIDATES", link)
+
+    with pytest.raises(ValueError, match="SYMLINK_PATH_REFUSED"):
+        evolution.submit(proposal())
+
+    assert list(redirected.iterdir()) == []
+
+
+def test_evolution_log_rejects_symlinked_event_file(isolated_evolution_state, tmp_path, monkeypatch):
+    outside = tmp_path / "outside-events.jsonl"
+    outside.write_text("", encoding="utf-8")
+    link = isolated_evolution_state / "events.jsonl"
+    link.symlink_to(outside)
+    monkeypatch.setattr(evolution, "EVENTS", link)
+
+    with pytest.raises(ValueError, match="SYMLINK_PATH_REFUSED"):
+        evolution.verify_log()
+
+    assert outside.read_text(encoding="utf-8") == ""
