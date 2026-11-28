@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from omega.federation_transport import fetch_public_json
-from omega.federation_autonomous import _write_registry
+from omega.federation_autonomous import _write_registry, run_discovered_cycle
 
 _INTERVAL = max(300, int(os.environ.get("IAO_FED_DISCOVERY_INTERVAL", "1800")))
 _THREAD = None
@@ -284,6 +284,26 @@ def discover_once(state_dir):
                 "query": query,
                 "error_type": type(exc).__name__,
             })
+
+    registry_path = state / "iao-node-network" / "discovered-candidates.json"
+    try:
+        totals["candidate_evaluation"] = run_discovered_cycle(
+            None, state, registry_path
+        )
+        _append(state, {
+            "event": "CANDIDATE_EVALUATION_FINISHED",
+            **totals["candidate_evaluation"],
+            "enrollment_gate": "TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED",
+        })
+    except Exception as exc:
+        totals["errors"] += 1
+        totals["candidate_evaluation"] = {
+            "status": "ERROR", "error_type": type(exc).__name__
+        }
+        _append(state, {
+            "event": "CANDIDATE_EVALUATION_ERROR",
+            "error_type": type(exc).__name__,
+        })
 
     _append(state, {
         "event": "DISCOVERY_CYCLE_FINISHED",
