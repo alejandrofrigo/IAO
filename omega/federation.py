@@ -44,6 +44,39 @@ def _b64(b: bytes) -> str:
 def node_id_of(pub_raw: bytes) -> str:
     return hashlib.sha256(pub_raw).hexdigest()[:16]
 
+def create_federation_server_ssl_context(
+    certificate_file: str | Path,
+    private_key_file: str | Path,
+    client_ca_file: str | Path,
+) -> ssl.SSLContext:
+    """Build a fail-closed TLS 1.2+ server context requiring a trusted client cert."""
+    paths = (
+        (Path(certificate_file), False),
+        (Path(private_key_file), True),
+        (Path(client_ca_file), False),
+    )
+    for path, is_private in paths:
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("FEDERATION_TLS_FILE_REFUSED")
+            mode = path.stat().st_mode & 0o777
+        except OSError as exc:
+            raise ValueError("FEDERATION_TLS_FILE_REFUSED") from exc
+        if is_private and mode & 0o077:
+            raise ValueError("FEDERATION_TLS_PRIVATE_KEY_PERMISSIONS_TOO_OPEN")
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(
+            certfile=str(paths[0][0]), keyfile=str(paths[1][0])
+        )
+        context.load_verify_locations(cafile=str(paths[2][0]))
+        context.verify_mode = ssl.CERT_REQUIRED
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        raise ValueError("FEDERATION_TLS_CONFIGURATION_INVALID") from exc
+    return context
+
+
 def _peer_certificate_node_id(certificate: dict[str, Any] | None) -> str | None:
     """Return the single IAO node identity asserted by a verified TLS peer cert."""
     if not isinstance(certificate, dict):
