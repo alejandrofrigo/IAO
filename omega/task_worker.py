@@ -234,25 +234,23 @@ class TaskWorker:
                     {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_REVOKED"},
                 )
             except ToolProcessTimeout:
-                self.store.add_tool_execution(
-                    task_id, spec.name, spec.version, "TIMED_OUT",
-                    digest_in, None, "TIMED_OUT", started,
-                    datetime.now(timezone.utc).isoformat(),
-                )
-                return self._finish(
-                    task_id, owner, "FAILED",
+                finished = datetime.now(timezone.utc).isoformat()
+                self.store.finalize_claimed_tool_execution(
+                    task_id, self.worker_id, owner, "FAILED",
                     {"decision": "ALLOW", "error": "TIMED_OUT"},
+                    spec.name, spec.version, digest_in, None, started, finished,
+                    execution_status="TIMED_OUT", execution_error_code="TIMED_OUT",
                 )
+                return True
             except Exception:
-                self.store.add_tool_execution(
-                    task_id, spec.name, spec.version, "FAILED",
-                    digest_in, None, "TOOL_ERROR", started,
-                    datetime.now(timezone.utc).isoformat(),
-                )
-                return self._finish(
-                    task_id, owner, "FAILED",
+                finished = datetime.now(timezone.utc).isoformat()
+                self.store.finalize_claimed_tool_execution(
+                    task_id, self.worker_id, owner, "FAILED",
                     {"decision": "ALLOW", "error": "TOOL_ERROR"},
+                    spec.name, spec.version, digest_in, None, started, finished,
+                    execution_status="FAILED", execution_error_code="TOOL_ERROR",
                 )
+                return True
 
             result: dict[str, Any] = {
                 "decision": "ALLOW",
