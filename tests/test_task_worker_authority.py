@@ -275,3 +275,31 @@ def test_worker_recovers_expired_leases_while_process_remains_alive():
     assert recovery_events[0][1]["decision"] == "FAIL_CLOSED"
     assert "expired-secret-task-id" not in repr(recovery_events)
     assert "private-owner" not in repr(recovery_events)
+
+
+def test_worker_rejects_non_numeric_timeout_budget_before_tool_execution():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True
+    })())
+    intent = json.loads(store.task["intent_json"])
+    intent["budget"]["timeout_seconds"] = True
+    store.task["intent_json"] = json.dumps(intent)
+
+    assert worker.run_once() is True
+    assert calls == []
+    assert store.executions == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "INVALID_TOOL_TIMEOUT_POLICY"
+
+
+def test_worker_rejects_lease_without_timeout_and_cleanup_margin():
+    worker, store, calls = _worker(type("ActiveAuthority", (), {
+        "verify_primary_device_for_session_digest": lambda self, *_args: True
+    })())
+    worker.lease_seconds = 7  # tool timeout is 2s; required margin is 5s
+
+    assert worker.run_once() is True
+    assert calls == []
+    assert store.executions == []
+    assert store.final_state == "FAILED"
+    assert store.final_result["error"] == "WORKER_LEASE_TOO_SHORT_FOR_TOOL_TIMEOUT"
