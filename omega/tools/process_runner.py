@@ -49,7 +49,7 @@ def _child_entry(send_conn: Any, run: Callable[..., Any], verify: Callable[..., 
                  payload: dict[str, Any], timeout_seconds: float) -> None:
     try:
         limits_applied = _apply_child_limits(timeout_seconds)
-        if os.name == "posix" and not limits_applied:
+        if not limits_applied:
             raise RuntimeError("PROCESS_RESOURCE_LIMITS_UNAVAILABLE")
         # Queued tools must not inherit application credentials through env vars.
         os.environ.clear()
