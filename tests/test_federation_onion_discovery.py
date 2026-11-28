@@ -39,7 +39,7 @@ def test_onion_feed_keeps_external_peers_unverified(monkeypatch, tmp_path):
 
     counts = federation.merge_onion_candidates(found)
     registry = json.loads((tmp_path / "iao-onion-candidates.json").read_text())
-    assert counts == {"new": 2, "observed": 0, "total": 2}
+    assert counts == {"new": 2, "observed": 2, "total": 2}
     assert len(registry["services"]) == 2
     assert all(item["identity_state"] == "UNVERIFIED" for item in registry["services"].values())
     assert all(item["participation_state"] == "CANDIDATE_ONLY" for item in registry["services"].values())
@@ -60,7 +60,7 @@ def test_onion_candidate_merge_is_idempotent(monkeypatch, tmp_path):
     first = federation.merge_onion_candidates([candidate])
     second = federation.merge_onion_candidates([candidate])
     data = json.loads((tmp_path / "iao-onion-candidates.json").read_text())
-    assert first == {"new": 1, "observed": 0, "total": 1}
+    assert first == {"new": 1, "observed": 1, "total": 1}
     assert second == {"new": 0, "observed": 1, "total": 1}
     assert len(data["services"]) == 1
 
