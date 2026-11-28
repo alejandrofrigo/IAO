@@ -194,7 +194,7 @@ class TaskWorker:
                     owner, session_digest, device_id,
                 ) as authority_valid:
                     if authority_valid is not True:
-                        raise RuntimeError("OPERATOR_DEVICE_AUTHORITY_NOT_CONFIRMED")
+                        raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
                     output, verdict = self.tool_executor(
                         spec.run, spec.verify, clean, timeout
                     )
