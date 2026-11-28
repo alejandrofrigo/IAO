@@ -347,3 +347,73 @@ def test_worker_rejects_invalid_lease_configuration(lease_seconds):
 def test_worker_rejects_invalid_poll_configuration(poll_seconds):
     with pytest.raises(ValueError, match="INVALID_WORKER_POLL_SECONDS"):
         TaskWorker(_ClaimedTaskStore({}), ToolRegistry(), poll_seconds=poll_seconds)
+
+
+def test_tool_completion_and_task_state_commit_atomically_after_lease_expiry(tmp_path):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-tool-completion.db", b"worker-test-audit-key-0123456789")
+    task_id = "atomic-expired-task"
+    owner = "operator:atomic-test"
+    intent = {"expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}
+    task, created = store.create_task(task_id, owner, intent, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    claimed = store.claim_next_task("atomic-worker", lease_seconds=60)
+    assert claimed is not None
+    with store.lock:
+        store.db.execute(
+            "UPDATE task SET lease_until=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", task_id),
+        )
+
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "SUCCEEDED",
+        {"decision": "ALLOW", "verification": "PASS", "result": {"items": []}},
+        "knowledge.search", "1", "a" * 64, "b" * 64,
+        "2026-11-28T00:00:00+00:00", datetime.now(timezone.utc).isoformat(),
+    )
+    assert committed is False
+    final = store.get_task(task_id, owner)
+    assert final["state"] == "FAILED"
+    assert json.loads(final["result_json"]) == {
+        "decision": "INTERRUPTED",
+        "error": "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+    }
+    executions = store.tool_executions(task_id)
+    assert len(executions) == 1
+    assert executions[0]["status"] == "SUCCEEDED"
+    assert executions[0]["error_code"] == "LEASE_EXPIRED_AFTER_TOOL_COMPLETION"
+    assert executions[0]["output_digest"] == "b" * 64
+    store.close()
+
+
+def test_tool_completion_and_task_success_commit_in_one_transaction(tmp_path):
+    from omega.store import Store
+
+    store = Store(tmp_path / "atomic-tool-success.db", b"worker-test-audit-key-0123456789")
+    task_id = "atomic-success-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    assert store.claim_next_task("atomic-worker", lease_seconds=60) is not None
+    result = {"decision": "ALLOW", "verification": "PASS", "result": {"items": []}}
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "SUCCEEDED", result,
+        "knowledge.search", "1", "a" * 64, "b" * 64,
+        datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+    )
+    assert committed is True
+    final = store.get_task(task_id, owner)
+    assert final["state"] == "SUCCEEDED"
+    assert json.loads(final["result_json"]) == result
+    executions = store.tool_executions(task_id)
+    assert len(executions) == 1
+    assert executions[0]["status"] == "SUCCEEDED"
+    assert executions[0]["error_code"] is None
+    assert final["lease_owner"] is None
+    assert final["lease_until"] is None
+    store.close()
