@@ -118,6 +118,40 @@ class IdentityChallengeVerificationTests(FedBase):
         result = self.verify(identity, response, nonce, request_ts)
         self.assertEqual(result["error"], "RESPONSE_CLOCK_SKEW")
 
+    def test_boolean_identity_version_is_not_protocol_version_one(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        identity["version"] = True
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "UNSUPPORTED_IDENTITY_PROTOCOL")
+
+    def test_boolean_response_version_is_rejected_even_when_signed(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        proof = {key: value for key, value in response.items() if key != "sig"}
+        proof["v"] = True
+        response = _sign(self.b.key, proof)
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "CHALLENGE_BINDING_MISMATCH")
+
+    def test_boolean_request_timestamp_is_rejected_even_when_signed(self):
+        identity, response, nonce, request_ts = self.make_proof()
+        proof = {key: value for key, value in response.items() if key != "sig"}
+        proof["request_ts"] = True
+        response = _sign(self.b.key, proof)
+        result = self.verify(identity, response, nonce, request_ts)
+        self.assertEqual(result["error"], "CHALLENGE_BINDING_MISMATCH")
+
+    def test_boolean_challenge_request_version_is_rejected(self):
+        request = {
+            "v": True,
+            "from": self.a.node_id,
+            "to": self.b.node_id,
+            "nonce": "d" * 64,
+            "ts": self.clock(),
+        }
+        status, payload = self.b.answer_challenge(json.dumps(request).encode())
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "INVALID_CHALLENGE")
+
 
 class HappyAndAuthTests(FedBase):
     def test_roundtrip_signed_verified_untrusted(self) -> None:
