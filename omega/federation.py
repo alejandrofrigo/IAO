@@ -697,7 +697,7 @@ class Node:
             return {"ok": False, "error": "BAD_RESPONSE"}
         if not _verify(c["pub"], resp):
             return {"ok": False, "error": "BAD_RESPONSE_SIGNATURE"}
-        if "result" not in resp:
+        if "result" not in resp or type(resp.get("v")) is not int or resp.get("v") != 1:
             return {"ok": False, "error": "BAD_RESPONSE"}
         if (
             resp.get("to") != self.node_id
@@ -705,11 +705,15 @@ class Node:
             or resp.get("in_reply_to") != nonce
         ):
             return {"ok": False, "error": "REPLAYED_OR_MISROUTED_RESPONSE"}
-        try:
-            response_ts = float(resp.get("ts", 0))
-        except (TypeError, ValueError):
+        raw_response_ts = resp.get("ts")
+        if (
+            isinstance(raw_response_ts, bool)
+            or not isinstance(raw_response_ts, (int, float))
+            or not math.isfinite(float(raw_response_ts))
+        ):
             return {"ok": False, "error": "CLOCK_SKEW"}
-        if not math.isfinite(response_ts) or abs(self.clock() - response_ts) > self.skew:
+        response_ts = float(raw_response_ts)
+        if abs(self.clock() - response_ts) > self.skew:
             return {"ok": False, "error": "CLOCK_SKEW"}
         return {
             "ok": True,
