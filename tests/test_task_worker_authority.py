@@ -277,12 +277,16 @@ def test_worker_recovers_expired_leases_while_process_remains_alive():
     assert "private-owner" not in repr(recovery_events)
 
 
-def test_worker_rejects_non_numeric_timeout_budget_before_tool_execution():
+@pytest.mark.parametrize(
+    "timeout_value",
+    [True, 10**400, float("inf"), float("nan"), 0, -1],
+)
+def test_worker_rejects_invalid_timeout_budget_before_tool_execution(timeout_value):
     worker, store, calls = _worker(type("ActiveAuthority", (), {
         "verify_primary_device_for_session_digest": lambda self, *_args: True
     })())
     intent = json.loads(store.task["intent_json"])
-    intent["budget"]["timeout_seconds"] = True
+    intent["budget"]["timeout_seconds"] = timeout_value
     store.task["intent_json"] = json.dumps(intent)
 
     assert worker.run_once() is True
