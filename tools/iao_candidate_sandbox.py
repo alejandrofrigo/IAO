@@ -138,6 +138,9 @@ def _compare_results(
 def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
     if "," in str(workspace):
         raise ValueError("SANDBOX_PATH_CONTAINS_COMMA")
+    # Docker cannot create a tmpfs mountpoint beneath a read-only bind mount.
+    # Create the empty mountpoint in the disposable workspace before binding it.
+    (workspace / ".state").mkdir(mode=0o700, parents=True, exist_ok=True)
     container_name = "iao-candidate-" + uuid.uuid4().hex
     command = [
         "docker", "run", "--rm", "--pull=never",
