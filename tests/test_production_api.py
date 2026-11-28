@@ -53,6 +53,18 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert body["production_gates"]["network_discovery"]["cryptographic_trust_confirmed"] is False
 
 
+def test_production_mode_refuses_development_hmac_auth(monkeypatch, tmp_path) -> None:
+    client = configured_client(monkeypatch, tmp_path)
+    monkeypatch.setenv("APP_ENV", "production")
+
+    readiness = client.get("/health/ready")
+    assert readiness.status_code == 503
+    assert readiness.json()["status"] == "not_ready"
+
+    public_session = client.post("/v1/public/session", json={})
+    assert public_session.status_code == 503
+
+
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
