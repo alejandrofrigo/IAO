@@ -291,17 +291,29 @@ def discover_once(state_dir):
 
 def run_forever(state_dir):
     state = Path(state_dir)
-    state.mkdir(parents=True, exist_ok=True)
+    absolute = state.absolute()
+    if any(component.is_symlink() for component in (absolute, *absolute.parents)):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if any(component.is_symlink() for component in (absolute, *absolute.parents)):
+        raise RuntimeError("FEDERATION_DISCOVERY_DIRECTORY_REFUSED")
+    os.chmod(state, 0o700)
     lock_path = state / "federation-discovery.lock"
-    lock_file = open(lock_path, "a")
-
+    if lock_path.is_symlink():
+        raise RuntimeError("FEDERATION_DISCOVERY_LOCK_REFUSED")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(lock_path), flags, 0o600)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise RuntimeError("FEDERATION_DISCOVERY_LOCK_REFUSED")
+    os.fchmod(fd, 0o600)
+    lock_file = os.fdopen(fd, "a+")
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         print("DISCOVERY_ALREADY_RUNNING", flush=True)
         lock_file.close()
         return
-
     print("IAO_FEDERATION_DISCOVERY_STARTED", flush=True)
     try:
         while True:
