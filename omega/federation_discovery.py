@@ -95,7 +95,7 @@ def _append(state, event):
         raise RuntimeError("FEDERATION_DISCOVERY_AUDIT_FILE_REFUSED")
     record = dict(event)
     record["timestamp"] = _now()
-    data = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\\n").encode()
+    data = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n").encode()
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(str(path), flags, 0o600)
     try:
