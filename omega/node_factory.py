@@ -203,6 +203,11 @@ def inspect_nodes(output_dir: str | Path = ".state/node-factory") -> list[dict[s
             identity = json.loads(public_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        # Valid JSON is not necessarily a valid object. Treat null, arrays and
+        # scalar documents as corrupt inventory entries rather than crashing
+        # the whole inspection cycle.
+        if not isinstance(manifest, dict) or not isinstance(identity, dict):
+            continue
         public_key_hex = identity.get("public_key")
         node_id = identity.get("node_id")
         if (
