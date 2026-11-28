@@ -102,6 +102,11 @@ def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
         except UnicodeError as exc:
             raise FederationTransportError("INVALID_ENDPOINT") from exc
         return "https", ascii_host, port or 443, parsed.path, ascii_host
+    if (parsed.scheme == "http" and host.endswith(".onion")
+            and len(host) == 62
+            and all(char in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
+            and port in (None, 80)):
+        return "onion", host, 80, parsed.path, host
     if parsed.scheme == "http" and port is not None and 1 <= port <= 65535:
         try:
             address = ipaddress.ip_address(host)
@@ -443,8 +448,75 @@ def post_federation_json(
     timeout: float = 5.0,
     max_bytes: int = 262_144,
 ) -> tuple[int, object]:
-    """POST a signed federation envelope over pinned HTTPS or literal loopback HTTP."""
+    """POST a signed envelope over pinned HTTPS, Tor onion, or explicit loopback."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise FederationTransportError("INVALID_ENDPOINT") from exc
+    if parsed.hostname and parsed.hostname.endswith(".onion"):
+        return post_onion_federation_json(
+            url, payload, timeout=timeout, max_bytes=max_bytes
+        )
     return _request_json(
         "POST", url, payload, timeout=timeout, max_bytes=max_bytes,
         allow_loopback_http=True,
     )
+
+
+def post_onion_federation_json(
+    url: str,
+    payload: dict,
+    *,
+    timeout: float = 8.0,
+    max_bytes: int = 262_144,
+) -> tuple[int, object]:
+    """POST signed federation envelopes through Tor SOCKS5 with remote onion DNS."""
+    if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
+        raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
+    host, port, target = _parse_onion_url(url)
+    if target != "/fed/v1/message":
+        raise FederationTransportError("INVALID_ONION_FEDERATION_PATH")
+    proxy_host, proxy_port = _tor_proxy()
+    try:
+        import socks
+    except ImportError as exc:
+        raise FederationTransportError("TOR_SOCKS_DEPENDENCY_MISSING") from exc
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if len(body) > max_bytes:
+        raise FederationTransportError("REQUEST_TOO_LARGE")
+    connection = _TorOnionHTTPConnection(
+        host, timeout=timeout, proxy_host=proxy_host, proxy_port=proxy_port
+    )
+    try:
+        connection.request("POST", target, body=body, headers={
+            "Host": host, "Accept": "application/json",
+            "Content-Type": "application/json", "Connection": "close",
+            "User-Agent": "IAO-tor-federation/1",
+        })
+        response = connection.getresponse()
+        if 300 <= response.status < 400:
+            raise FederationTransportError("REDIRECT_REFUSED")
+        content_type = (response.getheader("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json" and not content_type.endswith("+json"):
+            raise FederationTransportError("JSON_CONTENT_TYPE_REQUIRED")
+        length = response.getheader("Content-Length")
+        if length is not None:
+            try:
+                if int(length) < 0 or int(length) > max_bytes:
+                    raise FederationTransportError("RESPONSE_TOO_LARGE")
+            except ValueError as exc:
+                raise FederationTransportError("INVALID_CONTENT_LENGTH") from exc
+        raw = response.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise FederationTransportError("RESPONSE_TOO_LARGE")
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
+        return response.status, decoded
+    except FederationTransportError:
+        raise
+    except (OSError, http.client.HTTPException) as exc:
+        raise FederationTransportError("TOR_ONION_REQUEST_FAILED") from exc
+    finally:
+        connection.close()
