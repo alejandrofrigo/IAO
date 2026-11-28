@@ -12,12 +12,17 @@ def configured_client(monkeypatch, tmp_path):
     monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("IAO_CORPUS_DIR", str(tmp_path / "corpus"))
     monkeypatch.setenv("MODEL_ADAPTER", "disabled")
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "false")
     monkeypatch.delenv("IAO_LLM_ROUTER", raising=False)
     monkeypatch.setenv("IAO_DEVICE_ENROLLMENT_CODE", "one-time-enrollment-code-" + "z" * 32)
     monkeypatch.setenv("IAO_DEVICE_ENROLLMENT_ENABLED", "1")
     main._service = None
     main._device_authority = None
     main._federation_node = None
+    if main._autonomous_core is not None:
+        main._autonomous_core.stop_worker(timeout=1)
+    main._autonomous_core = None
+    main._autonomous_core_status.update({"enabled": False, "running": False, "recovered_tasks": 0})
     main._federation_worker_status.update({
         "autojoin": False, "discovery": False, "external_network": False,
     })
@@ -234,3 +239,44 @@ def test_federation_initialization_failure_does_not_take_down_local_api(monkeypa
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
     assert (tmp_path / "state" / "omega.db").is_file()
+
+    
+def test_autonomous_core_worker_starts_and_recovers_persisted_tasks(monkeypatch, tmp_path):
+    from omega.autonomous_core import AutonomousCore
+    import json
+
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "true")
+    monkeypatch.setenv("IAO_AUTONOMY_INTERVAL_SECONDS", "10")
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
+    main._autonomous_core = None
+    core = AutonomousCore(tmp_path / "state" / "autonomous-core")
+    task = core.submit("self_check")
+    with core.lock:
+        data = json.loads(core.tasks_path.read_text("utf-8"))
+        data["tasks"][0]["status"] = "RUNNING"
+        core._save(data)
+
+    started = main._ensure_autonomous_core()
+    try:
+        assert started is main._autonomous_core
+        assert started.status()["worker_running"] is True
+        assert main._autonomous_core_status["running"] is True
+        assert main._autonomous_core_status["recovered_tasks"] == 1
+        recovered = json.loads(started.tasks_path.read_text("utf-8"))
+        assert recovered["tasks"][0]["status"] == "QUEUED"
+        assert recovered["tasks"][0]["id"] == task["id"]
+    finally:
+        started.stop_worker(timeout=2)
+        main._autonomous_core = None
+        main._autonomous_core_status.update({
+            "enabled": False, "running": False, "recovered_tasks": 0,
+        })
+
+
+def test_autonomous_core_can_be_disabled_explicitly(monkeypatch, tmp_path):
+    monkeypatch.setenv("IAO_AUTONOMY_WORKER_ENABLED", "false")
+    monkeypatch.setenv("IAO_STATE_DIR", str(tmp_path / "state"))
+    main._autonomous_core = None
+    assert main._ensure_autonomous_core() is None
+    assert main._autonomous_core_status["enabled"] is False
+    assert main._autonomous_core_status["running"] is False
