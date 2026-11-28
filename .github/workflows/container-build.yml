@@ -40,6 +40,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cat > /tmp/iao-process-boundary-check.py <<'PY'
+          from omega.tools.knowledge_search import KnowledgeCorpus
+          from omega.tools.process_runner import run_tool_isolated
+
+          def main():
+              corpus = KnowledgeCorpus("/app/knowledge")
+              payload = corpus.validate_input({"query": "IAO", "limit": 1})
+              output, verdict = run_tool_isolated(corpus.run, corpus.verify, payload, 5)
+              assert verdict == "PASS", verdict
+              assert output.get("tool") == "knowledge.search"
+              print("resource_limited_tool_process=PASS")
+
+          if __name__ == "__main__":
+              main()
+          PY
           docker run --detach --rm --name iao-api-qualification \
             --publish 127.0.0.1:18080:8080 iao-api:qualification
           cleanup() {
@@ -57,20 +72,6 @@ jobs:
           test "$ready" = 1
           curl --fail --silent http://127.0.0.1:18080/health/live
           docker exec iao-api-qualification python -c "from pathlib import Path; p=Path('/app/knowledge'); files=sorted(p.glob('*.txt')); assert len(files) >= 1, 'production knowledge corpus missing'; assert (p/'omega-overview.txt').is_file(), 'required corpus document missing'; print('knowledge_corpus_files=' + str(len(files)))"
-          docker exec iao-api-qualification sh -c 'cat > /tmp/iao-process-boundary-check.py <<'"'PY'
-          from omega.tools.knowledge_search import KnowledgeCorpus
-          from omega.tools.process_runner import run_tool_isolated
-
-          def main():
-              corpus = KnowledgeCorpus("/app/knowledge")
-              payload = corpus.validate_input({"query": "IAO", "limit": 1})
-              output, verdict = run_tool_isolated(corpus.run, corpus.verify, payload, 5)
-              assert verdict == "PASS", verdict
-              assert output.get("tool") == "knowledge.search"
-              print("resource_limited_tool_process=PASS")
-
-          if __name__ == "__main__":
-              main()
-          PY'
+          docker cp /tmp/iao-process-boundary-check.py iao-api-qualification:/tmp/iao-process-boundary-check.py
           docker exec iao-api-qualification python /tmp/iao-process-boundary-check.py
           docker logs iao-api-qualification
