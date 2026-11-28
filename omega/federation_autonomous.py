@@ -27,8 +27,15 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
     parent = path.parent
     if path.is_symlink():
         raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
-    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     absolute_parent = parent.absolute()
+    # Inspect existing ancestors BEFORE mkdir: mkdir(parents=True) would
+    # otherwise follow a symlink and could create directories outside state.
+    if any(
+        component.is_symlink()
+        for component in (absolute_parent, *absolute_parent.parents)
+    ):
+        raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_PARENT_REFUSED")
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not parent.is_dir() or any(
         component.is_symlink()
         for component in (absolute_parent, *absolute_parent.parents)
@@ -196,8 +203,15 @@ def _append_cycle_audit(state_dir: Path, summary: dict[str, Any]) -> None:
     import stat
 
     state_dir = Path(state_dir)
-    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     absolute_dir = state_dir.absolute()
+    # Check ancestors before creating anything, so a symlinked parent cannot
+    # redirect mkdir(parents=True) into an unrelated directory.
+    if any(
+        component.is_symlink()
+        for component in (absolute_dir, *absolute_dir.parents)
+    ):
+        raise RuntimeError("FEDERATION_AUDIT_DIRECTORY_REFUSED")
+    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not state_dir.is_dir() or any(
         component.is_symlink()
         for component in (absolute_dir, *absolute_dir.parents)
