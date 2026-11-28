@@ -169,6 +169,50 @@ class EgressTests(unittest.TestCase):
     def test_timeout(self) -> None:
         self.denied(self.u("/slow"), "TIMEOUT", total_timeout=0.5)
 
+
+    def test_explicit_public_internet_mode_accepts_arbitrary_public_hostname(self) -> None:
+        from omega.egress import _check_url, _resolve
+
+        def public_dns(host: str, port: int, **kwargs: object) -> list:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        policy = EgressPolicy(
+            allow_public_hosts=True,
+            allowed_ports=frozenset({443}),
+            resolver=public_dns,
+        )
+        scheme, host, port, _path, _url = _check_url(
+            "https://arbitrary-public.example/resource", policy
+        )
+        self.assertEqual((scheme, host, port), ("https", "arbitrary-public.example", 443))
+        self.assertEqual(_resolve(host, port, policy), "93.184.216.34")
+
+    def test_public_internet_mode_still_denies_private_dns_answers(self) -> None:
+        from omega.egress import _resolve
+
+        def rebinding_dns(host: str, port: int, **kwargs: object) -> list:
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", port)),
+            ]
+
+        policy = EgressPolicy(
+            allow_public_hosts=True,
+            allowed_ports=frozenset({443}),
+            resolver=rebinding_dns,
+        )
+        with self.assertRaises(EgressDenied) as caught:
+            _resolve("arbitrary-public.example", 443, policy)
+        self.assertEqual(caught.exception.code, "PRIVATE_ADDRESS")
+
+    def test_public_internet_mode_does_not_allow_unapproved_plain_http(self) -> None:
+        from omega.egress import _check_url
+
+        policy = EgressPolicy(allow_public_hosts=True)
+        with self.assertRaises(EgressDenied) as caught:
+            _check_url("http://arbitrary-public.example/", policy)
+        self.assertEqual(caught.exception.code, "SCHEME_NOT_ALLOWED")
+
     def test_connection_refused_classified(self) -> None:
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
