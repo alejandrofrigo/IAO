@@ -26,7 +26,8 @@ def test_proposal_records_hashes_and_is_approved_only_for_staging(isolated_evolu
     created = evolution.submit(proposal())
     evaluated = evolution.evaluate(created["id"])
 
-    assert evaluated["status"] == "APPROVED_FOR_STAGING"
+    assert evaluated["status"] == "STATIC_CHECKS_PASSED"
+    assert evaluated["promotion_eligible"] is False
     assert evaluated["validation"] == {
         "manifest_valid": True,
         "content_hashes_valid": True,
