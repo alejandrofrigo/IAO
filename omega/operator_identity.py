@@ -1298,15 +1298,13 @@ class OperatorIdentityAuthority:
                     FROM operator_session_bindings b
                     JOIN operator_identities i ON i.identity_id=b.identity_id
                     JOIN primary_device_bindings p ON p.identity_id=i.identity_id
-                    WHERE i.status='ACTIVE'"""
+                    WHERE i.status='ACTIVE'
+                    AND b.subject_digest=? AND b.session_digest=? AND p.device_id=?""",
+                    (subject_digest, session_digest, device_id),
                 ).fetchone()
                 if (
                     row is None or row["key_version"] != row["active_key_version"]
                     or row["device_key_version"] != row["active_key_version"]
-                    or not hmac.compare_digest(row["subject_digest"], subject_digest)
-                    or not isinstance(row["session_digest"], str)
-                    or not hmac.compare_digest(row["session_digest"], session_digest)
-                    or not hmac.compare_digest(row["device_id"], device_id)
                 ):
                     raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
                 yield True
