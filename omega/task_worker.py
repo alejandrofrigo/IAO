@@ -209,7 +209,18 @@ class TaskWorker:
                     except (KeyError, TypeError, ValueError):
                         remaining_lease = 0.0
                     if remaining_lease <= timeout + 5:
-                        raise TimeoutError("WORKER_LEASE_EXPIRING_BEFORE_TOOL")
+                        self.store.add_tool_execution(
+                            task_id, spec.name, spec.version, "DENIED",
+                            digest_in, None, "LEASE_EXPIRING", started,
+                            datetime.now(timezone.utc).isoformat(),
+                        )
+                        return self._finish(
+                            task_id, owner, "FAILED",
+                            {
+                                "decision": "DENY",
+                                "error": "WORKER_LEASE_EXPIRING_BEFORE_TOOL",
+                            },
+                        )
                     output, verdict = self.tool_executor(
                         spec.run, spec.verify, clean, timeout
                     )
