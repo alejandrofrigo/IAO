@@ -102,3 +102,19 @@ def test_maintenance_scheduler_bounds_terminal_task_history():
         finished = [task for task in data["tasks"] if task.get("status") == "COMPLETED"]
         assert len(finished) == 1000
         assert any(task.get("id") == "still-active" for task in data["tasks"])
+
+
+def test_improvement_plan_reports_repository_gaps_without_mutating_code():
+    with tempfile.TemporaryDirectory() as tmp:
+        core = AutonomousCore(tmp)
+        before = Path("omega/autonomous_core.py").read_bytes()
+        report = core._build_improvement_plan()
+        after = Path("omega/autonomous_core.py").read_bytes()
+
+        assert report["status"] == "READ_ONLY_REPOSITORY_SCAN"
+        assert report["module_count"] > 0
+        assert report["test_file_count"] > 0
+        assert report["code_changes_applied"] is False
+        assert report["candidate_code_executed"] is False
+        assert "Heuristic filename mapping" in report["coverage_interpretation"]
+        assert before == after
