@@ -21,7 +21,7 @@
 
 **No se permite el enrolamiento automático de peers remotos todavía.** Una firma Ed25519 válida demuestra posesión de una clave, pero no demuestra por sí sola que el canal de transporte sea seguro. El código anterior aceptaba campos JSON como https_verified=true y redirected=false; esos booleanos podían ser falsificados por quien construyera el objeto de evidencia.
 
-Por ello, las rutas CandidateRegistry.record_verified_identity() y CandidateRegistry.authorize() fallan cerradas con TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED. El pipeline autónomo también bloquea el enrolamiento de peers no-loopback, incluso si la configuración declara require_mutual_tls=true. Esa configuración no sustituye una prueba real de mTLS ligada a la conexión.
+Por ello, las rutas CandidateRegistry.record_verified_identity() y CandidateRegistry.authorize() fallan cerradas con TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED. El pipeline autónomo también bloquea todo enrolamiento remoto: `_enroll_one()` devuelve TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED antes de realizar cualquier petición de red. La configuración opcional de certificado cliente solo demuestra que el cliente puede presentar un certificado; no demuestra que el servidor remoto lo haya exigido y validado en esa misma conexión. Ni `require_mutual_tls=true` ni campos declarativos sustituyen una atestación verificable ligada a la conexión.
 
 El descubrimiento continúa disponible, pero un peer descubierto no obtiene confianza, permisos, acceso al corpus privado, capacidad de ejecutar código ni autoridad sobre IAO. El pipeline también evita iniciar handshakes HTTP salientes hacia peers remotos hasta que exista el transporte confiable; solo se permiten pruebas loopback de desarrollo.
 
