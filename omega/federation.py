@@ -391,7 +391,7 @@ class Node:
         try:
             if publication.get("protocol") != "iao-federation-publication":
                 return False
-            if publication.get("version") != 1:
+            if type(publication.get("version")) is not int or publication.get("version") != 1:
                 return False
             pub = bytes.fromhex(publication["public_key"])
             peer_id = publication.get("node_id")
@@ -557,24 +557,41 @@ class Node:
                 raise FedDenied(413, "PAYLOAD_TOO_LARGE")
             try:
                 env = json.loads(raw)
-                peer = str(env["from"])
-                if not isinstance(env, dict) or env.get("v") != 1:
-                    raise ValueError
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, UnicodeDecodeError):
                 raise FedDenied(400, "MALFORMED") from None
-            if env.get("to") != self.node_id:
-                raise FedDenied(403, "WRONG_RECIPIENT")          # a message captured for node X is useless at node Y
+            if not isinstance(env, dict):
+                raise FedDenied(400, "MALFORMED")
+            peer = env.get("from")
+            recipient = env.get("to")
+            timestamp = env.get("ts")
+            nonce = env.get("nonce")
+            if (
+                type(env.get("v")) is not int
+                or env.get("v") != 1
+                or not isinstance(peer, str)
+                or len(peer) != 16
+                or any(ch not in "0123456789abcdef" for ch in peer)
+                or not isinstance(recipient, str)
+                or len(recipient) != 16
+                or any(ch not in "0123456789abcdef" for ch in recipient)
+                or isinstance(timestamp, bool)
+                or not isinstance(timestamp, (int, float))
+                or not math.isfinite(float(timestamp))
+                or not isinstance(nonce, str)
+                or len(nonce) < 16
+                or len(nonce) > 256
+            ):
+                raise FedDenied(400, "MALFORMED")
+            if recipient != self.node_id:
+                raise FedDenied(403, "WRONG_RECIPIENT")
             c = self.peers.get(peer)
             if c is None:
                 raise FedDenied(403, "UNKNOWN_PEER")
             if not _verify(c["pub"], env):
                 raise FedDenied(403, "BAD_SIGNATURE")
             now = self.clock()
-            if abs(now - float(env.get("ts", 0))) > self.skew:
+            if abs(now - float(timestamp)) > self.skew:
                 raise FedDenied(403, "CLOCK_SKEW")
-            nonce = str(env.get("nonce", ""))
-            if len(nonce) < 16:
-                raise FedDenied(400, "MALFORMED")
             with self._lock:
                 self._seen = {k: t for k, t in self._seen.items() if now - t <= 2 * self.skew}
                 if (peer, nonce) in self._seen:
