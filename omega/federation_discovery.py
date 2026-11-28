@@ -55,7 +55,7 @@ def _request_manifest(full_name, branch, path):
         raise ValueError("INVALID_REPOSITORY_NAME")
     if not isinstance(branch, str) or not branch or len(branch) > 255:
         raise ValueError("INVALID_DEFAULT_BRANCH")
-    encoded_path = urllib.parse.quote(path, safe="")
+    encoded_path = urllib.parse.quote(path, safe="/")
     url = (
         "https://api.github.com/repos/" + full_name + "/contents/"
         + encoded_path + "?" + urllib.parse.urlencode({"ref": branch})
