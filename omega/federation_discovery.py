@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -132,6 +133,8 @@ def _valid_manifest(obj):
         return False, "INVALID_NODE_ID"
     if not isinstance(public_key, str) or not re.fullmatch(r"[0-9a-f]{64}", public_key):
         return False, "INVALID_PUBLIC_KEY"
+    if hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16] != node_id:
+        return False, "NODE_ID_PUBLIC_KEY_MISMATCH"
 
     if not isinstance(origin, str):
         return False, "INVALID_ORIGIN"
