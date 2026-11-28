@@ -13,7 +13,7 @@ python tools/iao_node_factory.py create --count 3 --role worker
 python tools/iao_node_factory.py status
 ```
 
-The batch limit is 10. Each node receives a distinct Ed25519 identity. Private
+The batch limit is 10. A batch is rolled back if any later node creation fails, so a failed batch does not leave a misleading partial set. Each node receives a distinct Ed25519 identity. Private
 keys remain in the local node workspace under `identity/private.key` with
 0600 permissions; parent directories are private where supported. The factory
 never prints, exports, uploads, or commits private keys.
