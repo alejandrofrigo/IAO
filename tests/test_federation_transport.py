@@ -23,12 +23,13 @@ class FakeResponse:
 class FakeConnection:
     response = FakeResponse()
 
-    def __init__(self, hostname, address, *, port=443, timeout, context):
+    def __init__(self, hostname, address, *, port=443, timeout, context, expected_peer_id=None):
         self.hostname = hostname
         self.address = address
         self.port = port
         self.timeout = timeout
         self.context = context
+        self.expected_peer_id = expected_peer_id
         self.request_args = None
         self.closed = False
 
@@ -92,9 +93,10 @@ def test_dns_resolution_rejects_private_and_mixed_public_private(monkeypatch):
 def test_fetch_public_json_pins_ip_and_parses_json(monkeypatch):
     created = []
 
-    def factory(hostname, address, *, port=443, timeout, context):
+    def factory(hostname, address, *, port=443, timeout, context, expected_peer_id=None):
         conn = FakeConnection(
-            hostname, address, port=port, timeout=timeout, context=context
+            hostname, address, port=port, timeout=timeout, context=context,
+            expected_peer_id=expected_peer_id,
         )
         created.append(conn)
         return conn
@@ -324,7 +326,8 @@ def test_post_public_json_uses_pinned_public_https_and_no_redirect(monkeypatch):
     calls = []
     monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
     def factory(hostname, address, *, port=443, timeout, context):
-        conn = FakeConnection(hostname, address, port=port, timeout=timeout, context=context)
+        conn = FakeConnection(hostname, address, port=port, timeout=timeout, context=context,
+                              expected_peer_id=expected_peer_id)
         calls.append(conn)
         return conn
     monkeypatch.setattr(transport, "_PinnedHTTPSConnection", factory)
