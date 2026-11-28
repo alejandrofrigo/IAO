@@ -89,3 +89,21 @@ def test_model_output_is_bounded_and_nonempty():
     engine = CognitiveEngine(model, planning_enabled=False)
     with pytest.raises(CognitiveEngineError):
         engine.chat([{"role": "user", "content": "Hi"}])
+
+
+def test_server_runtime_wiring_is_explicitly_opt_in(monkeypatch):
+    from omega.server import _configure_cognitive_engine
+
+    class StubModel:
+        def chat(self, messages):
+            return "answer"
+
+    model = StubModel()
+    monkeypatch.delenv("IAO_COGNITIVE_ENGINE_ENABLED", raising=False)
+    assert _configure_cognitive_engine(model) is model
+
+    monkeypatch.setenv("IAO_COGNITIVE_ENGINE_ENABLED", "1")
+    monkeypatch.setenv("IAO_COGNITIVE_PLANNING_ENABLED", "false")
+    wrapped = _configure_cognitive_engine(model)
+    assert isinstance(wrapped, CognitiveEngine)
+    assert wrapped.planning_enabled is False
