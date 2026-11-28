@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from omega.service import POLICY_VERSION
+from omega.operator_identity import OperatorIdentityError
 from omega.task_worker import TaskWorker
 from omega.tools.registry import ToolRegistry, ToolSpec
 
@@ -41,10 +43,16 @@ class _ClaimedTaskStore:
 
 
 class _RevokedAuthority:
-    def verify_primary_device_for_session_digest(
-        self, owner: str, session_digest: str, device_id: str
-    ) -> bool:
-        raise RuntimeError("authority revoked")
+    @contextmanager
+    def authorize_tool_execution(self, owner: str, session_digest: str, device_id: str):
+        raise OperatorIdentityError("PRIMARY_DEVICE_NOT_AUTHORIZED", 403)
+        yield False
+
+
+class _ActiveAuthority:
+    @contextmanager
+    def authorize_tool_execution(self, *_args):
+        yield True
 
 
 
@@ -213,8 +221,9 @@ def test_worker_fails_closed_when_primary_device_or_session_was_revoked():
 
 
 class _FalseAuthority:
-    def verify_primary_device_for_session_digest(self, *_args):
-        return False
+    @contextmanager
+    def authorize_tool_execution(self, *_args):
+        yield False
 
 
 def test_worker_fails_closed_when_authority_returns_false():
@@ -282,9 +291,7 @@ def test_worker_recovers_expired_leases_while_process_remains_alive():
     [True, 10**400, float("inf"), float("nan"), 0, -1],
 )
 def test_worker_rejects_invalid_timeout_budget_before_tool_execution(timeout_value):
-    worker, store, calls = _worker(type("ActiveAuthority", (), {
-        "verify_primary_device_for_session_digest": lambda self, *_args: True
-    })())
+    worker, store, calls = _worker(_ActiveAuthority())
     intent = json.loads(store.task["intent_json"])
     intent["budget"]["timeout_seconds"] = timeout_value
     store.task["intent_json"] = json.dumps(intent)
@@ -297,9 +304,7 @@ def test_worker_rejects_invalid_timeout_budget_before_tool_execution(timeout_val
 
 
 def test_worker_rejects_lease_without_timeout_and_cleanup_margin():
-    worker, store, calls = _worker(type("ActiveAuthority", (), {
-        "verify_primary_device_for_session_digest": lambda self, *_args: True
-    })())
+    worker, store, calls = _worker(_ActiveAuthority())
     worker.lease_seconds = 7  # tool timeout is 2s; required margin is 5s
 
     assert worker.run_once() is True
