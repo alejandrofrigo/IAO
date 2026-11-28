@@ -157,3 +157,21 @@ class FederationDiscoveryTransportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+    def test_manifest_accepts_explicit_v3_onion_origin(self):
+        public_key = "22" * 32
+        node_id = hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16]
+        manifest = {
+            "protocol": "iao-federation",
+            "version": 1,
+            "consent": True,
+            "node_id": node_id,
+            "public_key": public_key,
+            "origin": "http://" + "h" * 56 + ".onion",
+        }
+        self.assertEqual(
+            discovery._valid_manifest(manifest),
+            (True, "MANIFEST_UNVERIFIED"),
+        )
