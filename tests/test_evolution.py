@@ -93,3 +93,62 @@ def test_evolution_log_detects_tampering(isolated_evolution_state):
 
     with pytest.raises(RuntimeError, match="Registro de evolución"):
         evolution.evaluate(created["id"])
+
+
+def test_invalid_python_syntax_is_rejected_without_execution(isolated_evolution_state):
+    value = proposal()
+    value["files"]["omega/example_helper.py"] = "def answer(:\n    return 42\n"
+    created = evolution.submit(value)
+
+    evaluated = evolution.evaluate(created["id"])
+
+    assert evaluated["status"] == "REJECTED"
+    assert evaluated["promotion_eligible"] is False
+    assert evaluated["validation"]["content_hashes_valid"] is True
+    assert evaluated["validation"]["syntax_valid"] is False
+    assert any("SYNTAX_INVALID" in item for item in evaluated["failures"])
+
+
+def test_invalid_utf8_candidate_is_rejected_and_audited(isolated_evolution_state):
+    created = evolution.submit(proposal())
+    candidate = evolution.CANDIDATES / created["id"] / "omega/example_helper.py"
+    candidate.write_bytes(b"\xff\xfe\xfa")
+    metadata = json.loads(
+        (evolution.CANDIDATES / created["id"] / "proposal.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    # Keep the manifest's expected digest so the failure exercises UTF-8 decoding.
+    import hashlib
+    metadata["file_hashes"]["omega/example_helper.py"] = hashlib.sha256(
+        b"\xff\xfe\xfa"
+    ).hexdigest()
+    clean = {
+        "title": metadata["title"],
+        "files": {"omega/example_helper.py": "\ufffd"},
+        "checks": metadata["checks"],
+    }
+    # A deliberately matching proposal hash is unnecessary: UTF-8 must fail first.
+    (evolution.CANDIDATES / created["id"] / "proposal.json").write_text(
+        json.dumps(metadata), encoding="utf-8"
+    )
+
+    evaluated = evolution.evaluate(created["id"])
+
+    assert evaluated["status"] == "REJECTED"
+    assert evaluated["validation"]["content_hashes_valid"] is False
+    assert any("UTF8_INVALID" in item for item in evaluated["failures"])
+
+
+def test_proposal_hash_mismatch_is_rejected(isolated_evolution_state):
+    created = evolution.submit(proposal())
+    metadata = evolution.CANDIDATES / created["id"] / "proposal.json"
+    value = json.loads(metadata.read_text(encoding="utf-8"))
+    value["proposal_hash"] = "0" * 64
+    metadata.write_text(json.dumps(value), encoding="utf-8")
+
+    evaluated = evolution.evaluate(created["id"])
+
+    assert evaluated["status"] == "REJECTED"
+    assert evaluated["validation"]["content_hashes_valid"] is False
+    assert "PROPOSAL_HASH_MISMATCH" in evaluated["failures"]
