@@ -140,6 +140,16 @@ class IdentityChallengeVerificationTests(FedBase):
         result = self.verify(identity, response, nonce, request_ts)
         self.assertEqual(result["error"], "CHALLENGE_BINDING_MISMATCH")
 
+    def test_duplicate_challenge_request_key_is_rejected(self):
+        raw = (
+            b'{"v":1,"v":1,"from":"' + self.a.node_id.encode()
+            + b'","to":"' + self.b.node_id.encode()
+            + b'","nonce":"' + (b"e" * 64)
+            + b'","ts":1000000.0}'
+        )
+        status, payload = self.b.answer_challenge(raw)
+        self.assertEqual((status, payload["error"]), (400, "INVALID_CHALLENGE"))
+
     def test_boolean_challenge_request_version_is_rejected(self):
         request = {
             "v": True,
@@ -214,6 +224,20 @@ class HappyAndAuthTests(FedBase):
 
 
 class ReplayAndTimeTests(FedBase):
+    def test_duplicate_top_level_json_key_is_rejected(self) -> None:
+        envelope = _sign(self.a.key, self.env(nonce="duplicate-key-top-0001"))
+        raw = json.dumps(envelope).encode()
+        raw = raw[:-1] + b',"v":1}'
+        status, payload = self.b.handle(raw)
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
+    def test_duplicate_nested_json_key_is_rejected(self) -> None:
+        envelope = _sign(self.a.key, self.env(nonce="duplicate-key-nest-01"))
+        raw = json.dumps(envelope).encode()
+        raw = raw.replace(b'"query": "hello"', b'"query": "hello", "query": "other"')
+        status, payload = self.b.handle(raw)
+        self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
+
     def test_boolean_protocol_version_is_rejected_even_when_signed(self) -> None:
         status, payload = self.raw(self.env(v=True, nonce="boolean-version-0001"))
         self.assertEqual((status, payload["error"]), (400, "MALFORMED"))
