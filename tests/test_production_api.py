@@ -366,4 +366,9 @@ def test_production_readiness_blocks_development_secret_even_with_audit_key(monk
 
 def test_self_hosted_compose_forces_production_auth_mode():
     compose = Path(__file__).resolve().parents[1] / "deploy" / "compose.yaml"
-    assert "APP_ENV: production" in compose.read_text(encoding="utf-8")
+    config = compose.read_text(encoding="utf-8")
+    assert "APP_ENV: production" in config
+    assert "/health/ready" in config
+    assert "d.get('status') == 'ready'" in config
+    assert "runtime_startup" in config
+    assert "/health/live" not in config
