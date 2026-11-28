@@ -55,14 +55,14 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
 
 def test_production_mode_refuses_development_hmac_auth(monkeypatch, tmp_path) -> None:
     client = configured_client(monkeypatch, tmp_path)
-    monkeypatch.setenv("APP_ENV", "production")
+    for environment in ("production", "staging", "prod", "unknown"):
+        monkeypatch.setenv("APP_ENV", environment)
+        readiness = client.get("/health/ready")
+        assert readiness.status_code == 503
+        assert readiness.json()["status"] == "not_ready"
 
-    readiness = client.get("/health/ready")
-    assert readiness.status_code == 503
-    assert readiness.json()["status"] == "not_ready"
-
-    public_session = client.post("/v1/public/session", json={})
-    assert public_session.status_code == 503
+        public_session = client.post("/v1/public/session", json={})
+        assert public_session.status_code == 503
 
 
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
