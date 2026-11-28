@@ -20,7 +20,6 @@ services:
       AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?Set AUDIT_HMAC_KEY}
       IAO_CORS_ORIGINS: ${IAO_CORS_ORIGINS:?Set IAO_CORS_ORIGINS to the public chat origin}
       IAO_AUTONOMY_WORKER_ENABLED: "true"
-      IAO_LLM_ROUTER: "1"
     volumes:
       - iao-state:/var/lib/iao
     read_only: true
