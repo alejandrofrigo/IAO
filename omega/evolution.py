@@ -241,13 +241,14 @@ def evaluate(proposal_id: str) -> dict:
         _record({"type": "PROPOSAL_REJECTED", "id": proposal_id,
                  "failures": failures})
     else:
-        meta["status"] = "APPROVED_FOR_STAGING"
+        meta["status"] = "STATIC_CHECKS_PASSED"
         meta["validation"] = {
             "manifest_valid": True,
             "content_hashes_valid": True,
             "syntax_valid": True,
             "candidate_code_executed": False,
         }
+        meta["promotion_eligible"] = False
         meta["notice"] = (
             "Solo integridad y sintaxis verificadas. No se ejecutó el candidato; "
             "faltan pruebas funcionales, seguridad y revisión de integración. "
