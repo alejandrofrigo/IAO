@@ -68,7 +68,7 @@ def test_execution_permit_serializes_cross_connection_root_revocation(tmp_path):
         revoke_started.set()
         try:
             payload = b"revoke-root-v1\n" + identity_id.encode("ascii")
-            signature = root_private.sign(payload, ec.ECDSA(hashes.SHA256()))
+            signature = root_private.sign(authority._signed_message(payload), ec.ECDSA(hashes.SHA256()))
             authority.revoke(
                 identity_id, signature, expected_key_version=1,
             )
