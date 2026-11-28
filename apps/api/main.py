@@ -339,10 +339,12 @@ def ready():
             content={
                 "status": "not_ready",
                 "reason": "PERSISTENT_RUNTIME_UNAVAILABLE",
+                "runtime_startup": dict(_runtime_startup_status),
             },
         )
     if status != 200 or payload.get("status") == "not_ready":
         payload["status"] = "not_ready"
+        payload["runtime_startup"] = dict(_runtime_startup_status)
         return JSONResponse(status_code=503, content=payload)
     # Infrastructure readiness is not equivalent to production readiness:
     # device-bound command authority and independent federation are still
