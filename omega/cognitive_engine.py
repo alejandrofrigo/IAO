@@ -61,8 +61,9 @@ class CognitiveEngine:
             candidate = candidate.split("\n", 1)[-1]
             if candidate.endswith("```"):
                 candidate = candidate[:-3].strip()
-            if candidate.lower().startswith("json\n"):
-                candidate = candidate[5:].strip()
+        # Some providers prepend a bare format label without Markdown fences.
+        if candidate.lower().startswith("json\n"):
+            candidate = candidate[5:].strip()
         try:
             value = json.loads(candidate)
         except (ValueError, TypeError):
