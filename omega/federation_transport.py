@@ -373,7 +373,7 @@ def _request_json(
                 raise FederationTransportError("RESPONSE_TOO_LARGE")
             try:
                 decoded = _json_without_duplicate_keys(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            except (UnicodeDecodeError, ValueError) as exc:
                 raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
             return response.status, decoded
         except FederationTransportError:
@@ -482,7 +482,7 @@ def fetch_onion_json(
             raise FederationTransportError("RESPONSE_TOO_LARGE")
         try:
             return _json_without_duplicate_keys(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, ValueError) as exc:
             raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
     except FederationTransportError:
         raise
@@ -591,7 +591,7 @@ def post_onion_federation_json(
             raise FederationTransportError("RESPONSE_TOO_LARGE")
         try:
             decoded = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, ValueError) as exc:
             raise FederationTransportError("INVALID_JSON_RESPONSE") from exc
         return response.status, decoded
     except FederationTransportError:
