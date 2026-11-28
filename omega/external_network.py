@@ -420,7 +420,8 @@ class ExternalNetwork:
                         "discovered": 0, "added": 0}
             registry = self._load_registry()
             candidates = registry["candidates"]
-            p2p_peers = registry.setdefault("p2p_peers", {})\n            protocol_peers = registry.setdefault("protocol_peers", {})
+            p2p_peers = registry.setdefault("p2p_peers", {})
+            protocol_peers = registry.setdefault("protocol_peers", {})
             totals = {"status": "COMPLETED", "sources": 0, "source_errors": 0,
                       "discovered": 0, "added": 0, "refreshed": 0}
             for source in self.sources:
@@ -540,7 +541,8 @@ class ExternalNetwork:
             registry["candidates"] = {
                 item["candidate_id"]: item for item in ordered[:MAX_CANDIDATES]
             }
-            registry["p2p_peers"] = dict(list(p2p_peers.items())[-MAX_CANDIDATES:])\n            registry["protocol_peers"] = dict(list(protocol_peers.items())[-MAX_CANDIDATES:])
+            registry["p2p_peers"] = dict(list(p2p_peers.items())[-MAX_CANDIDATES:])
+            registry["protocol_peers"] = dict(list(protocol_peers.items())[-MAX_CANDIDATES:])
             registry["updated_at"] = _utc()
             self._save_registry(registry)
             self._audit("EXTERNAL_NETWORK_CYCLE_COMPLETED", **totals)
