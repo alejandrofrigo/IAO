@@ -30,7 +30,7 @@ class FederationDiscoveryTransportTests(unittest.TestCase):
         encoded = base64.b64encode(
             json.dumps(manifest).encode("utf-8")
         ).decode("ascii")
-        request.return_value = {"encoding": "base64", "content": encoded}
+        request.return_value = {"encoding": "base64", "content": encoded[:20] + "\\n" + encoded[20:]}
 
         result = discovery._request_manifest(
             "owner/repo", "main", ".well-known/iao-federation.json"
