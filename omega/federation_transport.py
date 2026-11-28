@@ -222,7 +222,7 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
         )
 
 
-def _client_tls_context() -> ssl.SSLContext:
+def _client_tls_context(*, require_client_cert: bool = False) -> ssl.SSLContext:
     ca_file = os.environ.get("IAO_TLS_CA_FILE") or None
     try:
         context = ssl.create_default_context(cafile=ca_file)
@@ -230,9 +230,9 @@ def _client_tls_context() -> ssl.SSLContext:
         raise FederationTransportError("TLS_CA_CONFIGURATION_INVALID") from exc
     cert_file = os.environ.get("IAO_TLS_CLIENT_CERT_FILE")
     key_file = os.environ.get("IAO_TLS_CLIENT_KEY_FILE")
-    require_client_cert = os.environ.get("IAO_TLS_REQUIRE_CLIENT_CERT", "").lower() in {
-        "1", "true", "yes",
-    }
+    require_client_cert = require_client_cert or os.environ.get(
+        "IAO_TLS_REQUIRE_CLIENT_CERT", ""
+    ).lower() in {"1", "true", "yes"}
     if bool(cert_file) != bool(key_file):
         raise FederationTransportError("INCOMPLETE_CLIENT_CERT_CONFIGURATION")
     if require_client_cert and not cert_file:
@@ -264,6 +264,7 @@ def _request_json(
     max_bytes: int,
     allow_loopback_http: bool,
     allow_public_post: bool = False,
+    require_client_cert: bool = False,
 ) -> tuple[int, object]:
     if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
         raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
@@ -276,7 +277,7 @@ def _request_json(
             raise FederationTransportError("LOOPBACK_HTTP_NOT_ALLOWED")
     if scheme == "https":
         addresses = resolve_public_addresses(host, port)
-        context = _client_tls_context()
+        context = _client_tls_context(require_client_cert=require_client_cert)
     else:
         addresses = _resolve_loopback(host, port)
         context = None
@@ -491,7 +492,7 @@ def post_federation_json(
         )
     return _request_json(
         "POST", url, payload, timeout=timeout, max_bytes=max_bytes,
-        allow_loopback_http=True,
+        allow_loopback_http=True, require_client_cert=True,
     )
 
 
