@@ -486,3 +486,45 @@ def test_tool_completion_and_audit_roll_back_together_on_audit_failure(tmp_path,
     assert len(store._all_events()) == before_events
     assert store.verify_audit()[0] is True
     store.close()
+
+
+@pytest.mark.parametrize(
+    ("execution_status", "execution_error"),
+    [("TIMED_OUT", "TIMED_OUT"), ("FAILED", "TOOL_ERROR")],
+)
+def test_failed_tool_outcome_and_task_state_commit_atomically(
+    tmp_path, execution_status, execution_error
+):
+    from omega.store import Store
+
+    store = Store(
+        tmp_path / f"atomic-{execution_status.lower()}.db",
+        b"worker-test-audit-key-0123456789",
+    )
+    task_id = f"atomic-{execution_status.lower()}-task"
+    owner = "operator:atomic-test"
+    task, created = store.create_task(task_id, owner, {}, None)
+    assert created is True
+    store.set_task_state(task_id, "AUTHORIZED")
+    assert store.queue_task(task_id) is True
+    assert store.claim_next_task("atomic-worker", lease_seconds=60) is not None
+
+    committed = store.finalize_claimed_tool_execution(
+        task_id, "atomic-worker", owner, "FAILED",
+        {"decision": "ALLOW", "error": execution_error},
+        "knowledge.search", "1", "a" * 64, None,
+        datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+        execution_status=execution_status,
+        execution_error_code=execution_error,
+    )
+    assert committed is True
+    assert store.get_task(task_id, owner)["state"] == "FAILED"
+    executions = store.tool_executions(task_id)
+    assert len(executions) == 1
+    assert executions[0]["status"] == execution_status
+    assert executions[0]["error_code"] == execution_error
+    events = store._all_events()
+    assert events[-1]["event_type"] == "TASK_STATE"
+    assert events[-1]["details"]["error"] == execution_error
+    assert store.verify_audit()[0] is True
+    store.close()
