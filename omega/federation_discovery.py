@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from omega.federation_transport import fetch_public_json
+from omega.federation_autonomous import _write_registry
 
 _INTERVAL = max(300, int(os.environ.get("IAO_FED_DISCOVERY_INTERVAL", "1800")))
 _THREAD = None
@@ -155,6 +156,46 @@ def _valid_manifest(obj):
     return True, "MANIFEST_UNVERIFIED"
 
 
+def _persist_candidate(state, manifest, repository):
+    """Persist a discovery lead separately from trust and enrollment state."""
+    state = Path(state)
+    registry_path = state / "iao-node-network" / "discovered-candidates.json"
+    if registry_path.is_symlink():
+        raise RuntimeError("FEDERATION_CANDIDATE_REGISTRY_SYMLINK_REFUSED")
+    if registry_path.exists():
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    else:
+        data = {"schema": 1, "candidates": {}}
+    if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("candidates"), dict):
+        raise RuntimeError("FEDERATION_CANDIDATE_REGISTRY_INVALID")
+    origin = manifest["origin"]
+    node_id = manifest["node_id"]
+    candidate_id = hashlib.sha256((node_id + "|" + origin).encode("utf-8")).hexdigest()
+    now = _now()
+    existing = data["candidates"].get(candidate_id)
+    if isinstance(existing, dict):
+        # Refresh discovery metadata only; never overwrite trust or grants.
+        existing["last_seen"] = now
+        existing["last_seen_repository"] = repository
+        _write_registry(registry_path, data)
+        return candidate_id, False
+    requested = manifest.get("capabilities", [])
+    if not isinstance(requested, list):
+        requested = []
+    requested = [item[:128] for item in requested if isinstance(item, str) and item and len(item) <= 128][:32]
+    data["candidates"][candidate_id] = {
+        "candidate_id": candidate_id, "node_id": node_id,
+        "origin": origin, "public_key": manifest["public_key"],
+        "source": "github_public_repository_search",
+        "source_repository": repository,
+        "status": "DISCOVERED_UNVERIFIED", "identity_verified": False,
+        "enrolled": False, "first_seen": now, "last_seen": now,
+        "requested_capabilities": requested, "granted_capabilities": [],
+        "remote_code_execution": False, "private_data_access": False,
+    }
+    _write_registry(registry_path, data)
+    return candidate_id, True
+
 def _inspect_repo(repo, state):
     full_name = repo.get("full_name")
     branch = repo.get("default_branch") or "main"
@@ -183,8 +224,11 @@ def _inspect_repo(repo, state):
             })
             continue
 
+        candidate_id, created = _persist_candidate(state, manifest, full_name)
         _append(state, {
             "event": "NODE_CANDIDATE_DISCOVERED",
+            "candidate_id": candidate_id,
+            "candidate_created": created,
             "repository": full_name,
             "node_id": manifest["node_id"],
             "origin": manifest["origin"],
