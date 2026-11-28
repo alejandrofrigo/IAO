@@ -2,6 +2,7 @@
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from apps.api import main
 
@@ -361,3 +362,8 @@ def test_production_readiness_blocks_development_secret_even_with_audit_key(monk
     assert response.json()["runtime_startup"] == {
         "status": "blocked", "reason": "PRODUCTION_TOKEN_SIGNING_KEY_REQUIRED",
     }
+
+
+def test_self_hosted_compose_forces_production_auth_mode():
+    compose = Path(__file__).resolve().parents[1] / "deploy" / "compose.yaml"
+    assert "APP_ENV: production" in compose.read_text(encoding="utf-8")
