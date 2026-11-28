@@ -307,3 +307,15 @@ def test_worker_rejects_lease_without_timeout_and_cleanup_margin():
     assert store.executions == []
     assert store.final_state == "FAILED"
     assert store.final_result["error"] == "WORKER_LEASE_TOO_SHORT_FOR_TOOL_TIMEOUT"
+
+
+@pytest.mark.parametrize("lease_seconds", [True, 0, -1, 1.5, "60", 3601])
+def test_worker_rejects_invalid_lease_configuration(lease_seconds):
+    with pytest.raises(ValueError, match="INVALID_LEASE_SECONDS"):
+        TaskWorker(_ClaimedTaskStore({}), ToolRegistry(), lease_seconds=lease_seconds)
+
+
+@pytest.mark.parametrize("poll_seconds", [True, 0, -1, float("inf"), float("nan"), "1"])
+def test_worker_rejects_invalid_poll_configuration(poll_seconds):
+    with pytest.raises(ValueError, match="INVALID_WORKER_POLL_SECONDS"):
+        TaskWorker(_ClaimedTaskStore({}), ToolRegistry(), poll_seconds=poll_seconds)
