@@ -4,6 +4,7 @@ Peers are untrusted for results: responses are signature-checked and treated as 
 import ssl
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import threading
@@ -780,6 +781,13 @@ class FedServer:
                     status, payload = outer.handle(raw)
                 self._reply(status, payload)
 
+        if ssl_context is None:
+            try:
+                bind_address = ipaddress.ip_address(host)
+            except ValueError:
+                bind_address = None
+            if bind_address is None or not bind_address.is_loopback:
+                raise ValueError("FEDERATION_TLS_REQUIRED_FOR_NON_LOOPBACK_BIND")
         self.httpd = ThreadingHTTPServer((host, port), H)
         if ssl_context is not None:
             # A TLS listener without mandatory client certificates is not an
