@@ -179,8 +179,18 @@ def _get_federation_node():
     return _ensure_federation(service)
 
 
+def _assert_runtime_auth_mode() -> None:
+    """Never expose the development HMAC bearer scheme in production."""
+    app_env = os.environ.get("APP_ENV", "development").strip().lower()
+    if app_env == "production":
+        # OIDC/JWKS verification is not implemented in this adapter yet.
+        # Fail closed instead of treating a long development HMAC key as production auth.
+        raise RuntimeError("PRODUCTION_OIDC_AUTHENTICATION_REQUIRED")
+
+
 def _get_service():
     """Create the persistent service and activate federation discovery in this API process."""
+    _assert_runtime_auth_mode()
     global _service
     if _service is None:
         with _service_lock:
