@@ -32,7 +32,7 @@ The constructor defaults to two-pass planning. Set `planning_enabled=False` for 
 
 - This is model-assisted orchestration, not a trained foundation model or independent symbolic reasoner.
 - Planning quality depends on the configured upstream model.
-- No persistent personal memory is added by this change; existing IAO knowledge and memory services remain separate.
+- The chat service can add existing user memories to model context only when the authenticated token has `memory.read`. Memory creation still requires explicit consent; retrieval is owner-scoped, limited to eight records / 8,000 characters, and marked as untrusted context rather than instructions. Without the scope, no memory is retrieved. This does not create a new memory store or automatic memory capture.
 - Tool selection/execution, feedback-based learning, model evaluation benchmarks and provider-independent model training are not included.
 - Production integration requires regression tests against the actual chat API, provider cost/latency measurement and explicit operator approval before enabling additional provider calls in a live deployment.
 - This implementation makes no claim about consciousness or subjective feelings.
