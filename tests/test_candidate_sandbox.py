@@ -24,6 +24,28 @@ def test_parse_pytest_summary_rejects_missing_summary():
     assert sandbox._parse_summary("pytest crashed before collecting tests") is None
 
 
+def test_parse_pytest_summary_ignores_intermediate_test_output():
+    parsed = sandbox._parse_summary(
+        "test_output: 99 passed in 1.0s\\n"
+        "3 passed, 1 skipped in 0.2s\\n"
+    )
+
+    assert parsed is not None
+    assert parsed["passed"] == 3
+    assert parsed["skipped"] == 1
+
+
+def test_parse_pytest_summary_rejects_multiple_summary_lines():
+    output = "2 passed in 0.1s\\n3 passed in 0.2s\\n"
+
+    assert sandbox._parse_summary(output) is None
+
+
+def test_parse_pytest_summary_rejects_malformed_or_duplicate_counts():
+    assert sandbox._parse_summary("2 passed, malformed in 0.1s") is None
+    assert sandbox._parse_summary("2 passed, 1 passed in 0.1s") is None
+
+
 def test_docker_suite_uses_offline_read_only_restricted_container(tmp_path, monkeypatch):
     captured = {}
 
@@ -104,6 +126,22 @@ def test_comparison_rejects_increased_xfailed_and_xpassed_counts():
 
     assert sandbox._compare_results(baseline, candidate_xfailed)["passed"] is False
     assert sandbox._compare_results(baseline, candidate_xpassed)["passed"] is False
+
+
+def test_comparison_rejects_incomplete_or_negative_summary_fields():
+    baseline = {
+        "returncode": 0,
+        "summary": {"passed": 2, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 0},
+    }
+    candidate = {
+        "returncode": 0,
+        "summary": {"passed": 2, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 0, "xpassed": -1},
+    }
+
+    result = sandbox._compare_results(baseline, candidate)
+
+    assert result["comparable"] is False
+    assert result["passed"] is False
 
 
 def test_comparison_requires_both_complete_successful_summaries():
