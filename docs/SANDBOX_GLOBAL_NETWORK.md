@@ -107,3 +107,14 @@ global, persistent sandbox connectivity. The current process runner is a
 killable child-process boundary, not a network-isolated OS sandbox or a
 persistent network service. Production qualification remains blocked until
 the deployment supplies and verifies the network architecture above.
+
+
+## Discovery inventory observability
+
+The API readiness response includes a privacy-safe `production_gates.network_discovery`
+summary from the persistent external-network registry. It reports only aggregate
+counts, the last completed cycle's counters, and timestamps; it does not expose
+peer IDs, addresses, or endpoints. Its `external_connectivity_confirmed` and
+`cryptographic_trust_confirmed` fields remain false: discovering an advertisement
+or a DHT peer is not proof of a live authenticated IAO connection. A cycle with
+source errors is reported as degraded rather than silently treated as healthy.
