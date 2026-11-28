@@ -123,12 +123,7 @@ def test_invalid_utf8_candidate_is_rejected_and_audited(isolated_evolution_state
     metadata["file_hashes"]["omega/example_helper.py"] = hashlib.sha256(
         b"\xff\xfe\xfa"
     ).hexdigest()
-    clean = {
-        "title": metadata["title"],
-        "files": {"omega/example_helper.py": "\ufffd"},
-        "checks": metadata["checks"],
-    }
-    # A deliberately matching proposal hash is unnecessary: UTF-8 must fail first.
+    # UTF-8 decoding must fail even when the per-file digest matches.
     (evolution.CANDIDATES / created["id"] / "proposal.json").write_text(
         json.dumps(metadata), encoding="utf-8"
     )
