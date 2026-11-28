@@ -25,6 +25,13 @@ timeouts. The default remains deny-by-hostname unless the caller opts in.
 The existing `web.fetch` tool can be constructed with this policy; it is not
 automatically enabled or added to the queued-tool allowlist.
 
+Runtime activation is explicit through `OMEGA_EGRESS_PUBLIC_INTERNET=true`.
+The legacy `OMEGA_EGRESS_ALLOWLIST` remains supported and does not enable
+arbitrary public hosts. With neither setting present, `web.fetch` is not
+registered. Enabling this setting registers the read-only `web.fetch` tool
+for authorized callers; it does not add that tool to the background task
+worker's queued-tool allowlist.
+
 This is an application-layer HTTP(S) capability, not a transparent network
 interface for arbitrary protocols. It does not create a persistent tunnel,
 route all sandbox sockets, provide redundant gateways, or prove continuous
