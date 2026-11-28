@@ -33,6 +33,28 @@ class EgressPolicy:
     resolver: Callable[..., Any] = field(default=socket.getaddrinfo)
 
 
+
+def policy_from_env(env: dict[str, str] | None = None) -> EgressPolicy | None:
+    """Build the opt-in runtime policy; no network tool is registered by default."""
+    import os
+
+    source = os.environ if env is None else env
+    allow_hosts = frozenset(
+        host.strip().lower().rstrip(".")
+        for host in source.get("OMEGA_EGRESS_ALLOWLIST", "").split(",")
+        if host.strip()
+    )
+    public_opt_in = source.get("OMEGA_EGRESS_PUBLIC_INTERNET", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if not allow_hosts and not public_opt_in:
+        return None
+    return EgressPolicy(
+        allow_hosts=allow_hosts,
+        allow_public_hosts=public_opt_in,
+    )
+
+
 def _forbidden(ip_s: str) -> bool:
     ip = ipaddress.ip_address(ip_s.split("%")[0])
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
