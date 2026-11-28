@@ -70,7 +70,7 @@ jobs:
           docker exec iao-api-qualification python -c "from pathlib import Path; p=Path('/app/knowledge'); files=sorted(p.glob('*.txt')); assert len(files) >= 1, 'production knowledge corpus missing'; assert (p/'omega-overview.txt').is_file(), 'required corpus document missing'; print('knowledge_corpus_files=' + str(len(files)))"
           docker exec --user iao iao-api-qualification python -c 'from omega.tools.knowledge_search import KnowledgeCorpus; from omega.tools.process_runner import run_tool_isolated; corpus=KnowledgeCorpus("/app/knowledge"); payload=corpus.validate_input({"query":"IAO","limit":1}); output, verdict=run_tool_isolated(corpus.run, corpus.verify, payload, 10); assert verdict == "PASS"; print("BWRAP_OS_SANDBOX=PASS")'
           docker run --detach --rm --name iao-api-deploy-qualification \
-            --read-only --tmpfs /tmp --tmpfs /var/lib/iao --cap-drop ALL \
+            --read-only --tmpfs /tmp --tmpfs /var/lib/iao:rw,uid=10001,gid=10001 --cap-drop ALL \
             --security-opt no-new-privileges \
             --env OMEGA_DEV_TOKEN_KEY --env AUDIT_HMAC_KEY \
             --publish 127.0.0.1:18081:8080 iao-api-deploy:qualification
