@@ -185,21 +185,42 @@ def chat(messages, timeout=25):
     return chat_with_metadata(messages, timeout)["reply"]
 
 
+def _credential_present(provider):
+    key_env = provider.get("key_env", "")
+    if not key_env:
+        return False
+    return bool(_secret_value(key_env))
+
+
 def status():
+    """Expose declaration/credential/evidence state without probing or leaking secrets.
+
+    ``declared`` means the provider is present in the local inventory.
+    ``credential_present`` means its referenced secret resolves at runtime.
+    ``connectivity`` becomes ``confirmed`` only after a real successful call;
+    configuration alone never marks a provider available.
+    """
     configured = providers()
     states = health()
+    result = []
+    for p in configured:
+        ident = p.get("id", "unnamed")
+        state = states.get(ident, {})
+        success = state.get("last_success")
+        result.append({
+            "id": ident,
+            "model": p["model"],
+            "declared": True,
+            "credential_present": _credential_present(p),
+            "connectivity": "confirmed" if success else "unverified",
+            "failures": state.get("failures", 0),
+            "last_success": success,
+        })
     return {
         "configured": len(configured),
-        "providers": [
-            {
-                "id": p.get("id", "unnamed"),
-                "model": p["model"],
-                "failures": states.get(p.get("id", ""), {}).get("failures", 0),
-                "last_success": states.get(p.get("id", ""), {}).get("last_success"),
-            }
-            for p in configured
-        ],
+        "providers": result,
     }
+
 
 
 class RouterModelAdapter:
