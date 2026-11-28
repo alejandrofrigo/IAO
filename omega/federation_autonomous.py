@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import ipaddress
-import secrets
 import time
 import tempfile
 from pathlib import Path
@@ -18,7 +17,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 MAX_PEERS_PER_CYCLE = 20
-MAX_LEASE_SECONDS = 24 * 60 * 60
 
 
 def _write_registry(path: Path, data: dict[str, Any]) -> None:
