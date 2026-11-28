@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import signal
@@ -204,10 +205,16 @@ def launch(name, spec):
         if len(command) < 2:
             event("invalid_command", motor=name)
             return None
-        target = ROOT / command[1]
-        if not target.is_file():
-            event("entrypoint_missing", motor=name, path=str(target))
-            return None
+        if command[1] == "-m":
+            if len(command) < 3 or not importlib.util.find_spec(command[2]):
+                module = command[2] if len(command) > 2 else None
+                event("entrypoint_missing", motor=name, module=module)
+                return None
+        else:
+            target = ROOT / command[1]
+            if not target.is_file():
+                event("entrypoint_missing", motor=name, path=str(target))
+                return None
 
     log_path = LOGS / f"{name.lower()}.log"
     stream = log_path.open("a", encoding="utf-8")
