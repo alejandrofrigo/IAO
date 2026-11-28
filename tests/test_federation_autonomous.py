@@ -189,4 +189,9 @@ def test_registry_write_rejects_symlink_parent(tmp_path):
         pytest.skip("symlinks unavailable")
     with pytest.raises(RuntimeError, match="REGISTRY_PARENT_REFUSED"):
         _write_registry(link / "registry.json", {"schema": 1, "candidates": {}})
+    with pytest.raises(RuntimeError, match="REGISTRY_PARENT_REFUSED"):
+        _write_registry(
+            link / "nested" / "registry.json",
+            {"schema": 1, "candidates": {}},
+        )
     assert list(outside.iterdir()) == []
