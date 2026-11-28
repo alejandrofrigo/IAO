@@ -216,12 +216,43 @@ class IPFSSwarmDiscovery:
         self.api = api
 
     def discover(self) -> list[dict[str, Any]]:
-        from tools.iao_federation_autonomous import discover_dht
-        return [
-            {"peer_id": item["peer_id"], "multiaddr": [item["multiaddr"]]}
-            for item in discover_dht(self.api)
-            if isinstance(item, dict) and item.get("peer_id") and item.get("multiaddr")
-        ]
+        import urllib.request
+        try:
+            parsed = urlsplit(self.api)
+            host = (parsed.hostname or "").lower()
+            if (parsed.scheme != "http" or host not in {"127.0.0.1", "localhost", "::1"}
+                    or parsed.username or parsed.password or parsed.path not in ("", "/")
+                    or parsed.query or parsed.fragment or parsed.port not in (None, 5001)):
+                return []
+            request = urllib.request.Request(
+                self.api.rstrip("/") + "/api/v0/swarm/peers",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                payload = json.loads(response.read(500_001))
+            if not isinstance(payload, dict):
+                return []
+            peers = payload.get("Peers", [])
+            if not isinstance(peers, list):
+                return []
+            found = []
+            seen = set()
+            for peer in peers[:MAX_CANDIDATES]:
+                if not isinstance(peer, dict):
+                    continue
+                peer_id, address = peer.get("Peer"), peer.get("Addr")
+                if (not isinstance(peer_id, str) or not 20 <= len(peer_id) <= 100
+                        or not peer_id.isalnum() or not isinstance(address, str)
+                        or not address.startswith("/") or len(address) > 512
+                        or any(ord(ch) < 33 or ord(ch) > 126 for ch in address)
+                        or peer_id in seen):
+                    continue
+                seen.add(peer_id)
+                found.append({"peer_id": peer_id, "multiaddr": [address]})
+            return found
+        except Exception:
+            return []
 
 
 class NostrAuthorizationDiscovery:
