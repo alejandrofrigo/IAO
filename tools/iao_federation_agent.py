@@ -68,13 +68,14 @@ def load_nodes() -> dict:
             valid = False
         if not valid:
             safe.append({"url": url, "id": expected[:100],
-                         "precheck": "URL_REJECTED"})
+                         "precheck": "URL_REJECTED", "authorized": True})
             continue
         origin = urlunsplit((u.scheme, u.netloc, "", "", ""))
         safe.append({
             "url": origin,
             "id": expected[:100],
             "precheck": "URL_ACCEPTED",
+            "authorized": True,
         })
     return {"status": "VALID", "nodes": safe, "ignored": ignored}
 
