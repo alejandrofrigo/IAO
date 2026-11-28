@@ -123,15 +123,14 @@ class TaskWorker:
             try:
                 clean = spec.validate_input(payload)
             except (TypeError, ValueError):
-                self.store.add_tool_execution(
-                    task_id, spec.name, spec.version, "DENIED",
-                    _digest(payload), None, "INVALID_INPUT", None,
-                    datetime.now(timezone.utc).isoformat(),
+                finished = datetime.now(timezone.utc).isoformat()
+                self.store.finalize_claimed_tool_execution(
+                    task_id, self.worker_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "INVALID_INPUT", "verification": "FAIL"},
+                    spec.name, spec.version, _digest(payload), None, finished, finished,
+                    execution_status="DENIED", execution_error_code="INVALID_INPUT",
                 )
-                return self._finish(
-                    task_id, owner, "FAILED",
-                    {"decision": "ALLOW", "error": "INVALID_INPUT", "verification": "FAIL"},
-                )
+                return True
 
             # Revalidate revocation, root-key version, exact bearer-session
             # digest and primary-device binding immediately before tool execution.
@@ -209,18 +208,18 @@ class TaskWorker:
                     except (KeyError, TypeError, ValueError):
                         remaining_lease = 0.0
                     if remaining_lease <= timeout + 5:
-                        self.store.add_tool_execution(
-                            task_id, spec.name, spec.version, "DENIED",
-                            digest_in, None, "LEASE_EXPIRING", started,
-                            datetime.now(timezone.utc).isoformat(),
-                        )
-                        return self._finish(
-                            task_id, owner, "FAILED",
+                        finished = datetime.now(timezone.utc).isoformat()
+                        self.store.finalize_claimed_tool_execution(
+                            task_id, self.worker_id, owner, "FAILED",
                             {
                                 "decision": "DENY",
                                 "error": "WORKER_LEASE_EXPIRING_BEFORE_TOOL",
                             },
+                            spec.name, spec.version, digest_in, None, started, finished,
+                            execution_status="DENIED",
+                            execution_error_code="LEASE_EXPIRING",
                         )
+                        return True
                     output, verdict = self.tool_executor(
                         spec.run, spec.verify, clean, timeout
                     )
