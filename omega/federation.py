@@ -43,6 +43,30 @@ def _b64(b: bytes) -> str:
 def node_id_of(pub_raw: bytes) -> str:
     return hashlib.sha256(pub_raw).hexdigest()[:16]
 
+def _peer_certificate_node_id(certificate: dict[str, Any] | None) -> str | None:
+    """Return the single IAO node identity asserted by a verified TLS peer cert."""
+    if not isinstance(certificate, dict):
+        return None
+    names = certificate.get("subjectAltName")
+    if not isinstance(names, tuple):
+        return None
+    identities = [
+        value[len("urn:iao:node:"):]
+        for kind, value in names
+        if kind == "URI"
+        and isinstance(value, str)
+        and value.startswith("urn:iao:node:")
+    ]
+    if len(identities) != 1:
+        return None
+    identity = identities[0]
+    if (
+        len(identity) != 16
+        or any(char not in "0123456789abcdef" for char in identity)
+    ):
+        return None
+    return identity
+
 
 def _sign(key: Ed25519PrivateKey, env: dict[str, Any]) -> dict[str, Any]:
     return {**env, "sig": _b64(key.sign(canonical_json(env)))}
@@ -733,6 +757,23 @@ class FedServer:
                 if len(raw) != n:
                     self._reply(400, {"error": "INCOMPLETE_BODY"})
                     return
+                if ssl_context is not None:
+                    # TLS verified the certificate chain; additionally bind its
+                    # unique URI SAN to the signed protocol sender identity.
+                    certificate = self.connection.getpeercert()
+                    certificate_node_id = _peer_certificate_node_id(certificate)
+                    try:
+                        request = json.loads(raw)
+                    except (ValueError, UnicodeDecodeError):
+                        request = None
+                    sender = request.get("from") if isinstance(request, dict) else None
+                    if (
+                        certificate_node_id is None
+                        or not isinstance(sender, str)
+                        or sender != certificate_node_id
+                    ):
+                        self._reply(403, {"error": "TLS_NODE_ID_MISMATCH"})
+                        return
                 if self.path == "/fed/v1/handshake":
                     status, payload = outer.answer_challenge(raw)
                 else:
