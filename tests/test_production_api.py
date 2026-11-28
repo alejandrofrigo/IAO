@@ -48,6 +48,9 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert body["production_gates"]["identity_provider"] == "dev_hmac_not_oidc"
     assert body["production_gates"]["independent_federation"] == "not_started_or_unavailable"
     assert body["production_gates"]["model_provider"] == "not_configured"
+    assert body["production_gates"]["network_discovery"]["status"] == "unknown"
+    assert body["production_gates"]["network_discovery"]["external_connectivity_confirmed"] is False
+    assert body["production_gates"]["network_discovery"]["cryptographic_trust_confirmed"] is False
 
 
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
