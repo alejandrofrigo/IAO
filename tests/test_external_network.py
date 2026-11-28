@@ -239,3 +239,54 @@ def test_v3_onion_peers_are_kept_in_unverified_inventory():
     assert item["origin"] == "http://" + host
     assert item["status"] == "DISCOVERED_UNVERIFIED"
     assert item["identity_verified"] is False
+
+
+
+def test_ipfs_adapter_imports_local_swarm_peers_without_http_promotion(monkeypatch):
+    from tools import iao_federation_autonomous
+    from omega.external_network import IPFSSwarmDiscovery
+    monkeypatch.setattr(iao_federation_autonomous, "discover_dht", lambda api: [{
+        "peer_id": "12D3KooWJ5xExamplePeerIdentifier",
+        "multiaddr": "/ip4/203.0.113.10/tcp/4001",
+    }])
+    found = IPFSSwarmDiscovery("http://127.0.0.1:5001").discover()
+    assert found[0]["peer_id"] == "12D3KooWJ5xExamplePeerIdentifier"
+    assert found[0]["multiaddr"] == ["/ip4/203.0.113.10/tcp/4001"]
+
+
+def test_nostr_authorizations_are_kept_separate_from_node_identity(tmp_path):
+    class NostrSource:
+        name = "nostr_authorizations"
+        def discover(self):
+            return [{
+                "event_id": "a" * 64,
+                "author_pubkey": "b" * 64,
+                "authorization_event_verified": True,
+            }]
+    network = ExternalNetwork(tmp_path, [NostrSource()])
+    result = network.run_cycle()
+    registry = json.loads((tmp_path / "registry.json").read_text())
+    assert result["added"] == 1
+    assert registry["candidates"] == {}
+    record = registry["protocol_peers"]["a" * 64]
+    assert record["status"] == "AUTHORIZATION_EVENT_VERIFIED"
+    assert record["identity_verified"] is False
+    assert record["enrolled"] is False
+    assert record["granted_capabilities"] == []
+
+
+def test_nostr_authorization_requires_verified_event_and_hex_author(tmp_path):
+    class NostrSource:
+        name = "nostr_authorizations"
+        def discover(self):
+            return [
+                {"event_id": "c" * 64, "author_pubkey": "z" * 64,
+                 "authorization_event_verified": True},
+                {"event_id": "d" * 64, "author_pubkey": "e" * 64,
+                 "authorization_event_verified": False},
+            ]
+    network = ExternalNetwork(tmp_path, [NostrSource()])
+    result = network.run_cycle()
+    assert result["discovered"] == 0
+    registry = json.loads((tmp_path / "registry.json").read_text())
+    assert registry["protocol_peers"] == {}
