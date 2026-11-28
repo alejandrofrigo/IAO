@@ -144,6 +144,23 @@ class AutonomousCore:
                 item.get("kind") for item in data["tasks"]
                 if isinstance(item, dict) and item.get("status") in {"QUEUED", "RUNNING"}
             }
+            terminal = [
+                item for item in data["tasks"]
+                if isinstance(item, dict)
+                and item.get("status") in {"COMPLETED", "FAILED", "BLOCKED"}
+            ]
+            terminal.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
+            retained_terminal = {item.get("id") for item in terminal[:1000]}
+            before_prune = len(data["tasks"])
+            data["tasks"] = [
+                item for item in data["tasks"]
+                if not isinstance(item, dict)
+                or item.get("status") not in {"COMPLETED", "FAILED", "BLOCKED"}
+                or item.get("id") in retained_terminal
+            ]
+            pruned = before_prune - len(data["tasks"])
+            if pruned:
+                self._event("TASK_HISTORY_PRUNED", {"count": pruned})
             scheduled = []
             for kind, interval in schedules.items():
                 previous = state.get(kind)
