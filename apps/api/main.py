@@ -17,17 +17,27 @@ from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def _runtime_lifespan(_app):
-    # Start persistent service and network workers during configured production boot.
     # Liveness-only qualification may omit secrets; in that case the API remains
     # live but readiness and service routes stay fail-closed.
+    global _runtime_startup_status
     if (len(os.environ.get("OMEGA_DEV_TOKEN_KEY", "")) >= 32
             and len(os.environ.get("AUDIT_HMAC_KEY", "")) >= 32):
         try:
             _get_service()
             _ensure_autonomous_core()
-        except Exception:
-            # Autonomous work is isolated from API liveness and local service.
-            pass
+            _runtime_startup_status = {"status": "started", "reason": None}
+        except Exception as exc:
+            # Keep liveness available, but make startup failure observable without
+            # leaking exception text, credentials, paths, or task data.
+            _runtime_startup_status = {
+                "status": "degraded",
+                "reason": type(exc).__name__,
+            }
+    else:
+        _runtime_startup_status = {
+            "status": "blocked",
+            "reason": "PERSISTENT_KEYS_NOT_CONFIGURED",
+        }
     yield
 
 
@@ -37,6 +47,7 @@ _device_authority = None
 _federation_node = None
 _autonomous_core = None
 _autonomous_core_status = {"enabled": False, "running": False, "recovered_tasks": 0}
+_runtime_startup_status = {"status": "not_started", "reason": None}
 _autonomous_core_lock = threading.Lock()
 _federation_lock = threading.Lock()
 _federation_worker_status = {"autojoin": False, "discovery": False, "external_network": False}
@@ -337,6 +348,7 @@ def ready():
     # device-bound command authority and independent federation are still
     # explicit acceptance gates, even when the database and audit chain work.
     payload["status"] = "degraded"
+    payload["runtime_startup"] = dict(_runtime_startup_status)
     payload["production_gates"] = {
         "device_identity_verification": "integrated_read_only",
         "operator_session_association": "api_available_read_only",
