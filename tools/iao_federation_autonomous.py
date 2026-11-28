@@ -8,22 +8,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from omega.store import Store
-from omega.tools.registry import ToolRegistry
-from omega.federation import Node, verify_identity_challenge
-from omega.federation_transport import fetch_public_json, fetch_onion_json
-from omega.onion_discovery import (
+from cryptography.hazmat.primitives.serialization import load_pem_private_key  # noqa: E402
+from omega.store import Store  # noqa: E402
+from omega.tools.registry import ToolRegistry  # noqa: E402
+from omega.federation import Node, verify_identity_challenge  # noqa: E402
+from omega.federation_transport import fetch_public_json  # noqa: E402
+from omega.onion_discovery import (  # noqa: E402
     discover_onion_feed as _discover_onion_feed,
     merge_onion_candidates as _merge_onion_candidates,
 )
-from omega.p2p_assimilation import assimilate_discovered_peers
-from omega.libp2p_discovery import _state_dir as _libp2p_state_dir
-import omega.federation_protocols.native  # noqa: F401
-import omega.federation_protocols.nostr   # noqa: F401
-from omega.federation_protocols import probe_any, get as get_adapter
+from omega.p2p_assimilation import assimilate_discovered_peers  # noqa: E402
+from omega.libp2p_discovery import _state_dir as _libp2p_state_dir  # noqa: E402
+import omega.federation_protocols.native  # noqa: E402, F401
+import omega.federation_protocols.nostr  # noqa: E402, F401
+from omega.federation_protocols import probe_any, get as get_adapter  # noqa: E402
 # El bridge real se importa DESPUÉS del stub para sobrescribir el registro global:
-import omega.federation_protocols.nostr_bridge  # noqa: F401
+import omega.federation_protocols.nostr_bridge  # noqa: E402, F401
 
 STATE    = ROOT / ".state"
 NODES    = STATE / "iao-external-nodes.json"
@@ -316,12 +316,15 @@ def merge_candidates_into_nodes(candidates):
             "authorized": False,
             "capabilities": c.get("capabilities", []),
             "source": c.get("source", "unknown")})
-        ids.add(c["id"]); added += 1
-    save(NODES, cfg); return added
+        ids.add(c["id"])
+        added += 1
+    save(NODES, cfg)
+    return added
 
 def probe_and_verify(addr):
     hit = probe_any(addr)
-    if not hit: return None
+    if not hit:
+        return None
     protocol, candidate = hit
     if protocol != "iao-federation":
         return protocol, candidate, {"ok": False, "error": "NO_BRIDGE"}
@@ -449,9 +452,11 @@ def enroll_if_consented(node, protocol, candidate, verified, item, policy):
         return {"status": "SKIPPED_HANDSHAKE_FAILED", "peer_id": peer_id,
                 "error": verified.get("error")}
     adapter = get_adapter(protocol)
-    if not adapter: return {"status": "SKIPPED_NO_ADAPTER", "protocol": protocol}
+    if not adapter:
+        return {"status": "SKIPPED_NO_ADAPTER", "protocol": protocol}
     contract = adapter.to_participation_contract(candidate)
-    if not contract: return {"status": "SKIPPED_NO_BRIDGE", "protocol": protocol}
+    if not contract:
+        return {"status": "SKIPPED_NO_BRIDGE", "protocol": protocol}
     allowed = set(policy.get("allowed_capabilities", []))
     requested = set(item.get("capabilities", [])) & allowed
     if not requested:
@@ -493,16 +498,9 @@ def enroll_if_consented(node, protocol, candidate, verified, item, policy):
             # de validación y reinscripción, sin darlo por válido.
             pass
 
-    # Registro autónomo de la autorización en el ledger de candidatos.
-    try:
-        registry = CandidateRegistry(STATE / "iao-federation-candidates.json")
-        try:
-            registry.authorize(item["candidate_id"])
-        except Exception:
-            # Si ya estaba autorizado o el registro no está, continuar.
-            pass
-    except Exception:
-        pass
+    # The durable candidate registry is updated by run_discovered_cycle;
+    # this transport-level enrollment path must not create a second,
+    # process-local authority or silently swallow an incompatible API call.
 
     try:
         node.enroll(contract, granted_capabilities=sorted(requested))
@@ -633,7 +631,8 @@ def run_trusted_public_enrollment(node, items):
 
 def run_cycle(dry_run=False, discover=True):
     policy = load(POLICY, {})
-    if not policy.get("enabled"): return {"status": "FEDERATION_DISABLED"}
+    if not policy.get("enabled"):
+        return {"status": "FEDERATION_DISABLED"}
 
     discovery_summary = {"candidates_added": 0}
     if discover:
@@ -698,7 +697,8 @@ def run_cycle(dry_run=False, discover=True):
         })
     for item in items:
         addr = item.get("url")
-        if not isinstance(addr, str): continue
+        if not isinstance(addr, str):
+            continue
         # Los endpoints públicos HTTPS ya pasan por el transporte fijado,
         # challenge firmado y consentimiento explícito de run_discovered_cycle.
         # Nunca volver al probe urllib heredado para esos peers.
@@ -738,7 +738,8 @@ def run_cycle(dry_run=False, discover=True):
             continue
         probed = probe_and_verify(addr)
         if not probed:
-            results.append({"addr": addr, "status": "NO_PROTOCOL_MATCH"}); continue
+            results.append({"addr": addr, "status": "NO_PROTOCOL_MATCH"})
+            continue
         protocol, candidate, verified = probed
         if dry_run:
             results.append({"addr": addr, "protocol": protocol,
@@ -757,7 +758,8 @@ def run_cycle(dry_run=False, discover=True):
             "failed": sum(1 for r in results if r.get("status") == "ENROLL_FAILED")
                 + discovery_summary.get("trusted_public_federation", {}).get("failed", 0)}}
     if not dry_run:
-        save(REPORT, report); audit("autonomous_cycle_completed", **report["summary"])
+        save(REPORT, report)
+        audit("autonomous_cycle_completed", **report["summary"])
     return report
 
 def main():
