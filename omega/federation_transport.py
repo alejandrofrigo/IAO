@@ -105,6 +105,15 @@ def validate_message_endpoint(url: str) -> tuple[str, str, int, str, str]:
         or any(ord(ch) < 33 or ord(ch) == 127 for ch in url)
     ):
         raise FederationTransportError("INVALID_ENDPOINT")
+    # Onion services are valid only as explicit Tor v3 HTTP endpoints.
+    # Reject HTTPS or malformed onion hosts before the generic HTTPS branch.
+    if host.lower().endswith(".onion") and not (
+        parsed.scheme == "http"
+        and len(host) == 62
+        and all(char in "abcdefghijklmnopqrstuvwxyz234567" for char in host[:-6])
+        and port in (None, 80)
+    ):
+        raise FederationTransportError("INVALID_ONION_ENDPOINT")
     if parsed.scheme == "https":
         tunnel_hosts = {"bore.pub", "loca.lt"}
         tunnel_suffixes = (
