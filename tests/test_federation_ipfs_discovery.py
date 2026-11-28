@@ -44,7 +44,8 @@ def test_http_pipeline_does_not_promote_p2p_peer_to_fake_endpoint(tmp_path, monk
 
 
 def test_p2p_candidates_are_persisted_separately_and_unverified(tmp_path, monkeypatch):
-    monkeypatch.setattr(federation, "STATE", tmp_path)
+    state_dir = tmp_path / "federation" / "libp2p"
+    monkeypatch.setattr(federation, "_libp2p_state_dir", lambda: state_dir)
     peer = {
         "peer_id": "12D3KooWJ5xExamplePeerIdentifier",
         "multiaddr": "/ip4/203.0.113.10/tcp/4001",
@@ -53,11 +54,12 @@ def test_p2p_candidates_are_persisted_separately_and_unverified(tmp_path, monkey
         "granted_capabilities": [],
     }
     assert federation.merge_p2p_candidates([peer]) == 1
-    stored = federation.load(tmp_path / "iao-p2p-candidates.json", {})
+    stored = federation.load(state_dir / "peers.json", {})
     record = stored["peers"][peer["peer_id"]]
-    assert record["multiaddr"] == peer["multiaddr"]
+    assert record["multiaddrs"] == [peer["multiaddr"]]
     assert record["status"] == "DISCOVERED_UNVERIFIED"
     assert record["granted_capabilities"] == []
+    assert record["source"] == "libp2p_kad_dht"
 def test_libp2p_peer_inventory_is_persisted_separately(tmp_path):
     from omega.libp2p_discovery import persist_discovered_peers
     peers = [{
