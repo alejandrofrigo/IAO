@@ -54,10 +54,12 @@ def test_p2p_candidates_are_persisted_separately_and_unverified(tmp_path, monkey
         "granted_capabilities": [],
     }
     assert federation.merge_p2p_candidates([peer]) == 1
-    stored = federation.load(state_dir / "peers.json", {})
+    stored = federation.load(state_dir / "p2p-assimilated-peers.json", {})
     record = stored["peers"][peer["peer_id"]]
     assert record["multiaddrs"] == [peer["multiaddr"]]
-    assert record["status"] == "DISCOVERED_UNVERIFIED"
+    assert record["assimilation_state"] == "AUTO_ASSIMILATED_UNVERIFIED"
+    assert record["identity_state"] == "UNVERIFIED"
+    assert record["participation_state"] == "CANDIDATE_ONLY"
     assert record["granted_capabilities"] == []
     assert record["source"] == "libp2p_kad_dht"
 def test_libp2p_peer_inventory_is_persisted_separately(tmp_path):
