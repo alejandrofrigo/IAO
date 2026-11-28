@@ -647,7 +647,8 @@ class Node:
     def _post(self, c: dict[str, Any], url: str, env: dict[str, Any], nonce: str, timeout: float) -> dict[str, Any]:
         try:
             status, resp = post_federation_json(
-                url, env, timeout=timeout, max_bytes=MAX_MSG * 8
+                url, env, timeout=timeout, max_bytes=MAX_MSG * 8,
+                expected_peer_id=c["peer_id"],
             )
         except FederationTransportError as exc:
             if exc.code in {
