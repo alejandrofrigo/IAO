@@ -372,3 +372,16 @@ def test_self_hosted_compose_forces_production_auth_mode():
     assert "d.get('status') == 'ready'" in config
     assert "runtime_startup" in config
     assert "/health/live" not in config
+
+
+def test_production_environment_template_fails_closed_without_generated_secrets():
+    template = Path(__file__).resolve().parents[1] / "deploy" / ".env.production.example"
+    values = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in template.read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    assert values["APP_ENV"] == "production"
+    assert values["OMEGA_TOKEN_SIGNING_KEY"] == ""
+    assert values["AUDIT_HMAC_KEY"] == ""
+    assert values["IAO_CORS_ORIGINS"] == ""
