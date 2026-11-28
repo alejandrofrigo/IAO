@@ -1588,3 +1588,55 @@ class LimitsAndIntegrityTests(Base):
         self.mk()
         self.assertEqual(self.call("GET", f"/v1/tasks/{tid}", self.tok("alice"))[1]["state"], "SUCCEEDED")
         self.assertTrue(self.svc.store.verify_audit()[0])
+
+    def test_chat_uses_only_consented_owner_scoped_memory_with_read_scope(self) -> None:
+        class CaptureModel:
+            def __init__(self) -> None:
+                self.messages = []
+
+            def chat(self, messages):
+                self.messages = messages
+                return "respuesta"
+
+        model = CaptureModel()
+        self.svc.model = model
+        now = datetime.now(timezone.utc).isoformat()
+        self.svc.store.memory_add(
+            "alice", "PREFERENCE", "Prefiere respuestas en español",
+            "explicit-user-consent", now, None,
+        )
+
+        alice_headers = self.tok("alice", ["knowledge.search", "memory.read"])
+        cid = self.call("POST", "/v1/conversations", alice_headers, {})[1]["conversation_id"]
+        status, payload = self.call(
+            "POST", "/v1/chat", alice_headers,
+            {"conversation_id": cid, "message": "¿Cómo respondes?"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["memory"], {"status": "USED", "items_used": 1})
+        self.assertTrue(any(
+            "Prefiere respuestas en español" in item["content"]
+            for item in model.messages if item["role"] == "system"
+        ))
+
+        bob_headers = self.tok("bob", ["knowledge.search", "memory.read"])
+        bob_cid = self.call("POST", "/v1/conversations", bob_headers, {})[1]["conversation_id"]
+        status, payload = self.call(
+            "POST", "/v1/chat", bob_headers,
+            {"conversation_id": bob_cid, "message": "¿Qué sabes de mí?"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["memory"], {"status": "EMPTY", "items_used": 0})
+        self.assertFalse(any(
+            "Prefiere respuestas en español" in item["content"]
+            for item in model.messages if item["role"] == "system"
+        ))
+
+        guest_headers = self.tok("alice", ["knowledge.search"])
+        guest_cid = self.call("POST", "/v1/conversations", guest_headers, {})[1]["conversation_id"]
+        status, payload = self.call(
+            "POST", "/v1/chat", guest_headers,
+            {"conversation_id": guest_cid, "message": "¿Qué sabes de mí?"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["memory"], {"status": "NOT_AUTHORIZED", "items_used": 0})
