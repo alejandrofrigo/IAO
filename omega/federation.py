@@ -132,7 +132,9 @@ def verify_identity_challenge(
 
     if not isinstance(identity, dict) or not isinstance(response, dict):
         return fail("INVALID_DOCUMENT")
-    if identity.get("protocol") != "iao-federation" or identity.get("version") != 1:
+    if (identity.get("protocol") != "iao-federation"
+            or type(identity.get("version")) is not int
+            or identity.get("version") != 1):
         return fail("UNSUPPORTED_IDENTITY_PROTOCOL")
 
     peer_id = identity.get("node_id")
@@ -164,12 +166,17 @@ def verify_identity_challenge(
     if not _verify(public_raw, response):
         return fail("BAD_CHALLENGE_SIGNATURE")
 
+    response_request_ts = response.get("request_ts")
     if (response.get("v") != 1
+            or type(response.get("v")) is not int
             or response.get("protocol") != "iao-federation"
             or response.get("from") != peer_id
             or response.get("to") != requester_id
             or response.get("nonce") != nonce
-            or response.get("request_ts") != float(request_ts)):
+            or isinstance(response_request_ts, bool)
+            or not isinstance(response_request_ts, (int, float))
+            or not math.isfinite(float(response_request_ts))
+            or float(response_request_ts) != float(request_ts)):
         return fail("CHALLENGE_BINDING_MISMATCH")
 
     response_ts = response.get("ts")
@@ -413,7 +420,8 @@ class Node:
         recipient = request.get("to")
         nonce = request.get("nonce")
         ts = request.get("ts")
-        if (request.get("v") != 1
+        if (type(request.get("v")) is not int
+                or request.get("v") != 1
                 or not isinstance(requester, str)
                 or len(requester) != 16
                 or any(ch not in "0123456789abcdef" for ch in requester)
