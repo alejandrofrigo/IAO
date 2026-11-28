@@ -351,7 +351,9 @@ class ExternalNetwork:
                 or not isinstance(data.get("candidates"), dict)
                 or len(data["candidates"]) > MAX_CANDIDATES
                 or not isinstance(data.get("p2p_peers", {}), dict)
-                or len(data.get("p2p_peers", {})) > MAX_CANDIDATES):
+                or len(data.get("p2p_peers", {})) > MAX_CANDIDATES
+                or not isinstance(data.get("protocol_peers", {}), dict)
+                or len(data.get("protocol_peers", {})) > MAX_CANDIDATES):
             raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_INVALID")
         return data
 
