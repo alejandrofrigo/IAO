@@ -85,7 +85,7 @@ def create_nodes(
         raise NodeFactoryError("INVALID_NODE_COUNT")
     if not 1 <= count <= MAX_NODES_PER_BATCH:
         raise NodeFactoryError("NODE_COUNT_OUT_OF_RANGE")
-    if role not in VALID_ROLES:
+    if not isinstance(role, str) or role not in VALID_ROLES:
         raise NodeFactoryError("INVALID_NODE_ROLE")
 
     root = _safe_output_dir(output_dir)
@@ -211,14 +211,14 @@ def inspect_nodes(output_dir: str | Path = ".state/node-factory") -> list[dict[s
         public_key_hex = identity.get("public_key")
         node_id = identity.get("node_id")
         if (
-            manifest.get("schema") != 1
+            (type(manifest.get("schema")) is not int or manifest.get("schema") != 1)
             or manifest.get("status") != "CREATED_UNENROLLED"
             or manifest.get("authority") != "NONE"
             or manifest.get("capabilities") != []
             or not isinstance(manifest.get("role"), str)
             or manifest.get("role") not in VALID_ROLES
             or identity.get("protocol") != "iao-federation"
-            or identity.get("version") != 1
+            or (type(identity.get("version")) is not int or identity.get("version") != 1)
             or not isinstance(node_id, str)
             or len(node_id) != 16
             or not isinstance(public_key_hex, str)
