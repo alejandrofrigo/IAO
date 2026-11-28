@@ -31,6 +31,7 @@ jobs:
             --security-opt=no-new-privileges:true \
             --user=65534:65534 \
             --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=512m \
+            --tmpfs=/workspace/.state:rw,noexec,nosuid,nodev,size=512m \
             --mount "type=bind,src=${WORKSPACE},dst=/workspace,readonly" \
             --workdir=/workspace \
             --env=PYTHONPATH=/workspace \
