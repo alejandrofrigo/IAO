@@ -41,6 +41,7 @@ def test_docker_suite_uses_offline_read_only_restricted_container(tmp_path, monk
     command = captured["command"]
     assert "--pull=never" in command
     assert "--network=none" in command
+    assert "--tmpfs=/workspace/.state:rw,noexec,nosuid,nodev,size=256m" in command
     assert "--read-only" in command
     assert "--cap-drop=ALL" in command
     assert "--pids-limit=128" in command
