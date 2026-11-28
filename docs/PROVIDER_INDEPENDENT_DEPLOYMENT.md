@@ -24,6 +24,7 @@ Requisitos mínimos del backend:
 - proceso API persistente y accesible por HTTPS desde el navegador a través de un proxy inverso TLS (Compose solo enlaza localhost);
 - volumen persistente y respaldado para `IAO_STATE_DIR` (base de datos, identidad de nodo, claves y auditoría);
 - en producción, `OMEGA_TOKEN_SIGNING_KEY` y `AUDIT_HMAC_KEY` de al menos 32 caracteres cada una, inyectadas como secretos persistentes fuera del repositorio; `OMEGA_DEV_TOKEN_KEY` solo se admite fuera de producción;
+- plantilla inicial: `deploy/.env.production.example`; copiarla al `.env` de la raíz, generar e inyectar ambas claves mediante un gestor de secretos y configurar `IAO_CORS_ORIGINS` con el origen HTTPS exacto. La plantilla deja las claves vacías intencionadamente y no habilita OIDC: no debe exponerse públicamente hasta resolver ese gate;
 - TLS, proxy inverso y CORS limitado al origen real de Pages;
 - monitorización, copias de seguridad y restauración probada.
 
