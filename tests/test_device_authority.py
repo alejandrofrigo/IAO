@@ -436,3 +436,56 @@ def test_recovery_never_reactivates_a_previously_revoked_device_key(tmp_path):
         authority.replace_active_device_for_recovery(
             old_public, owner_subject=owner,
         )
+
+
+def _noncanonical_b64url_pad_bits(value):
+    """Change only unused final Base64URL pad bits, preserving decoded bytes."""
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    remainder = len(value) % 4
+    if remainder not in (2, 3):
+        raise AssertionError("signature must have unused Base64URL pad bits")
+    index = alphabet.index(value[-1])
+    altered = value[:-1] + alphabet[index | 1]
+    assert altered != value
+    assert base64.urlsafe_b64decode(altered + "=" * (-len(altered) % 4)) == base64.urlsafe_b64decode(
+        value + "=" * (-len(value) % 4)
+    )
+    return altered
+
+
+def test_signed_request_rejects_noncanonical_base64url_pad_bits(tmp_path):
+    authority, private_key, device_id = _enrolled_authority(tmp_path)
+    challenge = authority.challenge(device_id, owner_subject="operator")
+    digest = hashlib.sha256(b"canonical-device-proof").hexdigest()
+    proof = None
+    for _ in range(20):
+        candidate = _signed_request(
+            private_key, device_id, challenge["nonce"], "POST", "/v1/tasks", digest
+        )
+        if len(candidate["signature"]) % 4 in (2, 3):
+            proof = candidate
+            break
+    assert proof is not None, "could not generate a signature with unused Base64URL pad bits"
+    proof["signature"] = _noncanonical_b64url_pad_bits(proof["signature"])
+
+    with pytest.raises(DeviceAuthorityError, match="INVALID_SIGNATURE"):
+        authority.verify_request(
+            proof, method="POST", path="/v1/tasks",
+            request_digest=digest, owner_subject="operator",
+        )
+
+
+def test_signed_status_rejects_noncanonical_base64url_pad_bits(tmp_path):
+    authority, private_key, device_id = _enrolled_authority(tmp_path)
+    challenge = authority.challenge(device_id, owner_subject="operator")
+    proof = None
+    for _ in range(20):
+        candidate = _signed_status(private_key, device_id, challenge["nonce"])
+        if len(candidate["signature"]) % 4 in (2, 3):
+            proof = candidate
+            break
+    assert proof is not None, "could not generate a signature with unused Base64URL pad bits"
+    proof["signature"] = _noncanonical_b64url_pad_bits(proof["signature"])
+
+    with pytest.raises(DeviceAuthorityError, match="INVALID_SIGNATURE"):
+        authority.verify_status(proof, owner_subject="operator")
