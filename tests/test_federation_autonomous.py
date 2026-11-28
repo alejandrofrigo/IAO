@@ -228,3 +228,19 @@ def test_cycle_audit_writes_private_jsonl(tmp_path):
     assert record["checked"] == 2
     if os.name == "posix":
         assert audit.stat().st_mode & 0o777 == 0o600
+
+def test_cycle_audit_rejects_symlinked_parent_before_creating_outside(tmp_path):
+    import pytest
+    from omega.federation_autonomous import _append_cycle_audit
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = tmp_path / "linked-state"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    with pytest.raises(RuntimeError, match="AUDIT_DIRECTORY_REFUSED"):
+        _append_cycle_audit(link / "nested", {"checked": 1})
+    assert list(outside.iterdir()) == []
