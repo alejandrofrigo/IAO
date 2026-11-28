@@ -71,16 +71,30 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
 
 
 def _origin(value: Any) -> str:
+    """Validate a public HTTPS origin or a Tor v3 onion HTTP origin."""
     if not isinstance(value, str) or not 1 <= len(value) <= 2048:
         raise ValueError("INVALID_DISCOVERED_ORIGIN")
-    parsed = urlsplit(value)
-    if (parsed.scheme != "https" or not parsed.hostname
-            or parsed.username or parsed.password
-            or parsed.port not in (None, 443)
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("INVALID_DISCOVERED_ORIGIN") from exc
+    if (not host or parsed.username or parsed.password
             or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
         raise ValueError("INVALID_DISCOVERED_ORIGIN")
+    host = host.lower()
+    if host.endswith(".onion"):
+        if (parsed.scheme != "http" or len(host) != 62
+                or any(char not in "abcdefghijklmnopqrstuvwxyz234567"
+                       for char in host[:-6])
+                or port not in (None, 80)):
+            raise ValueError("INVALID_DISCOVERED_ONION_ORIGIN")
+        return "http://" + host
+    if parsed.scheme != "https" or port not in (None, 443):
+        raise ValueError("INVALID_DISCOVERED_ORIGIN")
     try:
-        address = ipaddress.ip_address(parsed.hostname)
+        address = ipaddress.ip_address(host)
         if not address.is_global:
             raise ValueError("NON_PUBLIC_DISCOVERED_ADDRESS")
     except ValueError as exc:
