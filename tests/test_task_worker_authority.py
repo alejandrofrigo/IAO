@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -314,7 +315,10 @@ def test_worker_rejects_invalid_timeout_budget_before_tool_execution(timeout_val
 def test_invalid_tool_input_is_finalized_atomically_as_denied():
     worker, store, calls = _worker(_ActiveAuthority())
     spec = worker.registry.get("knowledge.search")
-    spec.validate_input = lambda _value: (_ for _ in ()).throw(ValueError("invalid"))
+    worker.registry._tools["knowledge.search"] = replace(
+        spec,
+        validate_input=lambda _value: (_ for _ in ()).throw(ValueError("invalid")),
+    )
 
     assert worker.run_once() is True
 
