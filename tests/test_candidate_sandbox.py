@@ -26,7 +26,7 @@ def test_parse_pytest_summary_rejects_missing_summary():
 
 def test_parse_pytest_summary_ignores_intermediate_test_output():
     parsed = sandbox._parse_summary(
-        "test_output: 99 passed in 1.0s\\n"
+        "test_output: 99 passed during setup\\n"
         "3 passed, 1 skipped in 0.2s\\n"
     )
 
