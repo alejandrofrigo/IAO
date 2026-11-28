@@ -22,6 +22,18 @@ from omega.tools.knowledge_search import KnowledgeCorpus
 from omega.tools.registry import ToolRegistry, ToolSpec
 
 
+def _configure_cognitive_engine(model_adapter: object) -> object:
+    """Wrap the configured model only after an explicit runtime opt-in."""
+    enabled = os.environ.get("IAO_COGNITIVE_ENGINE_ENABLED", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return model_adapter
+    from omega.cognitive_engine import CognitiveEngine
+
+    planning = os.environ.get("IAO_COGNITIVE_PLANNING_ENABLED", "true").strip().lower()
+    planning_enabled = planning in {"1", "true", "yes", "on"}
+    return CognitiveEngine(model_adapter, planning_enabled=planning_enabled)  # type: ignore[arg-type]
+
+
 def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: object) -> OmegaService:
     state_dir.mkdir(parents=True, exist_ok=True)
     audit_key_env = os.environ.get("AUDIT_HMAC_KEY", "")
@@ -57,6 +69,8 @@ def build_service(state_dir: Path, token_key: str, corpus_dir: Path, **kw: objec
         kw["model_adapter"] = RouterModelAdapter()
     else:
         kw.setdefault("model_adapter", adapter_from_env(dict(os.environ)))
+    if kw.get("model_adapter") is not None:
+        kw["model_adapter"] = _configure_cognitive_engine(kw["model_adapter"])
     kw.setdefault(
         "device_authority",
         DeviceAuthority(

@@ -16,9 +16,10 @@ must be writable by the unprivileged `iao` user.
 
 Required secret environment variables:
 
-- `OMEGA_DEV_TOKEN_KEY`: at least 32 characters. This currently signs the
-  short-lived public-session tokens; it is a development HMAC mechanism, not
-  OIDC and not a substitute for device-bound proof.
+- `OMEGA_DEV_TOKEN_KEY`: at least 32 characters for development/test
+  public-session tokens only. It is a development HMAC mechanism, not OIDC and
+  not a substitute for device-bound proof. The API refuses to initialize its
+  service when `APP_ENV` is `staging`, `production`, or any unknown value.
 - `AUDIT_HMAC_KEY`: at least 32 characters. Persistent audit-chain key. Keep
   it stable across restarts and backups; changing it invalidates verification
   of the existing chain.
@@ -74,6 +75,17 @@ guest identity, not a durable operator account; this change therefore does not
 claim a persistent account-to-device binding. Production worker startup remains
 blocked pending durable operator identity, complete device lifecycle controls,
 and end-to-end validation.
+
+## Production authentication gate
+
+The deployment Dockerfile defaults `APP_ENV=production`, and the self-hosted
+Compose file explicitly sets the same value so a local `.env` cannot silently
+switch the deployed API back to development authentication. The FastAPI adapter
+fails closed for every environment except `development` and `test` until an
+OIDC/JWKS verifier is implemented and configured. In this state `/health/live`
+may answer, but service routes and `/health/ready` remain unavailable; this is
+an intentional safety block, not a production deployment. Do not set
+`APP_ENV=development` to bypass it on a public host.
 
 ## Durable operator identity
 

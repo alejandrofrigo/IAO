@@ -322,6 +322,15 @@ def _request_json(
     if scheme == "https":
         addresses = resolve_public_addresses(host, port)
         context = _client_tls_context(require_client_cert=require_client_cert)
+    elif scheme == "onion":
+        # Onion hostnames must be resolved remotely by Tor, never via local DNS.
+        _tor_proxy()
+        try:
+            import socks  # noqa: F401 - fail closed before network activity
+        except ImportError as exc:
+            raise FederationTransportError("TOR_SOCKS_DEPENDENCY_MISSING") from exc
+        addresses = ["tor-socks"]
+        context = None
     else:
         addresses = _resolve_loopback(host, port)
         context = None
@@ -335,6 +344,11 @@ def _request_json(
             connection = _PinnedHTTPSConnection(
                 tls_host, address, port=port, timeout=timeout, context=context,
                 expected_peer_id=expected_peer_id,
+            )
+        elif scheme == "onion":
+            proxy_host, proxy_port = _tor_proxy()
+            connection = _TorOnionHTTPConnection(
+                host, timeout=timeout, proxy_host=proxy_host, proxy_port=proxy_port
             )
         else:
             connection = _PinnedHTTPConnection(
