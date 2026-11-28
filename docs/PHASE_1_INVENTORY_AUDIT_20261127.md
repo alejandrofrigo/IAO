@@ -2,7 +2,7 @@
 
 **Estado:** evidencia documental adicional; no sustituye la verificación del HEAD ni de CI.
 **SHA base observado:** `0920643d05833a2a761f9168ae1e89ed9944fcc7`.
-**HEAD observado al actualizar:** `52d40c46b4f3fdbec9da2e819a25845b96138f8c` (503 ahead / 0 behind de `iao-production-gates-20261127T0856Z`).
+**HEAD observado al actualizar:** `107dd7bec53c12784be91b6c41542accca472d61` (566 ahead / 0 behind de `iao-production-gates-20261127T0856Z`; base `0920643d05833a2a761f9168ae1e89ed9944fcc7`).
 **Rama destino:** `phase-1-core-foundation-20261127`
 **Alcance:** objetivo 01 de `PHASE_1_CORE_FOUNDATION.md`.
 
@@ -38,7 +38,7 @@ El inventario REST de PRs abiertas del 2026-11-27 confirma la cadena y bases des
 
 ## Discrepancia de inventario que debe resolverse
 
-El ledger de Fase 1 registra la rama como **359 commits ahead / 0 behind** de `iao-production-gates-20261127T0856Z`. Un resumen anterior registraba **2 commits ahead / 0 behind** antes de la ejecución técnica. Son cortes distintos o una cifra obsoleta; no deben mezclarse. El número definitivo requiere comparar los refs actuales y registrar los SHA de base y HEAD.
+La discrepancia quedó resuelta mediante comparación de refs: HEAD `107dd7bec53c12784be91b6c41542accca472d61` está **566 commits ahead / 0 behind** de la base `0920643d05833a2a761f9168ae1e89ed9944fcc7`. Los valores históricos 359, 503 y 2 correspondían a cortes anteriores y no describen el HEAD actual.
 
 ## Componentes y fuentes de verdad
 
@@ -56,7 +56,7 @@ El ledger de Fase 1 registra la rama como **359 commits ahead / 0 behind** de `i
 ## Criterios pendientes para cerrar el objetivo 01
 
 1. Obtener SHA exactos de HEAD y base y ejecutar comparación de refs actual.
-2. Registrar el resultado actual de los workflows de CI para el SHA exacto de la rama.
+2. Registrar y conservar el resultado de CI del SHA exacto de la rama: 663 passed / 1 skipped en Python 3.12 y 3.13; Quality Gate, Mobile Chromium y Container qualification SUCCESS.
 3. Confirmar que los PRs apilados conservan sus relaciones y que no hay divergencia nueva.
 4. Verificar CI del worker lifecycle/readiness integrado y comparar #16/#19 para identificar solo cambios restantes.
 5. Integrar el chat task intake con capability grants de #10/#13 sin duplicar la autoridad ni debilitar el vínculo al dispositivo.
@@ -69,4 +69,4 @@ El ledger de Fase 1 registra la rama como **359 commits ahead / 0 behind** de `i
 - Despliegue: `render.yaml` y el workflow `deploy-cloud-run.yml` se retiraron de Fase 1 por incompatibilidad con la restricción de no usar Render ni infraestructura que pueda generar facturación. El motor NODE_NETWORK inicia el descubridor libp2p/Tor solo en el supervisor local y no abre listeners. El cliente web eliminó Quick Tunnel y ahora bloquea chat/API si no recibe un origen HTTPS explícito. GitHub Pages sigue siendo solo frontend; no constituye backend.
 - La PR #21 de Fase 2 continúa apilada sobre esta rama; sus cambios no se consideran aceptados ni sustituyen el cierre de Fase 1.
 
-**Resultado:** inventario y mapa de dependencias actualizados con refs exactos. El objetivo 01 permanece **EN CURSO** hasta CI verde en los HEAD exactos, revisión final de las ramas independientes y cierre de discrepancias. Esta auditoría no declara producción.
+**Resultado:** inventario y mapa de dependencias actualizados con refs exactos. El objetivo 01 permanece **EN CURSO** hasta revisar las ramas independientes y cerrar las dependencias apiladas. Esta auditoría no declara producción.
