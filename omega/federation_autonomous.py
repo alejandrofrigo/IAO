@@ -144,7 +144,7 @@ def _append_cycle_audit(state_dir: Path, summary: dict[str, Any]) -> None:
 
 
 def run_discovered_cycle(fed_node, state_dir: Path, registry_path: Path) -> dict[str, Any]:
-    """Automatically verify and enroll only discovered peers explicitly offering federation."""
+    """Audit discovered candidates; remote enrollment stays fail-closed until mTLS attestation exists."""
     if registry_path.is_symlink():
         raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_SYMLINK_REFUSED")
     if not registry_path.is_file():
