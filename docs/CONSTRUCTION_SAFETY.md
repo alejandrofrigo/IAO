@@ -66,9 +66,12 @@ staged and requires functional, security, and integration verification.
 
 Evolution proposals now carry a manifest hash and per-file SHA-256 digests. Evaluation
 revalidates the manifest, safe relative paths, file sizes, symlink boundaries, file
-hashes, and Python syntax before recording a result. Tampered, incomplete, oversized,
-or symlinked candidates are rejected. The evaluator never imports or executes
-candidate code.
+hashes, and Python syntax before recording a result. Invalid UTF-8, unreadable,
+tampered, incomplete, oversized, or symlinked candidates are rejected with
+bounded failure reasons. Validation reports manifest integrity, content hashes,
+and syntax separately. The evaluator never imports or executes candidate code.
+The audit event for a successful static evaluation is
+`PROPOSAL_STATIC_CHECKS_PASSED`; it does not mean approval for staging.
 
 A successful result is labelled `STATIC_CHECKS_PASSED`, with
 `promotion_eligible=false`. This is deliberately not a functional test pass,
