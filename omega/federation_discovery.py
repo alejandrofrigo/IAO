@@ -141,17 +141,10 @@ def _valid_manifest(obj):
     if not isinstance(origin, str):
         return False, "INVALID_ORIGIN"
 
-    parsed = urllib.parse.urlsplit(origin)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in ("", "/")
-        or parsed.port not in (None, 443)
-    ):
+    try:
+        from omega.federation_transport import validate_public_federation_origin
+        validate_public_federation_origin(origin)
+    except Exception:
         return False, "ORIGIN_NOT_ALLOWED"
 
     return True, "MANIFEST_UNVERIFIED"
