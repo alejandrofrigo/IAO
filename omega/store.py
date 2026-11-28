@@ -560,9 +560,16 @@ class Store:
             raise ValueError("INVALID_TOOL_EXECUTION_STATUS")
         if execution_status == "SUCCEEDED" and execution_error_code is not None:
             raise ValueError("SUCCESSFUL_TOOL_CANNOT_HAVE_EXECUTION_ERROR")
+        stale_reason = {
+            "SUCCEEDED": "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+            "TIMED_OUT": "LEASE_EXPIRED_DURING_TOOL_TIMEOUT",
+            "FAILED": "LEASE_EXPIRED_AFTER_TOOL_ERROR",
+            "DENIED": "LEASE_EXPIRED_AFTER_TOOL_DENIAL",
+            "CANCELLED": "LEASE_EXPIRED_AFTER_TOOL_CANCELLATION",
+        }[execution_status]
         stale_result = {
             "decision": "INTERRUPTED",
-            "error": "LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+            "error": stale_reason,
         }
         with self.lock:
             self.db.execute("BEGIN IMMEDIATE")
@@ -609,8 +616,8 @@ class Store:
                     (str(uuid.uuid4()), task_id, name, version, execution_status,
                      input_digest, output_digest,
                      execution_error_code or (
-                         "LEASE_EXPIRED_AFTER_TOOL_COMPLETION"
-                         if not lease_valid and execution_status == "SUCCEEDED"
+                         stale_reason
+                         if not lease_valid
                          else None
                      ),
                      started, finished),
@@ -632,7 +639,7 @@ class Store:
                     self._append_audit_event_in_transaction(
                         "system", "TASK_WORKER_STALE_COMPLETION", task_id,
                         worker=worker_id, decision="REJECT",
-                        reason="LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+                        reason=stale_reason,
                     )
                 self.db.execute("COMMIT")
                 return lease_valid
