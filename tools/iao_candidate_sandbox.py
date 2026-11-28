@@ -121,7 +121,8 @@ def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
         "--env=HOME=/tmp",
         "--env=TMPDIR=/tmp",
         image,
-        "python", "-m", "pytest", "-q", "/workspace/tests",
+        "python", "-m", "pytest", "-q", "-p", "no:cacheprovider",
+        "/workspace/tests",
     ]
     try:
         result = subprocess.run(
