@@ -55,3 +55,11 @@ class SupervisorTests(unittest.TestCase):
     def test_rejects_invalid_shutdown_grace(self) -> None:
         with self.assertRaises(ValueError):
             supervise([sys.executable, "-c", "pass"], shutdown_grace=0)
+
+    def test_cli_accepts_explicit_command_without_shell(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "omega.supervisor", "--",
+             sys.executable, "-c", "raise SystemExit(0)"],
+            check=False, timeout=5,
+        )
+        self.assertEqual(result.returncode, 0)
