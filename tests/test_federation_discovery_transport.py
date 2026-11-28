@@ -98,7 +98,8 @@ class FederationDiscoveryTransportTests(unittest.TestCase):
             self.assertEqual(candidate["status"], "DISCOVERED_UNVERIFIED")
             self.assertFalse(candidate["identity_verified"])
             self.assertEqual(
-                candidate["last_federation_error"], "RuntimeError"
+                candidate["enrollment_status"],
+                "BLOCKED_TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED",
             )
             audit = (state / "federation-autonomous.jsonl").read_text()
             self.assertIn("FEDERATION_AUTOJOIN_CYCLE", audit)
