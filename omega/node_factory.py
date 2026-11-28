@@ -215,6 +215,7 @@ def inspect_nodes(output_dir: str | Path = ".state/node-factory") -> list[dict[s
             or manifest.get("status") != "CREATED_UNENROLLED"
             or manifest.get("authority") != "NONE"
             or manifest.get("capabilities") != []
+            or not isinstance(manifest.get("role"), str)
             or manifest.get("role") not in VALID_ROLES
             or identity.get("protocol") != "iao-federation"
             or identity.get("version") != 1
