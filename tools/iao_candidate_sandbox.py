@@ -142,16 +142,20 @@ def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
             "timed_out": False,
         }
     except subprocess.TimeoutExpired as exc:
-        cleanup = subprocess.run(
-            ["docker", "rm", "-f", container_name],
-            capture_output=True, text=True, timeout=30, check=False,
-        )
+        try:
+            cleanup = subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            cleanup_code = cleanup.returncode
+        except (OSError, subprocess.SubprocessError):
+            cleanup_code = None
         return {
             "returncode": None,
             "summary": None,
             "output_tail": str(exc)[:1000],
             "timed_out": True,
-            "container_cleanup_returncode": cleanup.returncode,
+            "container_cleanup_returncode": cleanup_code,
         }
     except OSError as exc:
         return {
