@@ -80,6 +80,6 @@ jobs:
             docker logs iao-api-deploy-qualification
             exit 1
           fi
-          docker exec --user iao iao-api-deploy-qualification python -c 'from omega.tools.knowledge_search import KnowledgeCorpus; from omega.tools.process_runner import run_tool_isolated; corpus=KnowledgeCorpus("/app/knowledge"); payload=corpus.validate_input({"query":"IAO","limit":1}); output, verdict=run_tool_isolated(corpus.run, corpus.verify, payload, 10); assert verdict == "PASS"; print("DEPLOY_IMAGE_BWRAP_OS_SANDBOX=PASS")'
+          docker exec --user 10001:10001 iao-api-deploy-qualification python -c 'from omega.tools.knowledge_search import KnowledgeCorpus; from omega.tools.process_runner import run_tool_isolated; corpus=KnowledgeCorpus("/app/knowledge"); payload=corpus.validate_input({"query":"IAO","limit":1}); output, verdict=run_tool_isolated(corpus.run, corpus.verify, payload, 10); assert verdict == "PASS"; print("DEPLOY_IMAGE_BWRAP_OS_SANDBOX=PASS")'
           docker logs iao-api-qualification
           docker logs iao-api-deploy-qualification
