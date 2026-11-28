@@ -29,7 +29,8 @@ from . import ProtocolAdapter, register
 from .nostr_schnorr import verify_nostr_event, nostr_event_id
 
 ROOT = Path(__file__).resolve().parents[2]
-BRIDGE_STATE_ROOT = Path(os.environ.get("IAO_STATE_DIR") or os.environ.get("OMEGA_STATE_DIR") or ROOT / ".state").expanduser()\nBRIDGE_DIR = BRIDGE_STATE_ROOT / "federation-bridges" / "nostr"
+BRIDGE_STATE_ROOT = Path(os.environ.get("IAO_STATE_DIR") or os.environ.get("OMEGA_STATE_DIR") or ROOT / ".state").expanduser()
+BRIDGE_DIR = BRIDGE_STATE_ROOT / "federation-bridges" / "nostr"
 BRIDGE_KEY = BRIDGE_DIR / "bridge.pem"
 
 DEFAULT_RELAYS = [
