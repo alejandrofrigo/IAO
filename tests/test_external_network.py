@@ -258,7 +258,10 @@ def test_ipfs_adapter_reads_only_local_swarm_api(monkeypatch):
     def fake_open(request, timeout):
         calls.append((request.full_url, request.get_method(), timeout))
         return Response(json.dumps(payload).encode())
-    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    class Opener:
+        def open(self, request, timeout):
+            return fake_open(request, timeout)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: Opener())
     found = IPFSSwarmDiscovery("http://127.0.0.1:5001").discover()
     assert found[0]["peer_id"] == "12D3KooWJ5xExamplePeerIdentifier"
     assert found[0]["multiaddr"] == ["/ip4/203.0.113.10/tcp/4001"]
