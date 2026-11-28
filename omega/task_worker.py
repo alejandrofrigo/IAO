@@ -254,38 +254,40 @@ class TaskWorker:
                     {"decision": "ALLOW", "error": "TOOL_ERROR"},
                 )
 
-            self.store.add_tool_execution(
-                task_id, spec.name, spec.version, "SUCCEEDED",
-                digest_in, _digest(output), None, started,
-                datetime.now(timezone.utc).isoformat(),
-            )
-            if not self.store.update_claimed_task(
-                task_id, self.worker_id, "VERIFYING"
-            ):
-                self.store.audit(
-                    "system", "TASK_WORKER_STALE_CLAIM", task_id,
-                    worker=self.worker_id, decision="REJECT",
-                )
-                return True
-            self.store.audit(
-                owner, "TASK_STATE", task_id, to="VERIFYING",
-                worker=self.worker_id,
-            )
             result: dict[str, Any] = {
                 "decision": "ALLOW",
                 "verification": verdict,
                 "result": output,
             }
+            final_state = "SUCCEEDED" if verdict == "PASS" else "FAILED"
+            if final_state == "FAILED":
+                result["error"] = "VERIFICATION_" + str(verdict)
+            committed = self.store.finalize_claimed_tool_execution(
+                task_id, self.worker_id, owner, final_state, result,
+                spec.name, spec.version, digest_in, _digest(output),
+                started, datetime.now(timezone.utc).isoformat(),
+            )
+            if not committed:
+                self.store.audit(
+                    "system", "TASK_WORKER_STALE_COMPLETION", task_id,
+                    worker=self.worker_id,
+                    decision="REJECT",
+                    reason="LEASE_EXPIRED_AFTER_TOOL_COMPLETION",
+                )
+                return True
+            self.store.audit(
+                owner, "TASK_STATE", task_id, to=final_state,
+                worker=self.worker_id,
+                error=result.get("error"),
+                verification=result.get("verification"),
+            )
             self.store.audit(
                 owner, "EVIDENCE", task_id,
                 decision=verdict,
                 method="schema+source_hash+snippet_provenance",
                 output_digest=_digest(output),
             )
-            if verdict == "PASS":
-                return self._finish(task_id, owner, "SUCCEEDED", result)
-            result["error"] = "VERIFICATION_" + str(verdict)
-            return self._finish(task_id, owner, "FAILED", result)
+            return True
         except Exception:
             # No automatic retry: an unexpected worker failure leaves the lease
             # to expire, after which startup recovery marks it FAILED.
