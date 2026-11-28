@@ -206,8 +206,12 @@ def launch(name, spec):
             event("invalid_command", motor=name)
             return None
         if command[1] == "-m":
-            if len(command) < 3 or not importlib.util.find_spec(command[2]):
-                module = command[2] if len(command) > 2 else None
+            module = command[2] if len(command) > 2 else None
+            try:
+                module_found = bool(module and importlib.util.find_spec(module))
+            except (ImportError, ModuleNotFoundError, ValueError):
+                module_found = False
+            if not module_found:
                 event("entrypoint_missing", motor=name, module=module)
                 return None
         else:
