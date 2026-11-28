@@ -157,29 +157,27 @@ def run_discovered_cycle(fed_node, state_dir: Path, registry_path: Path) -> dict
         and item.get("status") in {"DISCOVERED_UNVERIFIED", "STALE_UNVERIFIED"}
         and item.get("identity_verified") is not True
     ][:MAX_PEERS_PER_CYCLE]
-    checked = enrolled = failed = 0
+    checked = enrolled = failed = blocked = 0
     for item in candidates:
         checked += 1
-        try:
-            result = _enroll_one(fed_node, item)
-            item["status"] = "ENROLLED" if result["status"] in {
-                "ENROLLED", "ALREADY_ENROLLED"
-            } else item.get("status", "DISCOVERED_UNVERIFIED")
-            item["identity_verified"] = True
-            item["enrolled"] = True
-            item["verified_at"] = time.time()
-            item["granted_capabilities"] = []
-            item["remote_code_execution"] = False
-            item["private_data_access"] = False
-            item["federation_capabilities"] = result.get("capabilities", [])
-            enrolled += result["status"] == "ENROLLED"
-        except Exception as exc:
-            item["last_federation_error"] = type(exc).__name__
-            failed += 1
+        # Candidate evaluation is intentionally metadata-only. Do not call
+        # _enroll_one: its hard failure is a final safety barrier, not a
+        # per-candidate operation. This avoids repeated fake failures and
+        # guarantees that discovery never initiates remote handshakes.
+        item["enrollment_status"] = (
+            "BLOCKED_TRUSTED_TRANSPORT_VERIFIER_NOT_INTEGRATED"
+        )
+        item["identity_verification"] = "NOT_PERFORMED"
+        item["enrolled"] = False
+        item["identity_verified"] = False
+        item["granted_capabilities"] = []
+        item["remote_code_execution"] = False
+        item["private_data_access"] = False
+        blocked += 1
     _write_registry(registry_path, data)
     summary = {
         "status": "COMPLETED", "checked": checked,
-        "enrolled": enrolled, "failed": failed,
+        "enrolled": enrolled, "failed": failed, "blocked": blocked,
         "inbound_capabilities_granted": 0,
     }
     _append_cycle_audit(state_dir, summary)
