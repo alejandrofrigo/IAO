@@ -146,24 +146,10 @@ class TaskWorker:
                     task_id, owner, "FAILED",
                     {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_UNAVAILABLE"},
                 )
-            try:
-                authority_valid = (
-                    self.operator_identity_authority.verify_primary_device_for_session_digest(
-                        owner, session_digest, device_id,
-                    )
-                )
-                if authority_valid is not True:
-                    raise RuntimeError("OPERATOR_DEVICE_AUTHORITY_NOT_CONFIRMED")
-            except Exception:
-                self.store.audit(
-                    owner, "TASK_WORKER_OPERATOR_AUTHORITY_DENIED", task_id,
-                    decision="FAIL_CLOSED",
-                )
-                return self._finish(
-                    task_id, owner, "FAILED",
-                    {"decision": "DENY", "error": "WORKER_OPERATOR_AUTHORITY_REVOKED"},
-                )
-
+            # The authority context holds a cross-process SQLite write
+            # reservation through the bounded tool call. A concurrent root
+            # revocation therefore cannot commit between authorization and
+            # tool completion. No tool is invoked if the gate cannot be acquired.
             started = datetime.now(timezone.utc).isoformat()
             digest_in = _digest(clean)
             budget = intent.get("budget", {})
@@ -203,9 +189,14 @@ class TaskWorker:
                     {"decision": "DENY", "error": "WORKER_LEASE_TOO_SHORT_FOR_TOOL_TIMEOUT"},
                 )
             try:
-                output, verdict = self.tool_executor(
-                    spec.run, spec.verify, clean, timeout
-                )
+                with self.operator_identity_authority.authorize_tool_execution(
+                    owner, session_digest, device_id,
+                ) as authority_valid:
+                    if authority_valid is not True:
+                        raise RuntimeError("OPERATOR_DEVICE_AUTHORITY_NOT_CONFIRMED")
+                    output, verdict = self.tool_executor(
+                        spec.run, spec.verify, clean, timeout
+                    )
             except ToolProcessTimeout:
                 self.store.add_tool_execution(
                     task_id, spec.name, spec.version, "TIMED_OUT",
