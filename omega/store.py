@@ -548,9 +548,15 @@ class Store:
                     "SELECT state,lease_owner,lease_until FROM task WHERE id=? AND owner=?",
                     (task_id, owner),
                 ).fetchone()
+                # A task may have been administratively removed while a
+                # long-running tool was outside the database transaction. Do
+                # not create an orphan execution row or mask that outcome with
+                # a foreign-key exception.
+                if row is None:
+                    self.db.execute("COMMIT")
+                    return False
                 lease_valid = bool(
-                    row is not None
-                    and row["state"] in ("RUNNING", "VERIFYING")
+                    row["state"] in ("RUNNING", "VERIFYING")
                     and row["lease_owner"] == worker_id
                     and row["lease_until"] is not None
                     and row["lease_until"] > now
