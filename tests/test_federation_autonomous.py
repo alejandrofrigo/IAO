@@ -127,7 +127,7 @@ def test_discovered_peer_is_not_enrolled_without_connection_bound_mtls(monkeypat
     assert saved["status"] == "DISCOVERED_UNVERIFIED"
     assert saved["identity_verified"] is False
     assert saved["last_federation_error"] == "RuntimeError"
-    assert saved["remote_code_execution"] is not True
+    assert saved.get("remote_code_execution") is not True
 
 
 def test_discovered_peer_without_explicit_consent_is_not_enrolled(monkeypatch, tmp_path):
