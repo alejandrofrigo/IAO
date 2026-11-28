@@ -103,7 +103,7 @@ def _docker_suite(workspace: Path, image: str) -> dict[str, Any]:
         raise ValueError("SANDBOX_PATH_CONTAINS_COMMA")
     container_name = "iao-candidate-" + uuid.uuid4().hex
     command = [
-        "docker", "run", "--rm",
+        "docker", "run", "--rm", "--pull=never",
         f"--name={container_name}",
         "--label=iao.candidate.sandbox=true",
         "--network=none",
