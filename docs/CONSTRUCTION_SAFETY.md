@@ -13,6 +13,15 @@
 9. **Do not weaken gates to make a build green.** Fix the defect or accurately classify an external/informational failure. Keep security and regression tests enabled.
 10. **Maintain independent verification.** For each meaningful change, run syntax/compile checks, focused tests, full tests where practical, and inspect the resulting commit and CI status before proceeding.
 
+## Sandbox network requirement
+
+Every production sandbox must meet the persistent global outbound connectivity,
+redundant-egress, destination filtering, control-plane isolation, recovery, and
+soak-test requirements in `docs/SANDBOX_GLOBAL_NETWORK.md`. A child process
+sharing its host network or passing a one-time HTTP probe does not qualify.
+Network loss must degrade sandbox network status without stopping the IAO
+control plane or corrupting queued work.
+
 ## External provider failures
 
 External build/deployment systems are not the source of truth for IAO's source integrity. Rate limits and outages are recorded as external availability incidents. They must not block local/source-level verification, and must never be worked around by silently enabling a paid plan, exposing secrets, or switching to an unapproved provider.
