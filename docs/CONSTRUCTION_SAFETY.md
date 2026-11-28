@@ -74,3 +74,13 @@ A successful result is labelled `STATIC_CHECKS_PASSED`, with
 `promotion_eligible=false`. This is deliberately not a functional test pass,
 staging authorization, merge, or deployment. Functional tests in a real OS-isolated
 workspace and an independently reviewed promotion/rollback gate remain future work.
+
+
+### Autonomous improvement planning
+
+The recurring `improvement_plan` task now inventories Python modules and test
+filenames locally and emits a bounded list of modules without a directly named
+test file, plus recommendations for regression testing and isolated candidate
+validation. This is a filename-based heuristic, not measured coverage and not
+proof that indirect tests are absent. The planner is read-only: it does not
+generate, execute, or promote code.
