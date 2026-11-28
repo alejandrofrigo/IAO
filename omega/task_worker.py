@@ -6,6 +6,7 @@ The HTTP server does not start this worker implicitly.
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import threading
@@ -155,10 +156,37 @@ class TaskWorker:
 
             started = datetime.now(timezone.utc).isoformat()
             digest_in = _digest(clean)
-            timeout = min(
-                float(spec.timeout_seconds),
-                float(intent.get("budget", {}).get("timeout_seconds", 20)),
+            budget = intent.get("budget", {})
+            budget_timeout = (
+                budget.get("timeout_seconds", 20)
+                if isinstance(budget, dict) else None
             )
+            spec_timeout = spec.timeout_seconds
+            valid_timeout_values = all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                and value > 0
+                for value in (budget_timeout, spec_timeout)
+            )
+            if not valid_timeout_values:
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "INVALID_TOOL_TIMEOUT_POLICY"},
+                )
+            timeout = min(float(spec_timeout), float(budget_timeout))
+            # The process runner may need up to two additional seconds to
+            # terminate/reap a timed-out child. Keep a further three-second
+            # scheduling margin so a live tool cannot outlast its task lease.
+            if (
+                isinstance(self.lease_seconds, bool)
+                or not isinstance(self.lease_seconds, int)
+                or timeout + 5 >= self.lease_seconds
+            ):
+                return self._finish(
+                    task_id, owner, "FAILED",
+                    {"decision": "DENY", "error": "WORKER_LEASE_TOO_SHORT_FOR_TOOL_TIMEOUT"},
+                )
             try:
                 output, verdict = self.tool_executor(
                     spec.run, spec.verify, clean, timeout
