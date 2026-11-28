@@ -12,6 +12,7 @@ import os
 import ipaddress
 import secrets
 import time
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -29,7 +30,7 @@ def _write_registry(path: Path, data: dict[str, Any]) -> None:
     parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if parent.is_symlink() or not parent.is_dir():
         raise RuntimeError("EXTERNAL_NETWORK_REGISTRY_PARENT_REFUSED")
-    fd, temporary_name = __import__("tempfile").mkstemp(
+    fd, temporary_name = tempfile.mkstemp(
         prefix=".iao-federation-registry-", dir=str(parent)
     )
     temporary = Path(temporary_name)
