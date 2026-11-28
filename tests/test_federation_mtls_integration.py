@@ -186,6 +186,27 @@ class FederationMTLSIntegrationTests(unittest.TestCase):
         self.assertEqual(result["result"], {"echo": {"query": "mTLS integration"}})
         self.assertTrue(result["untrusted"])
 
+    def test_client_certificate_node_id_mismatch_is_rejected(self) -> None:
+        wrong_cert, wrong_key = _issue_certificate(
+            self.root, "wrong-client", rsa.generate_private_key(
+                public_exponent=65537, key_size=2048
+            ), self.ca_key, self.ca_cert, node_id="0" * 16,
+        )
+        os.environ["IAO_TLS_CLIENT_CERT_FILE"] = str(wrong_cert)
+        os.environ["IAO_TLS_CLIENT_KEY_FILE"] = str(wrong_key)
+        with patch(
+            "omega.federation_transport.resolve_public_addresses",
+            return_value=["127.0.0.1"],
+        ):
+            result = self.a.send(
+                self.b.node_id,
+                self.a.peers[self.b.node_id]["endpoint"],
+                "knowledge.search",
+                {"query": "certificate identity mismatch"},
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result.get("error"), "TLS_NODE_ID_MISMATCH")
+
     def test_missing_client_certificate_fails_closed(self) -> None:
         os.environ.pop("IAO_TLS_CLIENT_CERT_FILE", None)
         os.environ.pop("IAO_TLS_CLIENT_KEY_FILE", None)
