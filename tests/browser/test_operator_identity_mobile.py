@@ -54,12 +54,18 @@ def test_mobile_chromium_bootstrap_login_and_read_only_device_binding() -> None:
         web_origin = f"http://127.0.0.1:{web_port}"
         web_root = state / "web"
         shutil.copytree(ROOT / "web", web_root)
-        (web_root / "api-config.js").write_text(
-            "window.IAO_API_BASE = " + repr(api_origin) + ";\n"
-            "window.iaoApiUrl = path => new URL(String(path).replace(/^\\/+/, ''), "
-            "window.IAO_API_BASE + '/').toString();\n",
-            encoding="utf-8",
+        index_path = web_root / "index.html"
+        index_html = index_path.read_text(encoding="utf-8")
+        api_config_tag = '<script src="./api-config.js"></script>'
+        if api_config_tag not in index_html:
+            raise AssertionError("production API configuration script is missing")
+        index_html = index_html.replace(
+            api_config_tag,
+            f'<meta name="iao-api-base" content="{api_origin}">\\n'
+            + api_config_tag,
+            1,
         )
+        index_path.write_text(index_html, encoding="utf-8")
 
         (state / "state").mkdir()
         (state / "corpus").mkdir()
