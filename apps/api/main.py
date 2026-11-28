@@ -214,13 +214,8 @@ def federation_publication():
         origin = os.environ.get("IAO_FEDERATION_PUBLIC_ORIGIN", "").strip().rstrip("/")
         if os.environ.get("IAO_FEDERATION_PUBLIC_PEERING", "").lower() != "true" or not origin:
             return _federation_json(404, {"error": "PUBLIC_PEERING_NOT_OFFERED"})
-        from urllib.parse import urlsplit
-        parsed = urlsplit(origin)
-        if (parsed.scheme != "https" or not parsed.hostname
-                or parsed.username or parsed.password
-                or parsed.port not in (None, 443)
-                or parsed.path or parsed.query or parsed.fragment):
-            return _federation_json(503, {"error": "PUBLIC_PEERING_CONFIG_INVALID"})
+        from omega.federation_transport import validate_public_federation_origin
+        validate_public_federation_origin(origin)
         publication = node.identity_publication(
             origin + "/fed/v1/message",
             capabilities=sorted(node.served),
