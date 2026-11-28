@@ -152,6 +152,16 @@ class IdentityChallengeVerificationTests(FedBase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"], "INVALID_CHALLENGE")
 
+    def test_signed_publication_requires_node_id_to_match_signing_key(self):
+        publication = self.b.identity_publication(
+            "https://node.example.org", consent=False
+        )
+        self.assertTrue(Node.verify_publication(publication))
+        body = {key: value for key, value in publication.items() if key != "sig"}
+        body["node_id"] = self.a.node_id
+        forged = {**body, "sig": _sign(self.b.key, body)["sig"]}
+        self.assertFalse(Node.verify_publication(forged))
+
 
 class HappyAndAuthTests(FedBase):
     def test_roundtrip_signed_verified_untrusted(self) -> None:
