@@ -168,9 +168,24 @@ def test_discovered_origin_rejects_non_public_or_ambiguous_urls():
 
 
 def test_discovered_origin_accepts_only_tor_v3_onion_http():
-    onion = "b" * 56 + ".onion"
+    import base64
+    import hashlib
+
+    public_key = bytes(range(32))
+    version = b"\\x03"
+    checksum = hashlib.sha3_256(
+        b".onion checksum" + public_key + version
+    ).digest()[:2]
+    onion = base64.b32encode(public_key + checksum + version).decode().lower() + ".onion"
     assert autonomous._origin("http://" + onion) == "http://" + onion
     assert autonomous._origin("http://" + onion + "/") == "http://" + onion
+    with_checksum_corrupted = onion[:10] + ("a" if onion[10] != "a" else "b") + onion[11:]
+    try:
+        autonomous._origin("http://" + with_checksum_corrupted)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid onion checksum accepted")
 
 
 def test_registry_write_is_atomic_private_and_rejects_symlink_target(tmp_path):
