@@ -325,7 +325,7 @@ def test_fetch_onion_json_rejects_redirect(monkeypatch):
 def test_post_public_json_uses_pinned_public_https_and_no_redirect(monkeypatch):
     calls = []
     monkeypatch.setattr(transport, "resolve_public_addresses", lambda *_: ["8.8.8.8"])
-    def factory(hostname, address, *, port=443, timeout, context):
+    def factory(hostname, address, *, port=443, timeout, context, expected_peer_id=None):
         conn = FakeConnection(hostname, address, port=port, timeout=timeout, context=context,
                               expected_peer_id=expected_peer_id)
         calls.append(conn)
