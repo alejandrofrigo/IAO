@@ -127,17 +127,17 @@ def create_nodes(
                 _write_json_private(staging / "identity" / "public.json", identity)
                 _write_json_private(staging / "manifest.json", manifest)
                 readme = (
-                    "# IAO node workspace\\n\\n"
-                    f"- Node ID: `{node_id}`\\n"
-                    f"- Role: `{role}`\\n"
-                    "- State: `CREATED_UNENROLLED`\\n"
-                    "- Authority: `NONE`\\n"
-                    "- Capabilities: none\\n\\n"
+                    "# IAO node workspace\n\n"
+                    f"- Node ID: `{node_id}`\n"
+                    f"- Role: `{role}`\n"
+                    "- State: `CREATED_UNENROLLED`\n"
+                    "- Authority: `NONE`\n"
+                    "- Capabilities: none\n\n"
                     "This workspace is not a running server and is not trusted or "
                     "enrolled. Deploy only on infrastructure you control. Configure "
                     "a real authenticated transport and complete the federation "
                     "verification/enrollment protocol before granting even read-only "
-                    "capabilities. Never commit identity/private.key.\\n"
+                    "capabilities. Never commit identity/private.key.\n"
                 )
                 (staging / "README.md").write_text(readme, encoding="utf-8")
                 os.chmod(staging / "README.md", 0o600)
