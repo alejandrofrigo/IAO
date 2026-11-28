@@ -1,0 +1,41 @@
+name: IAO candidate sandbox qualification
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-container-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Build candidate test image
+        run: docker build -f Dockerfile.candidate-sandbox -t iao-candidate-sandbox:ci .
+      - name: Run full Python suite without network or writable source
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          docker run --rm \
+            --network=none \
+            --read-only \
+            --ipc=none \
+            --memory=2g \
+            --cpus=2 \
+            --pids-limit=256 \
+            --ulimit=nofile=64:64 \
+            --ulimit=core=0:0 \
+            --cap-drop=ALL \
+            --security-opt=no-new-privileges:true \
+            --user=65534:65534 \
+            --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=512m \
+            --mount "type=bind,src=${WORKSPACE},dst=/workspace,readonly" \
+            --workdir=/workspace \
+            --env=PYTHONPATH=/workspace \
+            --env=IAO_STATE_DIR=/tmp/iao-state \
+            --env=HOME=/tmp \
+            --env=TMPDIR=/tmp \
+            iao-candidate-sandbox:ci \
+            python -m pytest -q -p no:cacheprovider /workspace/tests
