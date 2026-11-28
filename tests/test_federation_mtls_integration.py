@@ -252,7 +252,7 @@ class FederationMTLSIntegrationTests(unittest.TestCase):
                 {"query": "server certificate identity mismatch"},
             )
         self.assertFalse(result["ok"])
-        self.assertEqual(result["error"], "TRANSPORT_BLOCKED")
+        self.assertEqual(result["error"], "TLS_NODE_ID_MISMATCH")
 
     def test_missing_client_certificate_fails_closed(self) -> None:
         os.environ.pop("IAO_TLS_CLIENT_CERT_FILE", None)
