@@ -19,6 +19,26 @@ from urllib.parse import urlsplit
 MAX_DISCOVERY_BYTES = 1_000_000
 
 
+def _certificate_node_id(certificate: dict | None) -> str | None:
+    if not isinstance(certificate, dict):
+        return None
+    names = certificate.get("subjectAltName")
+    if not isinstance(names, tuple):
+        return None
+    values = [
+        value[len("urn:iao:node:"):]
+        for kind, value in names
+        if kind == "URI" and isinstance(value, str)
+        and value.startswith("urn:iao:node:")
+    ]
+    if len(values) != 1:
+        return None
+    value = values[0]
+    if len(value) != 16 or any(ch not in "0123456789abcdef" for ch in value):
+        return None
+    return value
+
+
 class FederationTransportError(RuntimeError):
     """Safe transport failure with a stable machine-readable reason."""
 
@@ -196,9 +216,11 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(
         self, hostname: str, address: str, *, port: int = 443,
         timeout: float, context: ssl.SSLContext,
+        expected_peer_id: str | None = None,
     ):
         super().__init__(hostname, port, timeout=timeout, context=context)
         self._pinned_address = address
+        self._expected_peer_id = expected_peer_id
 
     def connect(self) -> None:
         raw = socket.create_connection(
@@ -206,8 +228,16 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         )
         try:
             self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+            if self._expected_peer_id is not None:
+                peer_id = _certificate_node_id(self.sock.getpeercert())
+                if peer_id != self._expected_peer_id:
+                    raise FederationTransportError("TLS_SERVER_NODE_ID_MISMATCH")
         except Exception:
-            raw.close()
+            if self.sock is not None:
+                self.sock.close()
+                self.sock = None
+            else:
+                raw.close()
             raise
 
 
@@ -265,6 +295,7 @@ def _request_json(
     allow_loopback_http: bool,
     allow_public_post: bool = False,
     require_client_cert: bool = False,
+    expected_peer_id: str | None = None,
 ) -> tuple[int, object]:
     if not 0 < timeout <= 30 or not 1 <= max_bytes <= MAX_DISCOVERY_BYTES:
         raise FederationTransportError("INVALID_TRANSPORT_LIMIT")
@@ -289,7 +320,8 @@ def _request_json(
     for address in addresses:
         if scheme == "https":
             connection = _PinnedHTTPSConnection(
-                tls_host, address, port=port, timeout=timeout, context=context
+                tls_host, address, port=port, timeout=timeout, context=context,
+                expected_peer_id=expected_peer_id,
             )
         else:
             connection = _PinnedHTTPConnection(
@@ -480,6 +512,7 @@ def post_federation_json(
     *,
     timeout: float = 5.0,
     max_bytes: int = 262_144,
+    expected_peer_id: str | None = None,
 ) -> tuple[int, object]:
     """POST a signed envelope over pinned HTTPS, Tor onion, or explicit loopback."""
     try:
@@ -493,6 +526,7 @@ def post_federation_json(
     return _request_json(
         "POST", url, payload, timeout=timeout, max_bytes=max_bytes,
         allow_loopback_http=True, require_client_cert=True,
+        expected_peer_id=expected_peer_id,
     )
 
 
