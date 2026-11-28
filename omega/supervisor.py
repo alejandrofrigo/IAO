@@ -39,13 +39,17 @@ def supervise(
             return 0
         p = subprocess.Popen(cmd, env={**os.environ, "IAO_LLM_ROUTER": "1"})
         child["p"] = p
-        if stopping["v"]:
-            p.terminate()
+        shutdown_deadline: float | None = None
         try:
-            code = p.wait(timeout=shutdown_grace) if stopping["v"] else p.wait()
-        except subprocess.TimeoutExpired:
-            # A stuck child must not prevent a clean supervisor shutdown.
-            p.kill()
+            while p.poll() is None:
+                if stopping["v"]:
+                    if shutdown_deadline is None:
+                        p.terminate()
+                        shutdown_deadline = time.monotonic() + shutdown_grace
+                    elif time.monotonic() >= shutdown_deadline:
+                        p.kill()
+                        break
+                time.sleep(0.05)
             code = p.wait()
         finally:
             child["p"] = None
@@ -59,9 +63,6 @@ def supervise(
         if len(restarts) > max_restarts:
             sys.stderr.write('{"event":"HALT","reason":"restart_limit"}\\n')
             return 1
-        # Interruptible backoff: shutdown does not wait for the restart delay.
-        if stopping["v"]:
-            return 0
         delay = min(0.25 * 2 ** len(restarts), 5)
         deadline = time.monotonic() + delay
         while not stopping["v"] and time.monotonic() < deadline:
