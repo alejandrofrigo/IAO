@@ -60,3 +60,17 @@ These jobs are local diagnostics and planning only. They do not generate or
 execute arbitrary code, enroll remote peers, grant network permissions, deploy
 changes, or claim external connectivity. Autonomous code evolution remains
 staged and requires functional, security, and integration verification.
+
+
+### Evolution proposal integrity gate
+
+Evolution proposals now carry a manifest hash and per-file SHA-256 digests. Evaluation
+revalidates the manifest, safe relative paths, file sizes, symlink boundaries, file
+hashes, and Python syntax before recording a result. Tampered, incomplete, oversized,
+or symlinked candidates are rejected. The evaluator never imports or executes
+candidate code.
+
+A successful result is labelled `STATIC_CHECKS_PASSED`, with
+`promotion_eligible=false`. This is deliberately not a functional test pass,
+staging authorization, merge, or deployment. Functional tests in a real OS-isolated
+workspace and an independently reviewed promotion/rollback gate remain future work.
