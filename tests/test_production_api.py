@@ -54,6 +54,60 @@ def test_readiness_never_claims_full_production_before_security_gates(monkeypatc
     assert body["production_gates"]["network_discovery"]["cryptographic_trust_confirmed"] is False
 
 
+def test_autonomous_health_reports_live_worker_and_queue_without_task_payloads(monkeypatch):
+    from types import SimpleNamespace
+
+    class StubCore:
+        worker = SimpleNamespace(is_alive=lambda: True)
+
+        def status(self):
+            return {
+                "worker_running": True,
+                "task_count": 4,
+                "task_states": {"QUEUED": 2, "COMPLETED": 2},
+            }
+
+    monkeypatch.setattr(main, "_autonomous_core", StubCore())
+    monkeypatch.setattr(
+        main, "_autonomous_core_status",
+        {"enabled": True, "running": True, "recovered_tasks": 1},
+    )
+    health = main._autonomous_core_health()
+    assert health == {
+        "status": "running_read_only",
+        "worker_running": True,
+        "task_count": 4,
+        "task_states": {"QUEUED": 2, "COMPLETED": 2},
+        "recovered_tasks": 1,
+    }
+    assert "tasks" not in health
+    assert "payload" not in health
+
+
+def test_autonomous_health_does_not_trust_stale_startup_flag(monkeypatch):
+    from types import SimpleNamespace
+
+    class StoppedCore:
+        worker = SimpleNamespace(is_alive=lambda: False)
+
+        def status(self):
+            return {
+                "worker_running": False,
+                "task_count": 1,
+                "task_states": {"QUEUED": 1},
+            }
+
+    monkeypatch.setattr(main, "_autonomous_core", StoppedCore())
+    monkeypatch.setattr(
+        main, "_autonomous_core_status",
+        {"enabled": True, "running": True, "recovered_tasks": 0},
+    )
+    health = main._autonomous_core_health()
+    assert health["status"] == "worker_stopped"
+    assert health["worker_running"] is False
+    assert health["task_states"] == {"QUEUED": 1}
+
+
 def test_runtime_refuses_missing_persistent_keys(monkeypatch) -> None:
     monkeypatch.delenv("OMEGA_DEV_TOKEN_KEY", raising=False)
     monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
