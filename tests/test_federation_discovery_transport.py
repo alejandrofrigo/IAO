@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import tempfile
@@ -10,6 +11,37 @@ from omega import federation_discovery as discovery
 
 
 class FederationDiscoveryTransportTests(unittest.TestCase):
+    def test_manifest_rejects_node_id_not_matching_public_key(self):
+        public_key = "11" * 32
+        manifest = {
+            "protocol": "iao-federation",
+            "version": 1,
+            "consent": True,
+            "node_id": "0123456789abcdef",
+            "public_key": public_key,
+            "origin": "https://peer.example",
+        }
+        self.assertEqual(
+            discovery._valid_manifest(manifest),
+            (False, "NODE_ID_PUBLIC_KEY_MISMATCH"),
+        )
+
+    def test_manifest_accepts_matching_public_key_fingerprint(self):
+        public_key = "11" * 32
+        node_id = hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16]
+        manifest = {
+            "protocol": "iao-federation",
+            "version": 1,
+            "consent": True,
+            "node_id": node_id,
+            "public_key": public_key,
+            "origin": "https://peer.example",
+        }
+        self.assertEqual(
+            discovery._valid_manifest(manifest),
+            (True, "MANIFEST_UNVERIFIED"),
+        )
+
     def test_discovery_audit_rejects_symlink_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp) / "state"
