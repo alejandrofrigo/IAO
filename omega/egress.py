@@ -21,7 +21,8 @@ class EgressDenied(Exception):
 
 @dataclass(frozen=True)
 class EgressPolicy:
-    allow_hosts: frozenset[str]
+    allow_hosts: frozenset[str] = frozenset()
+    allow_public_hosts: bool = False  # explicit opt-in for global public Internet egress
     allow_http: bool = False                      # plain http only for tests / explicit opt-in
     allowed_ports: frozenset[int] = frozenset({443})
     max_bytes: int = 1_000_000
@@ -67,7 +68,7 @@ def _check_url(url: str, pol: EgressPolicy) -> tuple[str, str, int, str, str]:
     if u.username or u.password or "@" in u.netloc:
         raise EgressDenied("CREDENTIALS_IN_URL")
     host = (u.hostname or "").lower().rstrip(".")
-    if not host or host not in pol.allow_hosts:
+    if not host or (host not in pol.allow_hosts and not pol.allow_public_hosts):
         raise EgressDenied("HOST_NOT_ALLOWED")
     try:
         port = u.port or (443 if u.scheme == "https" else 80)
