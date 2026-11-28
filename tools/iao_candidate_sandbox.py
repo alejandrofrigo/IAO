@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "iao-candidate-sandbox:local"
 RUN_TIMEOUT_SECONDS = 600
 SUMMARY_LINE_PATTERN = re.compile(
-    r"^\\s*=+\\s*(?P<body>.*?)\\s+in\\s+[0-9]+(?:\\.[0-9]+)?s\\s*=+\\s*$"
+    r"^\\s*(?:=+\\s*)?(?P<body>.*?)\\s+in\\s+[0-9]+(?:\\.[0-9]+)?s\\s*(?:=+)?\\s*$"
 )
 SUMMARY_ITEM_PATTERN = re.compile(
     r"(?P<count>[0-9]+)\\s+(?P<kind>passed|failed|errors?|skipped|xfailed|xpassed)"
