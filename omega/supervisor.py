@@ -1,4 +1,4 @@
-"""Minimal supervisor with bounded restart and shutdown behavior."""
+"""Bounded process supervisor for the IAO API or an explicitly selected worker."""
 import signal
 import subprocess
 import os
@@ -70,4 +70,9 @@ def supervise(
 
 
 if __name__ == "__main__":
-    raise SystemExit(supervise([sys.executable, "-m", "omega.server"]))
+    command = sys.argv[1:]
+    if command[:1] == ["--"]:
+        command = command[1:]
+    if not command:
+        command = [sys.executable, "-m", "omega.server"]
+    raise SystemExit(supervise(command))
