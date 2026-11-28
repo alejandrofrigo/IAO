@@ -1,12 +1,43 @@
 import base64
 import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from omega import federation_discovery as discovery
 
 
 class FederationDiscoveryTransportTests(unittest.TestCase):
+    def test_discovery_audit_rejects_symlink_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            state.mkdir()
+            outside = Path(tmp) / "outside.jsonl"
+            outside.write_text("keep", encoding="utf-8")
+            link = state / "federation-discovery.jsonl"
+            try:
+                link.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable")
+            with self.assertRaisesRegex(RuntimeError, "AUDIT_FILE_REFUSED"):
+                discovery._append(state, {"event": "TEST"})
+            self.assertEqual(outside.read_text(encoding="utf-8"), "keep")
+
+    def test_discovery_audit_rejects_symlink_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            link = Path(tmp) / "linked-state"
+            try:
+                link.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable")
+            with self.assertRaisesRegex(RuntimeError, "DIRECTORY_REFUSED"):
+                discovery._append(link / "nested", {"event": "TEST"})
+            self.assertEqual(list(outside.iterdir()), [])
+
     @patch("omega.federation_discovery.fetch_public_json")
     def test_search_json_uses_pinned_transport(self, fetch):
         fetch.return_value = {"items": []}
