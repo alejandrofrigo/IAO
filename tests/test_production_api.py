@@ -345,3 +345,19 @@ def test_nonproduction_runtime_keeps_development_key_compatibility(monkeypatch):
     monkeypatch.delenv("OMEGA_TOKEN_SIGNING_KEY", raising=False)
     monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "dev-key-" + "x" * 40)
     assert main._runtime_token_key() == "dev-key-" + "x" * 40
+
+
+
+def test_production_readiness_blocks_development_secret_even_with_audit_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OMEGA_DEV_TOKEN_KEY", "development-secret-" + "d" * 48)
+    monkeypatch.delenv("OMEGA_TOKEN_SIGNING_KEY", raising=False)
+    monkeypatch.setenv("AUDIT_HMAC_KEY", "audit-secret-" + "a" * 48)
+    main._service = None
+    with TestClient(main.app) as client:
+        assert client.get("/health/live").status_code == 200
+        response = client.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["runtime_startup"] == {
+        "status": "blocked", "reason": "PRODUCTION_TOKEN_SIGNING_KEY_REQUIRED",
+    }
