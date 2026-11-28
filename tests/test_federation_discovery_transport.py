@@ -70,6 +70,41 @@ class FederationDiscoveryTransportTests(unittest.TestCase):
                 discovery._append(link / "nested", {"event": "TEST"})
             self.assertEqual(list(outside.iterdir()), [])
 
+    @patch("omega.federation_discovery._request_json")
+    def test_discovery_cycle_runs_candidate_audit_without_remote_enrollment(self, request):
+        request.return_value = {"items": []}
+        public_key = "11" * 32
+        node_id = hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:16]
+        manifest = {
+            "node_id": node_id,
+            "public_key": public_key,
+            "origin": "https://peer.example",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / ".state"
+            candidate_id, created = discovery._persist_candidate(
+                state, manifest, "owner/repo"
+            )
+            self.assertTrue(created)
+
+            totals = discovery.discover_once(state)
+
+            registry = json.loads(
+                (state / "iao-node-network" / "discovered-candidates.json").read_text()
+            )
+            candidate = registry["candidates"][candidate_id]
+            self.assertEqual(totals["candidate_evaluation"]["checked"], 1)
+            self.assertEqual(totals["candidate_evaluation"]["enrolled"], 0)
+            self.assertEqual(candidate["status"], "DISCOVERED_UNVERIFIED")
+            self.assertFalse(candidate["identity_verified"])
+            self.assertEqual(
+                candidate["last_federation_error"], "RuntimeError"
+            )
+            audit = (state / "federation-autonomous.jsonl").read_text()
+            self.assertIn("FEDERATION_AUTOJOIN_CYCLE", audit)
+            discovery_audit = (state / "federation-discovery.jsonl").read_text()
+            self.assertIn("CANDIDATE_EVALUATION_FINISHED", discovery_audit)
+
     @patch("omega.federation_discovery.fetch_public_json")
     def test_search_json_uses_pinned_transport(self, fetch):
         fetch.return_value = {"items": []}
