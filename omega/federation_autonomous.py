@@ -1,9 +1,9 @@
-"""Automatic federation of explicitly consenting public HTTPS IAO peers.
+"""Federation candidate auditing with remote enrollment disabled by default.
 
-Discovery is only a lead. Enrollment requires a signed publication, an
-explicit remote consent flag, a nonce-bound Ed25519 challenge, a matching
-identity and contract, bounded HTTPS transport, and locally served
-READ_ONLY capabilities. No inbound permissions are granted automatically.
+Discovery is only a lead. Ed25519 identity proofs and pinned HTTPS do not
+attest that the remote server required and validated client mTLS on the same
+connection. Remote enrollment therefore fails closed until a connection-bound
+trusted-transport verifier is implemented and independently tested.
 """
 from __future__ import annotations
 
