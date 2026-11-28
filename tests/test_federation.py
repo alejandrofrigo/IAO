@@ -449,3 +449,19 @@ class OnionEndpointTests(FedBase):
         node.enroll(contract)
         self.assertEqual(node.peers[self.b.node_id]["endpoint"], contract["endpoint"])
         self.assertEqual(node.peers[self.b.node_id]["granted_capabilities"], [])
+
+
+class FederationMTLSListenerTests(unittest.TestCase):
+    def test_tls_listener_refuses_context_without_required_client_certificate(self):
+        import ssl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            node = mk(tmp, "mtls", lambda: 1_000_000.0)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            try:
+                with self.assertRaisesRegex(
+                    ValueError, "FEDERATION_MTLS_CLIENT_CERT_REQUIRED"
+                ):
+                    FedServer(node, ssl_context=context)
+            finally:
+                node.store.close()
