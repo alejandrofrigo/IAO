@@ -182,10 +182,11 @@ def _get_federation_node():
 def _assert_runtime_auth_mode() -> None:
     """Never expose the development HMAC bearer scheme in production."""
     app_env = os.environ.get("APP_ENV", "development").strip().lower()
-    if app_env == "production":
+    if app_env not in {"development", "test"}:
         # OIDC/JWKS verification is not implemented in this adapter yet.
-        # Fail closed instead of treating a long development HMAC key as production auth.
-        raise RuntimeError("PRODUCTION_OIDC_AUTHENTICATION_REQUIRED")
+        # Fail closed for staging, production, and unknown labels instead of
+        # treating a long development HMAC key as production authentication.
+        raise RuntimeError("NON_DEVELOPMENT_OIDC_AUTHENTICATION_REQUIRED")
 
 
 def _get_service():
