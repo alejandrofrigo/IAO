@@ -151,3 +151,42 @@ def test_discovered_origin_rejects_non_public_or_ambiguous_urls():
         except ValueError:
             continue
         raise AssertionError("unsafe origin accepted: " + value)
+
+
+def test_registry_write_is_atomic_private_and_rejects_symlink_target(tmp_path):
+    import os
+    import pytest
+    from omega.federation_autonomous import _write_registry
+
+    target = tmp_path / "registry.json"
+    _write_registry(target, {"schema": 1, "candidates": {}})
+    assert json.loads(target.read_text()) == {"schema": 1, "candidates": {}}
+    if os.name == "posix":
+        assert target.stat().st_mode & 0o777 == 0o600
+
+    outside = tmp_path / "outside.json"
+    outside.write_text("preserve-me", encoding="utf-8")
+    link = tmp_path / "linked-registry.json"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(RuntimeError, match="REGISTRY_SYMLINK_REFUSED"):
+        _write_registry(link, {"schema": 1, "candidates": {"bad": {}}})
+    assert outside.read_text(encoding="utf-8") == "preserve-me"
+
+
+def test_registry_write_rejects_symlink_parent(tmp_path):
+    import pytest
+    from omega.federation_autonomous import _write_registry
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = tmp_path / "linked-dir"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(RuntimeError, match="REGISTRY_PARENT_REFUSED"):
+        _write_registry(link / "registry.json", {"schema": 1, "candidates": {}})
+    assert list(outside.iterdir()) == []
