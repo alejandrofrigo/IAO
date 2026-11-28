@@ -17,7 +17,7 @@ No se debe almacenar en el repositorio una URL Quick Tunnel, una dirección IP d
 
 ## Backend: alternativa autocontrolada
 
-El backend API se construye desde el `Dockerfile` raíz (FastAPI/ASGI) y se ejecuta con `deploy/compose.yaml` en infraestructura que controle el operador: un ordenador Linux siempre encendido o un servidor propio. El Compose usa el contenedor API, no crea una base PostgreSQL desconectada, persiste `/var/lib/iao` en un volumen nombrado y publica el puerto solo en `127.0.0.1` para que un proxy TLS local pueda terminar HTTPS. El `deploy/Dockerfile` antiguo no es el destino de este Compose. Esto evita depender de Cloudflare Workers y de un proveedor serverless.
+El backend API se construye desde el `Dockerfile` raíz (FastAPI/ASGI) y se ejecuta con `deploy/compose.yaml` en infraestructura que controle el operador: un ordenador Linux siempre encendido o un servidor propio. El Compose usa el contenedor API, no crea una base PostgreSQL desconectada, persiste `/var/lib/iao` en un volumen nombrado y publica el puerto solo en `127.0.0.1` para que un proxy TLS local pueda terminar HTTPS. Su `healthcheck` exige `/health/ready` con estado `ready` y `runtime_startup=started`; un proceso que solo responde liveness o que mantiene gates de producción degradados no se considera saludable para recibir tráfico. El `deploy/Dockerfile` antiguo no es el destino de este Compose. Esto evita depender de Cloudflare Workers y de un proveedor serverless.
 
 Requisitos mínimos del backend:
 - `APP_ENV=production` es obligatorio en el Compose autocontrolado: activa el rechazo de `OMEGA_DEV_TOKEN_KEY` y exige `OMEGA_TOKEN_SIGNING_KEY` dedicado. El Compose fija este valor para evitar que un `.env` incompleto arranque accidentalmente con el perfil de desarrollo.
