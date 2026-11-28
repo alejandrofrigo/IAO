@@ -331,3 +331,57 @@ def test_post_public_json_rejects_redirect(monkeypatch):
     FakeConnection.response = FakeResponse(status=307, headers={"Location": "https://other.example/"})
     with pytest.raises(transport.FederationTransportError, match="REDIRECT_REFUSED"):
         transport.post_public_json("https://peer.example.org/fed/v1/handshake", {"x": 1})
+
+
+
+def test_validate_message_endpoint_accepts_only_v3_onion_federation_path():
+    host = "d" * 56 + ".onion"
+    assert transport.validate_message_endpoint(
+        f"http://{host}/fed/v1/message"
+    ) == ("onion", host, 80, "/fed/v1/message", host)
+    for url in (
+        f"http://{host}/admin",
+        f"http://{host}:8080/fed/v1/message",
+        f"http://short.onion/fed/v1/message",
+        f"https://{host}/fed/v1/message",
+        f"http://{host}/fed/v1/message?x=1",
+    ):
+        with pytest.raises(transport.FederationTransportError):
+            transport.validate_message_endpoint(url)
+
+
+def test_post_federation_json_routes_onion_through_tor_socks(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "socks", SimpleNamespace(SOCKS5=2))
+    monkeypatch.setenv("IAO_TOR_SOCKS_HOST", "127.0.0.1")
+    monkeypatch.setenv("IAO_TOR_SOCKS_PORT", "9050")
+    calls = []
+
+    class Response:
+        status = 200
+        def getheader(self, name):
+            return {"Content-Type": "application/json", "Content-Length": "11"}.get(name)
+        def read(self, size=-1):
+            return b'{"ok":true}'
+
+    class Connection:
+        def __init__(self, hostname, *, timeout, proxy_host, proxy_port):
+            calls.append(("init", hostname, timeout, proxy_host, proxy_port))
+        def request(self, method, target, body=None, headers=None):
+            calls.append((method, target, headers["Host"], body))
+        def getresponse(self):
+            return Response()
+        def close(self):
+            calls.append(("closed",))
+
+    monkeypatch.setattr(transport, "_TorOnionHTTPConnection", Connection)
+    host = "e" * 56 + ".onion"
+    status, payload = transport.post_federation_json(
+        f"http://{host}/fed/v1/message", {"signed": True}
+    )
+    assert status == 200
+    assert payload == {"ok": True}
+    assert calls[0] == ("init", host, 5.0, "127.0.0.1", 9050)
+    assert calls[1][0:3] == ("POST", "/fed/v1/message", host)
+    assert calls[-1] == ("closed",)
